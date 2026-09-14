@@ -1,0 +1,25 @@
+# ---- Python 环境 ----
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 密钥与本地配置（绝对不能提交）----
+.env
+.env.*.local
+*.pem
+
+# ---- 向量库与缓存（可由 `python -m rag.cli build` 重建，勿提交）----
+rag/chroma_db/
+rag/cache/
+
+# ---- 原始知识库资料（默认不公开）----
+# nlp_/ 内含已发表期刊论文（受版权保护）与内部私密材料（答辩点评、规范等），
+# 默认不上传。如确认可公开/私有仓库内部分享，删除下面这行并评估版权。
+nlp_/
+
+# ---- 本地 Claude Code 配置 ----
+.claude/
+
+# ---- macOS ----
+.DS_Store
