@@ -44,6 +44,10 @@ cp .env.example .env
 # 2) 问答（检索 + 生成）
 .venv/bin/python -m rag.cli ask "扎根理论的研究程序是什么？"
 .venv/bin/python -m rag.cli ask "学位论文开题阶段要完成什么？" -k 6
+
+# 3) 常驻服务（模型/向量库只加载一次，反复问，消除每次 ~18s 重载）
+.venv/bin/python -m rag.cli serve             # 交互式 REPL
+.venv/bin/python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
 ```
 
 ## 检索结果说明

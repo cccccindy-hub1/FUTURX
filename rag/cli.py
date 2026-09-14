@@ -3,6 +3,8 @@
 用法（在项目根目录 FUTURX 下）：
   .venv/bin/python -m rag.cli build
   .venv/bin/python -m rag.cli ask "文献综述应该怎么写？"
+  .venv/bin/python -m rag.cli serve             # 交互式 REPL（加载一次反复问）
+  .venv/bin/python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
 """
 from __future__ import annotations
 
@@ -18,6 +20,11 @@ def main() -> None:
     ask = sub.add_parser("ask", help="问答：检索 +（可选）LLM 生成")
     ask.add_argument("question", nargs="+", help="问题文本")
     ask.add_argument("-k", "--top-k", type=int, default=None, help="返回片段数，默认取配置 TOP_K")
+
+    serve = sub.add_parser("serve", help="常驻查询服务：模型与向量库加载一次，反复提问")
+    serve.add_argument("--http", action="store_true", help="以 HTTP 服务方式运行（默认交互式 REPL）")
+    serve.add_argument("--host", default="127.0.0.1", help="HTTP 监听地址（默认 127.0.0.1）")
+    serve.add_argument("--port", type=int, default=8000, help="HTTP 端口（默认 8000）")
 
     args = parser.parse_args()
 
@@ -46,6 +53,13 @@ def main() -> None:
         print("参考来源：")
         for s in sources:
             print(f"  - {s['source']}  [{s['section']}]  (距离 {s['distance']:.3f})")
+    elif args.cmd == "serve":
+        from .serve import run_http, run_repl
+
+        if args.http:
+            run_http(args.host, args.port)
+        else:
+            run_repl()
 
 
 if __name__ == "__main__":
