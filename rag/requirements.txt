@@ -5,3 +5,7 @@ openai
 python-dotenv
 fastapi
 uvicorn
+
+# 评估专用（rag.eval：BM25 基线）
+rank-bm25
+jieba

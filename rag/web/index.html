@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>学位论文指导助手 · 数字治理科研团队</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🧭</div>
+      <div class="brand-text">
+        <h1>学位论文指导助手</h1>
+        <p class="subtitle">数字治理科研团队 · 学术数字人</p>
+      </div>
+    </div>
+    <div class="status" id="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">连接中…</span>
+    </div>
+  </header>
+
+  <main class="chat" id="chat">
+    <div class="welcome" id="welcome">
+      <h2>你好，我是你的论文指导助手</h2>
+      <p>基于团队资料库，回答学位论文写作、研究方法、开题答辩等问题。试试下面这些问题，或直接输入：</p>
+      <div class="suggestions">
+        <button class="chip" data-q="扎根理论的研究程序是什么？">扎根理论的研究程序是什么？</button>
+        <button class="chip" data-q="学位论文开题阶段要完成什么？">开题阶段要完成什么？</button>
+        <button class="chip" data-q="文献综述应该怎么写？">文献综述应该怎么写？</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-inner">
+      <textarea id="input" rows="1" placeholder="输入你的问题，回车发送（Shift+回车换行）"></textarea>
+      <div class="composer-row">
+        <label class="topk">
+          检索片段
+          <select id="topk">
+            <option value="2">2</option>
+            <option value="4" selected>4</option>
+            <option value="6">6</option>
+            <option value="8">8</option>
+          </select>
+        </label>
+        <button id="send" class="send">发送</button>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

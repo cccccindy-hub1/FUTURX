@@ -12,7 +12,9 @@ rag/
   chunk.py       分块层：标题感知 + 句子边界的中文分块
   index.py       入库层：BGE-m3 向量化 -> Chroma
   query.py       检索 + LLM 生成
+  serve.py       常驻服务（REPL / HTTP）
   cli.py         命令行入口
+  web/           前端页面（index.html / style.css / app.js，由 serve --http 托管在 /）
 chroma_db/       向量库持久化目录（build 后生成）
 ```
 
@@ -49,6 +51,10 @@ cp .env.example .env
 .venv/bin/python -m rag.cli serve             # 交互式 REPL
 .venv/bin/python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
 ```
+
+启动 `serve --http` 后，浏览器打开 **http://127.0.0.1:8000/** 即前端对话界面：
+支持提问、选择检索片段数（top_k）、查看带 `[来源N]` 的回答与可展开的参考来源卡片。
+
 
 ## 检索结果说明
 

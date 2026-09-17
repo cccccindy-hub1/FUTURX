@@ -56,10 +56,15 @@ def run_repl() -> None:
 
 def run_http(host: str, port: int) -> None:
     import uvicorn
+    from pathlib import Path
+
     from fastapi import FastAPI
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
 
     svc = RAGService()
     app = FastAPI(title="FUTURX RAG 查询服务")
+    web_dir = Path(__file__).resolve().parent / "web"
 
     @app.get("/health")
     def health():
@@ -70,5 +75,12 @@ def run_http(host: str, port: int) -> None:
         ans, sources, docs = svc.answer(req.question, req.top_k)
         return {"answer": ans, "sources": sources, "contexts": docs}
 
-    print(f"服务启动：http://{host}:{port}  （GET /health 探活，POST /ask 提问）")
+    if web_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
+
+        @app.get("/")
+        def index():
+            return FileResponse(web_dir / "index.html")
+
+    print(f"服务启动：http://{host}:{port}  （浏览器打开首页即前端，GET /health 探活，POST /ask 提问）")
     uvicorn.run(app, host=host, port=port, log_level="warning")

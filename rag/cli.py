@@ -17,6 +17,8 @@ def main() -> None:
 
     sub.add_parser("build", help="解析 -> 分块 -> 向量化 -> 入库（全量重建）")
 
+    sub.add_parser("eval", help="检索质量评估：BM25 vs BGE-m3，Recall@k/MRR@k/nDCG@k")
+
     ask = sub.add_parser("ask", help="问答：检索 +（可选）LLM 生成")
     ask.add_argument("question", nargs="+", help="问题文本")
     ask.add_argument("-k", "--top-k", type=int, default=None, help="返回片段数，默认取配置 TOP_K")
@@ -53,6 +55,10 @@ def main() -> None:
         print("参考来源：")
         for s in sources:
             print(f"  - {s['source']}  [{s['section']}]  (距离 {s['distance']:.3f})")
+    elif args.cmd == "eval":
+        from .eval import run
+
+        run()
     elif args.cmd == "serve":
         from .serve import run_http, run_repl
 
