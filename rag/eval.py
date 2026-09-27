@@ -134,5 +134,89 @@ def run() -> None:
         print(f"{qid:>4} | {str(bm_hit) if bm_hit else '-':>6} | {str(dn_hit) if dn_hit else '-':>6} | {item['question']}")
 
 
+def run_benchmark(ablate: bool = False, limit: int = 0) -> None:
+    """基于 data_benchmark/test.jsonl 的答案质量评测（LLM-as-judge + 词法基线）。
+
+    data_benchmark 缺失时打印指引并优雅退出，不抛异常。
+    注意：需先 `python -m rag.cli eval --split` 生成切分，且要求各测试问题
+    对应的资料已入库（否则检索结果为空，分数无意义）。
+    """
+    from pathlib import Path
+
+    from .benchmark import BENCHMARK_DIR, read_jsonl
+    from .config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL
+    from .judge import char_f1, judge_answer, lexical_score, mean, rouge_l
+
+    test_path = Path(BENCHMARK_DIR) / "split" / "test.jsonl"
+    if not test_path.exists():
+        print(f"未找到测试集 {test_path}")
+        print("请先运行：python -m rag.cli eval --split")
+        return
+
+    tests = read_jsonl(test_path)
+    if limit:
+        tests = tests[:limit]
+    if not tests:
+        print("测试集为空。")
+        return
+    print(f"测试集：{len(tests)} 条（来自 {test_path}）\n")
+
+    llm = None
+    if LLM_API_KEY:
+        from openai import OpenAI
+
+        llm = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE)
+    else:
+        print("（未设置 LLM_API_KEY，仅跑词法基线；LLM 评审已跳过）\n")
+
+    configs = [("hybrid", False)]
+    if ablate:
+        configs = [
+            ("dense", False),
+            ("hybrid", False),
+            ("hybrid", True),
+            ("hybrid", False, True),   # + 查询改写
+            ("hybrid", True, True),    # rerank + 改写
+        ]
+
+    print(f"{'配置':<28} | {'n':>3} | {'judge(5)':>8} | {'答对率':>7} | {'charF1':>7} | {'ROUGE-L':>7}")
+    print("-" * 86)
+    for cfg in configs:
+        mode, rerank = cfg[0], cfg[1]
+        rewrite = cfg[2] if len(cfg) > 2 else False
+        label = f"mode={mode},rerank={rerank}" + (",rewrite=1" if rewrite else "")
+        scores, corrects, f1s, rls = [], [], [], []
+        for it in tests:
+            try:
+                ans, _sources, _docs = _answer_once(it.question, mode, rerank, rewrite)
+            except Exception as e:
+                print(f"  [跳过] {it.id}: {e}")
+                continue
+            pred = ans or ""
+            f1s.append(char_f1(pred, it.answer))
+            rls.append(rouge_l(pred, it.answer))
+            if llm is not None:
+                jr = judge_answer(it.question, pred, it.answer, llm, LLM_MODEL)
+                scores.append(jr.score)
+                corrects.append(1.0 if jr.correct else 0.0)
+            else:
+                lr = lexical_score(pred, it.answer)
+                scores.append(lr.score)
+                corrects.append(1.0 if lr.correct else 0.0)
+        n = len(f1s)
+        print(
+            f"{label:<28} | {n:>3} | {mean(scores):>8.3f} | {mean(corrects):>7.3f} | "
+            f"{mean(f1s):>7.3f} | {mean(rls):>7.3f}"
+        )
+
+
+def _answer_once(question: str, mode: str, rerank: bool, rewrite: bool):
+    """单次问答（每次新建服务会重复加载模型；大规模评测建议用 serve）。"""
+    from .query import RAGService
+
+    svc = RAGService(mode=mode, rerank=rerank, rewrite=rewrite)
+    return svc.answer(question)
+
+
 if __name__ == "__main__":
     run()

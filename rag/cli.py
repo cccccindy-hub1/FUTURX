@@ -78,7 +78,14 @@ def main() -> None:
 
     sub.add_parser("build", help="解析 -> 分块 -> 向量化 -> 入库（全量重建）")
 
-    sub.add_parser("eval", help="检索质量评估：BM25 vs BGE-m3，Recall@k/MRR@k/nDCG@k")
+    ev = sub.add_parser("eval", help="评估：retrieval=检索指标；split=切分 data_benchmark；answer=答案质量")
+    ev.add_argument(
+        "target", nargs="?", default="retrieval", choices=["retrieval", "split", "answer"],
+        help="retrieval=BM25 vs 稠密检索指标（默认）；split=切分 data_benchmark；answer=答案质量评测",
+    )
+    ev.add_argument("--ablate", action="store_true", help="（answer）跑消融：dense/hybrid/rerank/改写 对比")
+    ev.add_argument("--limit", type=int, default=0, help="（answer）只评前 N 条，便于快速验证")
+    ev.add_argument("--bench-dir", default=None, help="（split）data_benchmark 目录，默认取配置")
 
     ask = sub.add_parser("ask", help="问答：检索 +（可选）LLM 生成")
     ask.add_argument("question", nargs="+", help="问题文本")
@@ -127,9 +134,25 @@ def main() -> None:
         for s in sources:
             print(f"  - {s['source']}  [{s['section']}]  (距离 {s['distance']:.3f})")
     elif args.cmd == "eval":
-        from .eval import run
+        if args.target == "retrieval":
+            from .eval import run
 
-        run()
+            run()
+        elif args.target == "split":
+            from .benchmark import build_split
+
+            summary = build_split(bench_dir=args.bench_dir)
+            if not summary.get("ok"):
+                print(summary.get("reason", "切分失败"))
+                return
+            print("data_benchmark 切分完成：")
+            for k, v in summary.items():
+                if k != "ok":
+                    print(f"  {k}: {v}")
+        else:  # answer
+            from .eval import run_benchmark
+
+            run_benchmark(ablate=args.ablate, limit=args.limit)
     elif args.cmd == "serve":
         from .serve import run_http, run_repl
 
