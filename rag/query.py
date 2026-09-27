@@ -12,21 +12,26 @@ from openai import OpenAI
 
 from .config import (
     COLLECTION_NAME,
+    CONTEXT_EXPAND_ENABLED,
     EMBED_MODEL,
     FETCH_K,
+    HYDE_ENABLED,
     LLM_API_BASE,
     LLM_API_KEY,
     LLM_MODEL,
     MAX_DISTANCE,
+    QUERY_REWRITE_ENABLED,
     RERANK_ENABLED,
     RERANK_MODEL,
     RERANK_TOP_N,
     RETRIEVAL_MODE,
+    REWRITE_MODEL,
     RRF_K,
     STORE_DIR,
     TOP_K,
 )
-from .retrieval import HybridRetriever, Reranker
+from .enhance import build_retrieval_query
+from .retrieval import HybridRetriever, Reranker, load_parents
 
 _SYSTEM_PROMPT = (
     "你是数字治理科研团队的学术论文指导助手。"
@@ -42,6 +47,9 @@ class RAGService:
         rerank: bool = RERANK_ENABLED,
         where: dict | None = None,
         fetch_k: int = FETCH_K,
+        rewrite: bool = QUERY_REWRITE_ENABLED,
+        use_hyde: bool = HYDE_ENABLED,
+        expand_context: bool = CONTEXT_EXPAND_ENABLED,
     ):
         import chromadb
         from sentence_transformers import SentenceTransformer
@@ -54,6 +62,10 @@ class RAGService:
         self.mode = mode
         self.where = where
         self.fetch_k = fetch_k
+        self.rewrite = rewrite
+        self.use_hyde = use_hyde
+        self.expand_context = expand_context
+        self._parents: dict | None = None
         self.retriever = HybridRetriever(
             self.collection, self._embed, mode=mode, rrf_k=RRF_K
         )
@@ -63,15 +75,42 @@ class RAGService:
     def _embed(self, text: str) -> list[float]:
         return self.model.encode(text, normalize_embeddings=True).tolist()
 
+    def _retrieval_query(self, query: str) -> str:
+        """按开关做查询改写 / HyDE；无 LLM 时原样返回。"""
+        if not (self.rewrite or self.use_hyde):
+            return query
+        return build_retrieval_query(
+            query, self.llm, REWRITE_MODEL, rewrite=self.rewrite, use_hyde=self.use_hyde
+        )
+
     def retrieve_result(self, query: str, top_k: int = TOP_K):
         """返回 RetrievalResult（含 debug 信息），供 answer 与评估使用。"""
-        return self.retriever.search(
-            query,
+        result = self.retriever.search(
+            self._retrieval_query(query),
             top_k=top_k,
             fetch_k=max(self.fetch_k, top_k),
             where=self.where,
             collection_name=COLLECTION_NAME,
         )
+        if self.expand_context:
+            self._expand(result)
+        return result
+
+    def _expand(self, result) -> None:
+        """父子分块：把命中子块替换为其父块全文，供生成阶段获得更完整上下文。"""
+        if self._parents is None:
+            self._parents = load_parents(COLLECTION_NAME)
+        if not self._parents:
+            return
+        for k, meta in enumerate(result.metadatas):
+            parent = self._parents.get(meta.get("parent_id", ""))
+            if not parent:
+                continue
+            off, length = meta.get("parent_offset"), meta.get("parent_length")
+            if isinstance(off, int) and isinstance(length, int):
+                result.documents[k] = parent[off : off + length]
+            else:
+                result.documents[k] = parent
 
     def retrieve(self, query: str, top_k: int = TOP_K) -> dict:
         """保持 Chroma query() 的嵌套列表返回形状（兼容既有调用方）。"""

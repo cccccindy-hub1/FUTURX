@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import pickle
 from dataclasses import dataclass, field
@@ -15,6 +16,26 @@ from dataclasses import dataclass, field
 from .config import CACHE_DIR, FETCH_K, RRF_K, TOP_K
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------- 父块（父子分块）
+
+def parents_path(collection_name: str):
+    """父子分块模式下父块文本的 sidecar 文件路径。"""
+    return CACHE_DIR / f"{collection_name}.parents.json"
+
+
+def load_parents(collection_name: str) -> dict[str, str]:
+    """读取父块映射 {parent_id: parent_text}；不存在或损坏时返回 {}。"""
+    path = parents_path(collection_name)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception as e:  # 损坏则视为没有，退回子块原文
+        logger.warning("父块映射不可用（%s）：%s", path.name, e)
+        return {}
 
 
 # ---------------------------------------------------------------- 分词

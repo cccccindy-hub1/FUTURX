@@ -33,17 +33,42 @@ def _add_retrieval_flags(parser: argparse.ArgumentParser) -> None:
         "--where", action="append", metavar="KEY=VALUE",
         help="元数据过滤，可重复，如 --where category=006/研究方法/扎根理论",
     )
+    parser.add_argument(
+        "--rewrite", dest="rewrite", action="store_true", default=None,
+        help="用 LLM 改写查询后再检索（需配置 LLM_API_KEY）",
+    )
+    parser.add_argument(
+        "--hyde", dest="use_hyde", action="store_true", default=None,
+        help="用 HyDE（假设答案）检索（需配置 LLM_API_KEY）",
+    )
+    parser.add_argument(
+        "--expand", dest="expand_context", action="store_true", default=None,
+        help="父子分块：命中子块后展开为父块上下文（库需以 PARENT_CHILD_ENABLED 建）",
+    )
 
 
 def _service_kwargs(args) -> dict:
-    from .config import FETCH_K, RERANK_ENABLED, RETRIEVAL_MODE
+    from .config import (
+        CONTEXT_EXPAND_ENABLED,
+        FETCH_K,
+        HYDE_ENABLED,
+        QUERY_REWRITE_ENABLED,
+        RERANK_ENABLED,
+        RETRIEVAL_MODE,
+    )
     from .retrieval import parse_where
+
+    def pick(flag, default):
+        return flag if flag is not None else default
 
     return {
         "mode": args.mode or RETRIEVAL_MODE,
-        "rerank": args.rerank if args.rerank is not None else RERANK_ENABLED,
+        "rerank": pick(getattr(args, "rerank", None), RERANK_ENABLED),
         "where": parse_where(getattr(args, "where", None)),
         "fetch_k": args.fetch_k or FETCH_K,
+        "rewrite": pick(getattr(args, "rewrite", None), QUERY_REWRITE_ENABLED),
+        "use_hyde": pick(getattr(args, "use_hyde", None), HYDE_ENABLED),
+        "expand_context": pick(getattr(args, "expand_context", None), CONTEXT_EXPAND_ENABLED),
     }
 
 

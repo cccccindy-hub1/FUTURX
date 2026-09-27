@@ -40,9 +40,24 @@ RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANK_TOP_N = int(os.environ.get("RERANK_TOP_N", "8"))
 MAX_DISTANCE = float(os.environ.get("MAX_DISTANCE", "0.0"))  # >0 时按余弦距离过滤片段
 
+# ---- 分块扩展：父子分块（默认关闭；子块入库检索，父块作生成上下文）----
+PARENT_CHILD_ENABLED = os.environ.get("PARENT_CHILD_ENABLED", "false").lower() in ("1", "true", "yes")
+PARENT_SIZE = int(os.environ.get("PARENT_SIZE", "1500"))       # 父块字符数上限
+CONTEXT_EXPAND_ENABLED = os.environ.get("CONTEXT_EXPAND_ENABLED", "false").lower() in ("1", "true", "yes")
+
 # ---- 生成（OpenAI 兼容协议，默认指向 DeepSeek）----
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_API_BASE = os.environ.get("LLM_API_BASE", "https://api.deepseek.com")
 LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+
+# ---- 查询增强（需要 LLM；默认关闭）----
+QUERY_REWRITE_ENABLED = os.environ.get("QUERY_REWRITE_ENABLED", "false").lower() in ("1", "true", "yes")
+HYDE_ENABLED = os.environ.get("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
+REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "") or LLM_MODEL  # 改写/HyDE 用的小模型，默认同 LLM_MODEL
+
+# ---- data_benchmark 评测（默认从 <项目根>/data_benchmark 读取）----
+BENCHMARK_DIR = Path(os.environ.get("BENCHMARK_DIR", ROOT / "data_benchmark"))
+BENCHMARK_SEED = int(os.environ.get("BENCHMARK_SEED", "42"))
+TEST_SIZE = float(os.environ.get("TEST_SIZE", "0.08"))         # 测试集占比（报告建议 7~8%）
 
 SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}
