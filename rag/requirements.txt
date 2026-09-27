@@ -6,6 +6,14 @@ python-dotenv
 fastapi
 uvicorn
 
-# 评估专用（rag.eval：BM25 基线）
+# 文档解析（跨平台；.doc/.ppt 为二进制旧格式，另需 LibreOffice 或 Word+pywin32）
+python-docx
+python-pptx
+pywin32; sys_platform == "win32"
+
+# 检索增强（rag.retrieval：BM25 稀疏检索 / 混合检索）
 rank-bm25
 jieba
+
+# 开发与测试
+pytest

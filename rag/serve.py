@@ -32,8 +32,8 @@ def _print_answer(ans, sources, docs) -> None:
         print(f"  - {s['source']}  [{s['section']}]  (距离 {s['distance']:.3f})")
 
 
-def run_repl() -> None:
-    svc = RAGService()
+def run_repl(**service_kwargs) -> None:
+    svc = RAGService(**service_kwargs)
     print("模型与向量库已加载。直接输入问题回车（输入 exit / quit 退出）。")
     while True:
         try:
@@ -54,7 +54,7 @@ def run_repl() -> None:
         _print_answer(ans, sources, docs)
 
 
-def run_http(host: str, port: int) -> None:
+def run_http(host: str, port: int, **service_kwargs) -> None:
     import uvicorn
     from pathlib import Path
 
@@ -62,7 +62,7 @@ def run_http(host: str, port: int) -> None:
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    svc = RAGService()
+    svc = RAGService(**service_kwargs)
     app = FastAPI(title="FUTURX RAG 查询服务")
     web_dir = Path(__file__).resolve().parent / "web"
 

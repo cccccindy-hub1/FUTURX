@@ -12,25 +12,22 @@ import json
 import logging
 from pathlib import Path
 
-import chromadb
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from .config import (
+    CACHE_DIR,
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     COLLECTION_NAME,
     DATA_DIR,
     EMBED_MODEL,
-    RAG_DIR,
     STORE_DIR,
     SUPPORTED_EXTS,
 )
 from .chunk import chunk_text
-from .extract import extract_file, file_category
+from .extract import extract_file, file_category, parser_status
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-CACHE_DIR = RAG_DIR / "cache"
 
 
 def _collect_files() -> list[Path]:
@@ -47,13 +44,16 @@ def _signature(files: list[Path]) -> str:
     return hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
 
 
-def _parse(files: list[Path]) -> list[tuple[str, str, dict]]:
+def _parse(files: list[Path]) -> tuple[list[tuple[str, str, dict]], list[tuple[str, str]]]:
+    """返回 (rows, skipped)，skipped 为 [(文件名, 原因)]。"""
     rows: list[tuple[str, str, dict]] = []
+    skipped: list[tuple[str, str]] = []
     for f in files:
         try:
             rec = extract_file(f)
         except Exception as e:  # 单个文件解析失败不影响整体（如 .ppt）
             logging.warning("跳过 %s：%s", f.name, e)
+            skipped.append((f.name, str(e)))
             continue
         rel = str(f.relative_to(DATA_DIR))
         uid = hashlib.md5(rel.encode("utf-8")).hexdigest()[:10]
@@ -74,7 +74,21 @@ def _parse(files: list[Path]) -> list[tuple[str, str, dict]]:
                 )
             )
         logging.info("解析 %s -> %d chunks（%s）", f.name, len(chunks), category)
-    return rows
+    return rows, skipped
+
+
+def _report_parsers() -> None:
+    """打印各格式解析后端可用性，把「静默跳过」变成显式告警。"""
+    status = parser_status()
+    parts = [f"{ext}={state}" for ext, state in status.items()]
+    logging.info("解析后端：%s", "  ".join(parts))
+    degraded = [ext for ext, state in status.items() if state != "available"]
+    if degraded:
+        logging.warning(
+            "以下格式当前不可用（相关文件将被跳过）：%s；"
+            "安装 LibreOffice 可支持 .doc/.ppt，pip install python-docx python-pptx 支持 .docx/.pptx",
+            " ".join(degraded),
+        )
 
 
 def _save_cache(sig: str, rows, embeddings: np.ndarray) -> None:
@@ -96,26 +110,37 @@ def _load_cache(sig: str):
 
 
 def build() -> None:
+    _report_parsers()
     files = _collect_files()
     sig = _signature(files)
+    skipped: list[tuple[str, str]] = []
 
     cached = _load_cache(sig)
     if cached:
         rows, embeddings = cached
         print(f"命中向量缓存，跳过向量化（{len(rows)} chunks）")
     else:
-        rows = _parse(files)
+        rows, skipped = _parse(files)
         if not rows:
             print("未解析到任何内容，请检查 nlp_ 目录。")
             return
         print(f"加载 embedding 模型 {EMBED_MODEL} …")
+        from sentence_transformers import SentenceTransformer
+
         model = SentenceTransformer(EMBED_MODEL)
         docs = [r[1] for r in rows]
         print(f"向量化 {len(rows)} 个 chunk …")
         embeddings = model.encode(docs, normalize_embeddings=True, show_progress_bar=True)
         _save_cache(sig, rows, embeddings)
 
+    if skipped:
+        print(f"\n共跳过 {len(skipped)} 个文件（解析后端不可用）：")
+        for name, reason in skipped:
+            print(f"  - {name}：{reason}")
+
     print("写入 Chroma …")
+    import chromadb
+
     client = chromadb.PersistentClient(path=str(STORE_DIR))
     try:
         client.delete_collection(COLLECTION_NAME)

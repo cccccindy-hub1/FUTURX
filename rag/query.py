@@ -2,22 +2,31 @@
 
 - RAGService：常驻服务，模型与向量库只加载一次（供 serve 反复查询，消除重载开销）。
 - retrieve() / answer()：模块级便捷函数，每次调用新建服务（一次性 CLI 用）。
+
+检索增强（混合检索 / 重排序 / 元数据过滤）由 rag.retrieval 提供，默认关闭，
+`mode="dense"` 时行为与旧的纯向量检索完全一致。
 """
 from __future__ import annotations
 
-import chromadb
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
 
 from .config import (
     COLLECTION_NAME,
     EMBED_MODEL,
+    FETCH_K,
     LLM_API_BASE,
     LLM_API_KEY,
     LLM_MODEL,
+    MAX_DISTANCE,
+    RERANK_ENABLED,
+    RERANK_MODEL,
+    RERANK_TOP_N,
+    RETRIEVAL_MODE,
+    RRF_K,
     STORE_DIR,
     TOP_K,
 )
+from .retrieval import HybridRetriever, Reranker
 
 _SYSTEM_PROMPT = (
     "你是数字治理科研团队的学术论文指导助手。"
@@ -27,30 +36,71 @@ _SYSTEM_PROMPT = (
 
 
 class RAGService:
-    def __init__(self):
+    def __init__(
+        self,
+        mode: str = RETRIEVAL_MODE,
+        rerank: bool = RERANK_ENABLED,
+        where: dict | None = None,
+        fetch_k: int = FETCH_K,
+    ):
+        import chromadb
+        from sentence_transformers import SentenceTransformer
+
         self.model = SentenceTransformer(EMBED_MODEL)
         client = chromadb.PersistentClient(path=str(STORE_DIR))
         self.collection = client.get_collection(COLLECTION_NAME)
         self.llm = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE) if LLM_API_KEY else None
 
+        self.mode = mode
+        self.where = where
+        self.fetch_k = fetch_k
+        self.retriever = HybridRetriever(
+            self.collection, self._embed, mode=mode, rrf_k=RRF_K
+        )
+        if rerank:
+            self.retriever.attach_reranker(Reranker(RERANK_MODEL))
+
+    def _embed(self, text: str) -> list[float]:
+        return self.model.encode(text, normalize_embeddings=True).tolist()
+
+    def retrieve_result(self, query: str, top_k: int = TOP_K):
+        """返回 RetrievalResult（含 debug 信息），供 answer 与评估使用。"""
+        return self.retriever.search(
+            query,
+            top_k=top_k,
+            fetch_k=max(self.fetch_k, top_k),
+            where=self.where,
+            collection_name=COLLECTION_NAME,
+        )
+
     def retrieve(self, query: str, top_k: int = TOP_K) -> dict:
-        q_emb = self.model.encode(query, normalize_embeddings=True).tolist()
-        return self.collection.query(query_embeddings=[q_emb], n_results=top_k)
+        """保持 Chroma query() 的嵌套列表返回形状（兼容既有调用方）。"""
+        return self.retrieve_result(query, top_k).as_chroma()
 
     def answer(self, query: str, top_k: int = TOP_K):
-        res = self.retrieve(query, top_k)
-        docs = res["documents"][0]
-        metas = res["metadatas"][0]
-        dists = res["distances"][0]
+        result = self.retrieve_result(query, top_k)
+
+        docs = result.documents
+        metas = result.metadatas
+        dists = result.distances
+
+        # 可选：按余弦距离过滤噪声片段（MAX_DISTANCE>0 时生效，但至少保留 1 条）
+        if MAX_DISTANCE > 0:
+            kept = [k for k, d in enumerate(dists) if d <= MAX_DISTANCE]
+            if kept:
+                docs = [docs[k] for k in kept]
+                metas = [metas[k] for k in kept]
+                dists = [dists[k] for k in kept]
+
         sources = [
-            {"source": m["source"], "section": m.get("section", ""), "distance": float(d)}
+            {"source": m.get("source", ""), "section": m.get("section", ""), "distance": float(d)}
             for m, d in zip(metas, dists)
         ]
         if not self.llm:
             return None, sources, docs
 
         ctx = "\n\n".join(
-            f"[来源{i + 1}: {m['source']}]（{m.get('section', '')}）\n{d}"
+            f"[来源{i + 1}: {m.get('source', '')}]（{m.get('section', '')}）\n{d}"
             for i, (d, m) in enumerate(zip(docs, metas))
         )
         resp = self.llm.chat.completions.create(
