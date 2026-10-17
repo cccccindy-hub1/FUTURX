@@ -1,5 +1,7 @@
 # ---- Python 环境 ----
 .venv/
+.conda/
+env/
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -23,18 +23,19 @@ docs/             建设规划文档
 ## 快速开始
 
 ```bash
-# 1) 安装依赖
-python3 -m venv .venv
-.venv/bin/pip install -r rag/requirements.txt
+# 1) 创建并激活 Conda 环境与安装依赖
+conda create -n futurx python=3.10 -y
+conda activate futurx
+pip install -r rag/requirements.txt
 
 # 2) 配置生成层（可选，不配则仅检索）
-cp .env.example .env    # 填入 LLM_API_KEY 等
+cp .env.example .env    # Windows CMD: copy .env.example .env；填入 LLM_API_KEY 等
 
 # 3) 建库（解析 → 分块 → 向量化 → 入库）
-.venv/bin/python -m rag.cli build
+python -m rag.cli build
 
 # 4) 问答
-.venv/bin/python -m rag.cli ask "扎根理论的三级编码是什么？"
+python -m rag.cli ask "扎根理论的三级编码是什么？"
 ```
 
 ## 文档
