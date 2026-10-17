@@ -23,6 +23,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .config import OCR_DPI, OCR_ENABLED, OCR_MIN_CHARS
+
 logger = logging.getLogger(__name__)
 
 # pymupdf 兼容新旧两种导入名
@@ -88,7 +90,11 @@ def _has(module: str) -> bool:
 
 
 def parser_status() -> dict[str, str]:
-    """返回每个扩展名当前可用的解析后端，供 build 打日志与自检。"""
+    """返回每个扩展名当前可用的解析后端，供 build 打日志与自检。
+
+    `.pdf` 的 OCR 兜底是可选能力（`OCR_ENABLED`），不影响「文本型 PDF 可解析」的判断；
+    其可用性由 `ocr_status()` 单独报告。
+    """
     soffice = find_soffice()
     status: dict[str, str] = {}
     status[".pdf"] = "available" if _HAS_PYMUPDF else (
@@ -106,13 +112,68 @@ def parser_status() -> dict[str, str]:
     return status
 
 
+def ocr_status() -> str:
+    """PDF OCR 兜底能力：available / disabled / unsupported / needs_ocr_extras。"""
+    if not OCR_ENABLED:
+        return "disabled"
+    if not _HAS_PYMUPDF:
+        return "unsupported"
+    if _has("rapidocr_onnxruntime"):
+        return "available"
+    return "needs_ocr_extras"
+
+
 # ---------------------------------------------------------------- 各格式解析
+
+_OCR_ENGINE = None
+
+
+def _ocr_page(page) -> str:
+    """把单页渲染成图片后 OCR；引擎懒加载，首次调用会加载/下载模型。"""
+    global _OCR_ENGINE
+    import numpy as np
+
+    if _OCR_ENGINE is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as e:
+            raise UnsupportedFormat(
+                "扫描版 PDF 需要 OCR：pip install rapidocr-onnxruntime"
+            ) from e
+        logger.info("加载 OCR 引擎（RapidOCR，首次较慢）…")
+        _OCR_ENGINE = RapidOCR()
+
+    pix = page.get_pixmap(dpi=OCR_DPI)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    result, _elapse = _OCR_ENGINE(img)
+    if not result:
+        return ""
+    return "\n".join(str(box[1]) for box in result)
+
 
 def _extract_pdf(path: Path) -> str:
     if _HAS_PYMUPDF:
         doc = fitz.open(path)
         try:
-            pages = [page.get_text("text") for page in doc]
+            pages = []
+            low_pages = []
+            for i, page in enumerate(doc):
+                text = page.get_text("text")
+                pages.append(text)
+                if len(text.strip()) < OCR_MIN_CHARS:
+                    low_pages.append(i)
+            if low_pages and OCR_ENABLED:
+                logger.info("%s：%d 页文本过少，走 OCR 兜底", path.name, len(low_pages))
+                for i in low_pages:
+                    ocr_text = _ocr_page(doc[i])
+                    if len(ocr_text.strip()) > len(pages[i].strip()):
+                        pages[i] = ocr_text
+            elif low_pages:
+                logger.warning(
+                    "%s：%d 页几乎没有文本（可能是扫描版），设置 OCR_ENABLED=true 可启用 OCR",
+                    path.name,
+                    len(low_pages),
+                )
         finally:
             doc.close()
         return "\n\n".join(pages)
@@ -197,40 +258,74 @@ def _extract_ppt_via_soffice(path: Path, soffice: str) -> str:
         converted.unlink(missing_ok=True)
 
 
-def _extract_doc_via_com(path: Path) -> str:
-    """Windows + 已安装 Word 时用 COM 自动化读取 .doc。"""
-    if not _has_pywin32():
-        raise UnsupportedFormat("COM 解析需要 pywin32")
-    import pythoncom  # type: ignore
-    import win32com.client  # type: ignore
-
-    pythoncom.CoInitialize()
-    word = None
+def _extract_doc_via_com(path: Path, word) -> str:
+    """用已打开的 Word 实例读取 .doc（调用方负责 COM 初始化与退出）。"""
     doc = None
     try:
-        word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        doc = word.Documents.Open(str(path.resolve()), ReadOnly=True)
+        doc = word.Documents.Open(
+            str(path.resolve()), ReadOnly=True, AddToRecentFiles=False
+        )
         return doc.Content.Text
-    except Exception as e:  # COM 失败交给上层回退
+    except Exception as e:
         raise UnsupportedFormat(f"Word COM 解析失败：{e}") from e
     finally:
-        try:
-            if doc is not None:
+        if doc is not None:
+            try:
                 doc.Close(False)
-            if word is not None:
-                word.Quit()
-        finally:
-            pythoncom.CoUninitialize()
+            except Exception:  # COM 连接断开时关闭会失败，忽略即可
+                pass
+
+
+class _WordExtractor:
+    """复用单个 Word 实例批量解析 .doc，避免逐文件启动/退出 Word（每次数秒）。
+
+    用法：`with _WordExtractor() as ex: ex.extract(p)`。单个文件读取失败不影响后续文件。
+    """
+
+    def __init__(self):
+        self._word = None
+        self._pythoncom = None
+
+    def __enter__(self):
+        if not _has_pywin32():
+            raise UnsupportedFormat("COM 解析需要 pywin32")
+        import pythoncom  # type: ignore
+        import win32com.client  # type: ignore
+
+        self._pythoncom = pythoncom
+        pythoncom.CoInitialize()
+        self._word = win32com.client.DispatchEx("Word.Application")
+        self._word.Visible = False
+        self._word.DisplayAlerts = 0
+        return self
+
+    def extract(self, path: Path) -> str:
+        return _extract_doc_via_com(path, self._word)
+
+    def __exit__(self, *_exc):
+        for step in (
+            lambda: self._word.Quit(),
+            lambda: self._pythoncom.CoUninitialize(),
+        ):
+            try:
+                step()
+            except Exception:  # COM 已断开时退出会失败，忽略
+                pass
 
 
 # ---------------------------------------------------------------- 对外接口
 
-def extract_file(path: Path) -> dict:
-    """返回 {"path": str, "text": str, "ext": str}。解析失败会抛出异常。"""
+def extract_file(path: Path, doc_backend: str = "auto") -> dict:
+    """返回 {"path": str, "text": str, "ext": str}。解析失败会抛出异常。
+
+    `doc_backend`：auto=能探测到的后端中任选（Word COM 优先）；com=强制 Word；
+    soffice=强制 LibreOffice；none=不允许回退（测试用，避免误调本机 Word）。
+    """
     path = Path(path)
     ext = path.suffix.lower()
-    soffice = find_soffice()
+    use_com = doc_backend in ("auto", "com") and _has_pywin32()
+    use_soffice = doc_backend in ("auto", "soffice")
+    soffice = find_soffice() if use_soffice else None
 
     if ext == ".pdf":
         text = _extract_pdf(path)
@@ -239,9 +334,10 @@ def extract_file(path: Path) -> dict:
     elif ext == ".pptx":
         text = _extract_pptx(path)
     elif ext == ".doc":
-        if _has_pywin32():
+        if use_com:
             try:
-                text = _extract_doc_via_com(path)
+                with _WordExtractor() as ex:
+                    text = ex.extract(path)
             except UnsupportedFormat:
                 if not soffice:
                     _raise_doc(soffice)
@@ -260,6 +356,46 @@ def extract_file(path: Path) -> dict:
         raise ValueError(f"不支持的文件类型: {ext}")
 
     return {"path": str(path), "text": text, "ext": ext}
+
+
+def extract_files(
+    paths: list[Path], doc_backend: str = "auto"
+) -> list[tuple[Path, dict | Exception]]:
+    """批量解析：.doc 共用同一个 Word 实例，其余格式逐个解析。
+
+    返回 [(path, 结果或异常)]，单个文件失败不影响其余文件。
+    """
+    results: list[tuple[Path, dict | Exception]] = []
+    use_com = doc_backend in ("auto", "com") and _has_pywin32()
+    # 本批需要走批量 Word 会话的 .doc；Word 没起来时它们仍走 extract_file 自行回退
+    batch_docs = {Path(p) for p in paths if Path(p).suffix.lower() == ".doc"} if use_com else set()
+
+    ex = None
+    if batch_docs:
+        try:
+            ex = _WordExtractor().__enter__()
+        except Exception as e:  # Word 启动失败：.doc 交给 extract_file 按后端回退
+            logger.warning("Word COM 不可用，.doc 将回退其他后端：%s", e)
+
+    try:
+        for p in paths:
+            p = Path(p)
+            if ex is not None and p in batch_docs:
+                try:
+                    results.append((p, {"path": str(p), "text": ex.extract(p), "ext": ".doc"}))
+                except Exception as e:
+                    results.append((p, e))
+                continue
+            # 已有批量会话时，本批 .doc 不再逐文件启动 COM（避免重复拉起 Word）
+            per_file_backend = "none" if ex is not None and p in batch_docs else doc_backend
+            try:
+                results.append((p, extract_file(p, doc_backend=per_file_backend)))
+            except Exception as e:
+                results.append((p, e))
+    finally:
+        if ex is not None:
+            ex.__exit__(None, None, None)
+    return results
 
 
 def _raise_doc(soffice: str | None) -> None:

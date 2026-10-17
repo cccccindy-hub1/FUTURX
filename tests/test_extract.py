@@ -50,13 +50,50 @@ def test_find_soffice_absent(monkeypatch):
 
 
 def test_doc_without_any_backend_raises_readable_error(monkeypatch, tmp_path):
-    """无 LibreOffice / Word 时，.doc 应抛出可读异常而非静默失败。"""
+    """后端全不可用时，.doc 应抛出可读异常而非静默失败。"""
     monkeypatch.setattr("shutil.which", lambda _name: None)
     monkeypatch.setattr("rag.extract.find_soffice", lambda: None)
+    monkeypatch.setattr("rag.extract._has_pywin32", lambda: False)
     p = tmp_path / "legacy.doc"
     p.write_bytes(b"\xd0\xcf\x11\xe0 garbage")
     with pytest.raises(RuntimeError, match="LibreOffice|Word|无法解析"):
         extract_file(p)
+
+
+def test_extract_files_isolates_single_failure(monkeypatch, tmp_path):
+    """批量解析：单个文件失败不影响其余文件，且结果顺序与输入一致。"""
+    import rag.extract as ex
+
+    monkeypatch.setattr(ex, "_has_pywin32", lambda: False)
+    monkeypatch.setattr(ex, "find_soffice", lambda: None)
+    ok = make_docx(tmp_path / "ok.docx", ["第一段"])
+    bad = tmp_path / "bad.pdf"
+    bad.write_bytes(b"not a pdf")
+
+    results = ex.extract_files([ok, bad])
+    assert results[0][0] == ok and "第一段" in results[0][1]["text"]
+    assert results[1][0] == bad and isinstance(results[1][1], Exception)
+
+
+def test_ocr_status_reflects_config(monkeypatch):
+    import rag.extract as ex
+
+    monkeypatch.setattr(ex, "OCR_ENABLED", False)
+    assert ex.ocr_status() == "disabled"
+    monkeypatch.setattr(ex, "OCR_ENABLED", True)
+    assert ex.ocr_status() in ("available", "needs_ocr_extras", "unsupported")
+
+
+def test_pdf_without_text_warns_when_ocr_disabled(monkeypatch, tmp_path, caplog):
+    """扫描版 PDF（无文本层）在 OCR 关闭时应告警，而不是静默返回空串。"""
+    import rag.extract as ex
+
+    p = make_pdf(tmp_path / "scan.pdf", "")  # 空白页，无文本层
+    monkeypatch.setattr(ex, "OCR_ENABLED", False)
+    with caplog.at_level("WARNING"):
+        text = ex.extract_file(p)["text"]
+    assert text.strip() == ""
+    assert "OCR" in caplog.text
 
 
 def test_file_category_derives_from_relative_path(tmp_path):

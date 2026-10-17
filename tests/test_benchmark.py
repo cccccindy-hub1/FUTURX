@@ -75,7 +75,7 @@ def test_build_items_dedupes_identical_pairs():
 
 def test_split_keeps_users_on_one_side(bench_dir):
     items = build_items(load_raw(bench_dir))
-    train, test = split_by_user(items, test_size=0.2, seed=42)
+    train, test = split_by_user(items, test_size=0.2, seed=42, max_source_share=1.0)
     assert train and test
     train_users = {it.user for it in train}
     test_users = {it.user for it in test}
@@ -85,25 +85,92 @@ def test_split_keeps_users_on_one_side(bench_dir):
 
 def test_split_is_reproducible(bench_dir):
     items = build_items(load_raw(bench_dir))
-    a = split_by_user(items, test_size=0.2, seed=7)
-    b = split_by_user(items, test_size=0.2, seed=7)
+    a = split_by_user(items, test_size=0.2, seed=7, max_source_share=1.0)
+    b = split_by_user(items, test_size=0.2, seed=7, max_source_share=1.0)
     assert [i.id for i in a[1]] == [i.id for i in b[1]]
 
 
 def test_split_test_ratio_near_target(bench_dir):
     items = build_items(load_raw(bench_dir))
-    _, test = split_by_user(items, test_size=0.2, seed=42)
+    _, test = split_by_user(items, test_size=0.2, seed=42, max_source_share=1.0)
     ratio = len(test) / len(items)
     assert 0.1 <= ratio <= 0.35, f"测试集占比偏离目标过大：{ratio:.2f}"
 
 
+def _items_with_big_source(n_big: int = 300, n_small_users: int = 200, per_small: int = 1, n_topics: int = 1):
+    items = [
+        QAItem(id=f"b{i}", question="q" * 10, answer="a" * 30, user="big", topic="t0")
+        for i in range(n_big)
+    ]
+    for u in range(n_small_users):
+        for i in range(per_small):
+            items.append(
+                QAItem(
+                    id=f"u{u}_{i}",
+                    question="q" * 10,
+                    answer="a" * 30,
+                    user=f"u{u}",
+                    topic=f"t{i % n_topics}",
+                )
+            )
+    return items
+
+
+def test_split_excludes_oversized_source():
+    """体量超过 max_source_share 的来源整户留在 train，测试集比例因此可控。"""
+    items = _items_with_big_source()
+    train, test = split_by_user(items, test_size=0.08, seed=42, max_source_share=0.06)
+    assert "big" not in {it.user for it in test}
+    assert "big" in {it.user for it in train}
+    assert not ({it.user for it in train} & {it.user for it in test})
+    assert 0.08 - 1e-9 <= len(test) / len(items) <= 0.10 + 1e-9
+
+
+def test_split_never_returns_empty_test():
+    """候选池里所有来源都超限时也不能把测试集清空。"""
+    items = [
+        QAItem(id=f"a{i}", question="q" * 10, answer="a" * 30, user="a", topic="t")
+        for i in range(100)
+    ]
+    items += [
+        QAItem(id=f"b{i}", question="q" * 10, answer="a" * 30, user="b", topic="t")
+        for i in range(100)
+    ]
+    _, test = split_by_user(items, test_size=0.08, seed=42, max_source_share=0.06)
+    assert test
+
+
+def test_split_fills_ratio_from_small_sources():
+    """只有小来源时，比例必须落进 [test_size, max_test_ratio]。"""
+    items = _items_with_big_source(n_big=0, n_small_users=300, per_small=3)
+    _, test = split_by_user(items, test_size=0.08, seed=42, max_source_share=0.06)
+    assert 0.08 - 1e-9 <= len(test) / len(items) <= 0.10 + 1e-9
+
+
+def test_probe_spreads_over_topics():
+    from rag.benchmark import _spread_topics
+
+    items = [
+        QAItem(id=f"u{u}_{i}", question="q" * 10, answer="a" * 30, user=f"u{u}", topic=f"t{(u + i) % 10}")
+        for u in range(60)
+        for i in range(1)
+    ]
+    picked = _spread_topics(items, 30)
+    topics = {it.topic for it in items if it.id in picked}
+    assert len(picked) == 30
+    assert len(topics) == 10, "种子评估集应尽量铺开到全部主题"
+
+
 def test_build_split_writes_jsonl(bench_dir, tmp_path):
-    summary = build_split(bench_dir=bench_dir, out_dir=tmp_path / "split")
+    summary = build_split(bench_dir=bench_dir, out_dir=tmp_path / "split", probe_size=10)
     assert summary["ok"]
     train = read_jsonl(tmp_path / "split" / "train.jsonl")
     test = read_jsonl(tmp_path / "split" / "test.jsonl")
     assert len(train) + len(test) == summary["n_clean"]
     assert {it.user for it in train} & {it.user for it in test} == set()
+    probe = read_jsonl(tmp_path / "split" / "probe.jsonl")
+    assert len(probe) == 10
+    assert summary["n_probe"] == 10
 
 
 def test_build_split_missing_dir_degrades(tmp_path):

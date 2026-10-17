@@ -14,7 +14,7 @@ rag/
   retrieval.py   检索层：稠密向量 / BM25 稀疏 / RRF 融合 / 重排序 / 元数据过滤
   enhance.py     查询增强：查询改写 + HyDE（均需 LLM）
   query.py       检索 + 生成（RAGService）
-  benchmark.py   data_benchmark 切分：CSV -> 清洗 -> 按用户分组分层切分 train/test
+  benchmark.py   data_benchmark 切分：CSV -> 清洗 -> 按来源（「来源姓名」）分组分层切分 train/test + probe
   judge.py       打分：词法基线（char-F1 / ROUGE-L）+ LLM-as-judge
   eval.py        评估：检索指标（BM25 vs 稠密）与答案质量评测
   serve.py       常驻服务（REPL / HTTP）
@@ -35,7 +35,16 @@ python -m venv .venv
 `.doc` / `.ppt` 是二进制旧格式，额外需要一个后端（二选一，按可用性自动选择）：
 
 - **LibreOffice**（跨平台）：装上即可，程序会探测 `soffice`，或用 `SOFFICE_BIN` 指定路径；
-- **Windows + Word**：安装 `pywin32`（已含在 requirements 的 win32 条件依赖里）后走 Word COM。
+- **Windows + Word**：安装 `pywin32`（已含在 requirements 的 win32 条件依赖里）后走 Word COM；
+  批量建库时复用同一个 Word 实例（12 个 `.doc` 约 14 秒），不会每个文件开关一次。
+
+扫描版 PDF（无文本层）可开启 OCR 兜底：`pip install rapidocr-onnxruntime`，再设
+`OCR_ENABLED=true`（`OCR_MIN_CHARS` 控制触发阈值、`OCR_DPI` 控制渲染清晰度）。
+未开 OCR 时这类文件会被列入 `skipped`，不再静默丢失。
+
+> **文件名编码**：`nlp_/` 若来自 GBK 环境下解压的 zip，中文文件名会变成 `鍏稿瀷闂…` 这类乱码
+> （正文不受影响，但 `source`/`category` 会带乱码）。`build` 会在入库前检测 U+FFFD / 私用区字符
+> 并直接报错，请换用 UTF-8 解压或从原始来源重新拷贝后再建库。
 
 ## 配置
 

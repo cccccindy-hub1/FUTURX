@@ -27,7 +27,7 @@ from .config import (
     SUPPORTED_EXTS,
 )
 from .chunk import chunk_parent_child, chunk_text
-from .extract import extract_file, file_category, parser_status
+from .extract import extract_files, file_category, ocr_status, parser_status
 from .retrieval import parents_path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -41,24 +41,48 @@ def _collect_files() -> list[Path]:
     return files
 
 
+def _is_broken_name(name: str) -> bool:
+    """文件名里出现替换符/私用区字符 = 编码损坏（常见于 GBK 环境下解压的 zip）。"""
+    return any(c == "\ufffd" or "\ue000" <= c <= "\uf8ff" for c in name)
+
+
+def _check_broken_names(files: list[Path]) -> None:
+    broken = [f for f in files if _is_broken_name(str(f.relative_to(DATA_DIR)))]
+    if broken:
+        for f in broken[:10]:
+            logging.warning("文件名编码损坏：%s", ascii(str(f.relative_to(DATA_DIR))))
+        raise SystemExit(
+            f"检测到 {len(broken)} 个文件名编码损坏，入库后来源路径会是乱码。"
+            "请从原始压缩包重新解压/拷贝资料后重试（不要用 GBK 环境下的解压工具）。"
+        )
+
+
 def _signature(files: list[Path]) -> str:
     key = "\n".join(sorted(str(f.relative_to(DATA_DIR)) for f in files))
-    key += f"\n{EMBED_MODEL}\n{CHUNK_SIZE}\n{CHUNK_OVERLAP}"
+    # 建库参数变了必须让向量缓存失效，否则会张冠李戴复用旧向量
+    key += f"\n{EMBED_MODEL}\n{COLLECTION_NAME}\n{CHUNK_SIZE}\n{CHUNK_OVERLAP}"
     key += f"\nparent_child={PARENT_CHILD_ENABLED}\nparent_size={PARENT_SIZE}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
 
 
 def _parse(files: list[Path]) -> tuple[list[tuple[str, str, dict]], list[tuple[str, str]], dict]:
-    """返回 (rows, skipped, parents)。parents 仅在父子分块模式下非空。"""
+    """返回 (rows, skipped, parents)。parents 仅在父子分块模式下非空。
+
+    skipped 包含两类文件：解析失败（缺后端/文件损坏）与解析成功但无文本
+    （扫描版 PDF 未开 OCR、空白文档），避免它们静默丢失。
+    """
     rows: list[tuple[str, str, dict]] = []
     skipped: list[tuple[str, str]] = []
     parents: dict[str, str] = {}
-    for f in files:
-        try:
-            rec = extract_file(f)
-        except Exception as e:  # 单个文件解析失败不影响整体（如 .ppt）
-            logging.warning("跳过 %s：%s", f.name, e)
-            skipped.append((f.name, str(e)))
+    for f, rec_or_err in extract_files(files):
+        if isinstance(rec_or_err, Exception):  # 单个文件解析失败不影响整体（如 .ppt）
+            logging.warning("跳过 %s：%s", f.name, rec_or_err)
+            skipped.append((f.name, str(rec_or_err)))
+            continue
+        rec = rec_or_err
+        if not rec["text"].strip():
+            logging.warning("跳过 %s：解析结果为空（扫描版 PDF 可开 OCR_ENABLED，空白文档请检查）", f.name)
+            skipped.append((f.name, "解析结果为空"))
             continue
         rel = str(f.relative_to(DATA_DIR))
         uid = hashlib.md5(rel.encode("utf-8")).hexdigest()[:10]
@@ -111,36 +135,53 @@ def _report_parsers() -> None:
             "安装 LibreOffice 可支持 .doc/.ppt，pip install python-docx python-pptx 支持 .docx/.pptx",
             " ".join(degraded),
         )
+    ocr = ocr_status()
+    logging.info("PDF OCR 兜底：%s（OCR_ENABLED=true + pip install rapidocr-onnxruntime 可开启）", ocr)
 
 
-def _save_cache(sig: str, rows, embeddings: np.ndarray) -> None:
+def _save_cache(sig: str, rows, embeddings: np.ndarray, skipped: list[tuple[str, str]]) -> None:
     CACHE_DIR.mkdir(exist_ok=True)
     np.save(CACHE_DIR / f"{sig}.emb.npy", embeddings)
-    with open(CACHE_DIR / f"{sig}.rows.json", "w", encoding="utf-8") as fh:
-        json.dump(rows, fh, ensure_ascii=False)
+    _cache_rows_path(sig).write_text(
+        json.dumps({"rows": rows, "skipped": skipped}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _cache_rows_path(sig: str) -> Path:
+    return CACHE_DIR / f"{sig}.rows.json"
 
 
 def _load_cache(sig: str):
+    """返回 (rows, embeddings, skipped)；缓存缺失或格式过旧时返回 None。"""
     emb_path = CACHE_DIR / f"{sig}.emb.npy"
-    rows_path = CACHE_DIR / f"{sig}.rows.json"
-    if emb_path.exists() and rows_path.exists():
-        embeddings = np.load(emb_path)
-        with open(rows_path, encoding="utf-8") as fh:
-            rows = json.load(fh)
-        return rows, embeddings
-    return None
+    rows_path = _cache_rows_path(sig)
+    if not (emb_path.exists() and rows_path.exists()):
+        return None
+    embeddings = np.load(emb_path)
+    try:
+        payload = json.loads(rows_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or "rows" not in payload:
+        return None  # 旧格式缓存（仅 rows 列表）：重新解析一次以拿到跳过清单
+    return (
+        [tuple(r) for r in payload["rows"]],
+        embeddings,
+        [tuple(s) for s in payload.get("skipped", [])],
+    )
 
 
 def build() -> None:
     _report_parsers()
     files = _collect_files()
+    _check_broken_names(files)
     sig = _signature(files)
     skipped: list[tuple[str, str]] = []
     parents: dict[str, str] = {}
 
     cached = _load_cache(sig)
     if cached:
-        rows, embeddings = cached
+        rows, embeddings, skipped = cached
         print(f"命中向量缓存，跳过向量化（{len(rows)} chunks）")
     else:
         rows, skipped, parents = _parse(files)
@@ -154,10 +195,10 @@ def build() -> None:
         docs = [r[1] for r in rows]
         print(f"向量化 {len(rows)} 个 chunk …")
         embeddings = model.encode(docs, normalize_embeddings=True, show_progress_bar=True)
-        _save_cache(sig, rows, embeddings)
+        _save_cache(sig, rows, embeddings, skipped)
 
     if skipped:
-        print(f"\n共跳过 {len(skipped)} 个文件（解析后端不可用）：")
+        print(f"\n共跳过 {len(skipped)} 个文件（解析失败或文本为空）：")
         for name, reason in skipped:
             print(f"  - {name}：{reason}")
 

@@ -40,6 +40,11 @@ RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANK_TOP_N = int(os.environ.get("RERANK_TOP_N", "8"))
 MAX_DISTANCE = float(os.environ.get("MAX_DISTANCE", "0.0"))  # >0 时按余弦距离过滤片段
 
+# ---- 解析兜底：扫描版 PDF OCR（默认关闭；开启后文本少于阈值页才 OCR）----
+OCR_ENABLED = os.environ.get("OCR_ENABLED", "false").lower() in ("1", "true", "yes")
+OCR_MIN_CHARS = int(os.environ.get("OCR_MIN_CHARS", "50"))  # 单页文本少于该字符数视为扫描页
+OCR_DPI = int(os.environ.get("OCR_DPI", "200"))
+
 # ---- 分块扩展：父子分块（默认关闭；子块入库检索，父块作生成上下文）----
 PARENT_CHILD_ENABLED = os.environ.get("PARENT_CHILD_ENABLED", "false").lower() in ("1", "true", "yes")
 PARENT_SIZE = int(os.environ.get("PARENT_SIZE", "1500"))       # 父块字符数上限
@@ -58,6 +63,15 @@ REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "") or LLM_MODEL  # 改写/HyDE 
 # ---- data_benchmark 评测（默认从 <项目根>/data_benchmark 读取）----
 BENCHMARK_DIR = Path(os.environ.get("BENCHMARK_DIR", ROOT / "data_benchmark"))
 BENCHMARK_SEED = int(os.environ.get("BENCHMARK_SEED", "42"))
-TEST_SIZE = float(os.environ.get("TEST_SIZE", "0.08"))         # 测试集占比（报告建议 7~8%）
+TEST_SIZE = float(os.environ.get("TEST_SIZE", "0.08"))         # 测试集占比下限（报告建议 7~8%）
+MAX_TEST_RATIO = float(os.environ.get("MAX_TEST_RATIO", "0.10"))  # 测试集占比上限
+# 按来源（CSV「来源姓名」，即提问专家）分组切分：同一来源不跨 train/test。
+# 来源是整体进出的最小单元，超大来源（如占全库 16.9% 的单个专家）一旦进 test
+# 就会把比例顶到 MAX_TEST_RATIO 之上，因此体量超过 MAX_SOURCE_SHARE 的来源
+# 整户留在 train，不参与评测。
+MAX_SOURCE_SHARE = float(os.environ.get("MAX_SOURCE_SHARE", "0.06"))
+# 种子评估集：从全部数据按主题铺开取 k 条（不参与 train/test），用于检查
+# 检索语料对 data_benchmark 主题的覆盖度。0 = 不生成。
+PROBE_SIZE = int(os.environ.get("PROBE_SIZE", "60"))
 
 SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}

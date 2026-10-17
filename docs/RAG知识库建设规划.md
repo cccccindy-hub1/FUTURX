@@ -199,7 +199,17 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 2. **答案质量**（`eval split` → `eval answer`）：
    - `split`：清洗 `data_benchmark/*.csv`（去 BOM、首尾 `...`、过滤 <5 字提问 / <20 字答复、去重），
      **按 `来源姓名` 用户分组** + 主题分层抽样切分 train/test，固定种子（`BENCHMARK_SEED=42`），
-     落到 `data_benchmark/split/{train,test}.jsonl`。
+     落到 `data_benchmark/split/{train,test,probe}.jsonl`。
+     - 三个阈值：`TEST_SIZE=0.08`（下限）、`MAX_TEST_RATIO=0.10`（上限）、
+       `MAX_SOURCE_SHARE=0.06`（来源体量上限）。
+     - **`MAX_SOURCE_SHARE` 为什么必须存在**：分组切分下「一个来源」是不可再分的最小单元，
+       单个来源的相对体量就是测试比例的下界。本库最大的一位专家占全库 16.9%，
+       一旦整户进 test，比例必然突破 10%。所以体量超限的来源整户留在 train（不参与评测），
+       余下来源按主题分层贪心填充到 `[8%, 10%]`。
+     - 当前结果：3902 条 → train 3557 / test 345（8.84%），234 个来源中 4 个超限被排除，
+       train/test 来源零交集。
+   - `probe`：从全部数据中按主题分桶轮流取样 `PROBE_SIZE=60` 条，**不参与 train/test**，
+     用来检查检索语料对 benchmark 主题的覆盖度（评测前先看「有没有料」）。
    - `answer`：对测试集逐条跑「检索 + 生成」，用 LLM-as-judge（1~5 分 + 是否答对，严格 JSON）
      与标准答案比对；无 LLM 或解析失败时降级为词法基线（字符 bigram F1 → 5 分制）。
      同时报告 `charF1` 与字符级 `ROUGE-L`。
@@ -234,15 +244,24 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 - ✅ 父子分块落地（默认关闭）：子块入库 + 父块 sidecar + 查询期上下文展开。
 - ✅ 评测闭环落地：data_benchmark 按用户分组切分 + LLM-as-judge（含词法降级）+ 消融对比。
 - ✅ 离线测试覆盖解析/分块/检索/切分/打分（`pytest`，需要模型与数据的用例自动跳过）。
-- ⏳ 全量建库执行中（BGE-m3 向量化约 30–40 分钟，视机器而定）。
+- ✅ 全量建库完成：`nlp_/` 30 个来源 → 2750 chunk 入 Chroma（collection `nlp_degree_thesis`）；
+  `ask` 与 `serve --http` 冒烟通过。
+- ✅ 扫描件兜底：`OCR_ENABLED=true` 时对文本过少的 PDF/图片走 RapidOCR（`OCR_MIN_CHARS` / `OCR_DPI`）。
+- ✅ 建库前置校验：`nlp_/` 若来自 GBK 环境解压的 zip，中文文件名会变成 `鍏稿瀷闂…` 这类乱码，
+  `build` 会在入库前检出 U+FFFD / 私用区字符并直接报错，要求从原始来源重新拷贝。
+- ⚠️ 已知遗留：当前 `nlp_/` 中约 30 个文件名编码已损坏（正文无损），
+  Chroma 里的 `source/filename/category` 带乱码；重拷原始文件后 `build` 即可修复
+  （向量缓存按路径签名，重拷后需重新向量化）。
 
 ---
 
 ## 8. 使用方式
 
 ```bash
-# 建库（首次或资料变更后）
+# 建库（首次或资料变更后）；Word COM 解析在 Windows 下单会话复用，速度明显更快
 .venv/bin/python -m rag.cli build
+# 含扫描件的资料：OCR 兜底 + 国内镜像下载模型
+# HF_ENDPOINT=https://hf-mirror.com OCR_ENABLED=true .venv/bin/python -m rag.cli build
 
 # 问答（需先在 .env 配 LLM_API_KEY；不配则纯检索）
 .venv/bin/python -m rag.cli ask "扎根理论的三级编码是什么？"
@@ -254,7 +273,7 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 
 # 常驻服务 / 评测
 .venv/bin/python -m rag.cli serve --http
-.venv/bin/python -m rag.cli eval split
+.venv/bin/python -m rag.cli eval split     # 产出 train/test/probe 并打印比例与排除来源
 .venv/bin/python -m rag.cli eval answer --ablate
 ```
 

@@ -1,7 +1,19 @@
 """入库层 _parse 测试：解析 + 分块 + 主键/元数据（不加载模型）。"""
 from __future__ import annotations
 
+import pytest
+
 from rag import index
+
+
+@pytest.fixture(autouse=True)
+def _no_external_doc_backend(monkeypatch):
+    """测试不依赖本机 Word/LibreOffice：批量解析不走 COM/soffice，跳过纯文本文件。"""
+    from rag import extract
+
+    monkeypatch.setattr(index, "extract_files", lambda files: extract.extract_files(files, doc_backend="none"))
+    monkeypatch.setattr(extract, "_has_pywin32", lambda: False)
+    monkeypatch.setattr(extract, "find_soffice", lambda: None)
 
 
 def test_parse_produces_unique_ids_and_metadata(fake_corpus, monkeypatch):
@@ -51,13 +63,62 @@ def test_parse_reports_skipped_files(fake_corpus, monkeypatch, tmp_path):
     monkeypatch.setattr(index, "DATA_DIR", fake_corpus)
     bad = fake_corpus / "006" / "研究方法" / "broken.doc"
     bad.write_bytes(b"\xd0\xcf\x11\xe0 not a real doc")
-    monkeypatch.setattr("shutil.which", lambda _n: None)
-    monkeypatch.setattr("rag.extract.find_soffice", lambda: None)
 
     files = index._collect_files()
     rows, skipped, _parents = index._parse(files)
     assert any(name == "broken.doc" for name, _ in skipped), "损坏的 .doc 应被记录为跳过"
     assert rows, "其余文件仍应正常解析"
+
+
+def test_parse_reports_empty_text_files(fake_corpus, monkeypatch):
+    """解析成功但无文本的文件（如扫描版 PDF）必须进跳过清单，不能静默丢失。"""
+    monkeypatch.setattr(index, "DATA_DIR", fake_corpus)
+    from rag import extract
+
+    empty_pdf = fake_corpus / "006" / "研究方法" / "scan.pdf"
+    empty_pdf.write_bytes(b"%PDF-1.4 fake")
+    real_extract = extract.extract_file
+
+    def fake_extract(path, doc_backend="auto"):
+        if path.name == "scan.pdf":
+            return {"path": str(path), "text": "  \n", "ext": ".pdf"}
+        return real_extract(path, doc_backend=doc_backend)
+
+    monkeypatch.setattr(extract, "extract_file", fake_extract)
+
+    _rows, skipped, _parents = index._parse(index._collect_files())
+    assert ("scan.pdf", "解析结果为空") in skipped
+
+
+def test_check_broken_names_rejects_mojibake(fake_corpus, monkeypatch):
+    """GBK 环境解压出的乱码文件名应在入库前报错，而不是把乱码写进 Chroma。"""
+    monkeypatch.setattr(index, "DATA_DIR", fake_corpus)
+    bad = fake_corpus / "006" / "研究方法" / "鍏稿瀷闂\ue1c0.doc"
+    bad.write_text("正文", encoding="utf-8")
+
+    files = index._collect_files()
+    assert index._is_broken_name("鍏稿瀷闂\ue1c0.doc")
+    with pytest.raises(SystemExit, match="文件名编码损坏"):
+        index._check_broken_names(files)
+
+
+def test_check_broken_names_accepts_normal_files(fake_corpus, monkeypatch):
+    monkeypatch.setattr(index, "DATA_DIR", fake_corpus)
+    index._check_broken_names(index._collect_files())  # 不应抛错
+
+
+def test_cache_roundtrip_keeps_skipped_list(fake_corpus, monkeypatch):
+    monkeypatch.setattr(index, "DATA_DIR", fake_corpus)
+    sig = index._signature(index._collect_files())
+    rows = [("id1::x::chunk0", "文本", {"source": "x"})]
+    skipped = [("broken.doc", "解析失败")]
+    np = pytest.importorskip("numpy")
+    monkeypatch.setattr(index, "CACHE_DIR", fake_corpus.parent / "cache_for_test")
+    index._save_cache(sig, rows, np.zeros((1, 4), dtype="float32"), skipped)
+
+    loaded_rows, _emb, loaded_skipped = index._load_cache(sig)
+    assert loaded_rows == rows
+    assert loaded_skipped == skipped
 
 
 def test_signature_changes_with_chunk_params(fake_corpus, monkeypatch):
