@@ -1,8 +1,8 @@
 """常驻查询服务：模型与向量库只加载一次，反复提问，消除每次 ~18s 的重载开销。
 
-用法（在项目根目录 FUTURX 下）：
-  .venv/bin/python -m rag.cli serve             # 交互式 REPL
-  .venv/bin/python -m rag.cli serve --http      # FastAPI HTTP 服务（默认 127.0.0.1:8000）
+用法（在项目根目录 FUTURX 下，激活 conda 环境后）：
+  python -m rag.cli serve             # 交互式 REPL
+  python -m rag.cli serve --http      # FastAPI HTTP 服务（默认 127.0.0.1:8000）
 """
 from __future__ import annotations
 

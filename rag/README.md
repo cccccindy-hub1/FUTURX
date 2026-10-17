@@ -28,8 +28,9 @@ cache/           向量缓存 / BM25 索引缓存 / 父块 sidecar（build 后�
 ## 安装
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -r rag/requirements.txt     # Windows: .venv/Scripts/pip
+conda create -n futurx python=3.10 -y
+conda activate futurx
+pip install -r rag/requirements.txt
 ```
 
 `.doc` / `.ppt` 是二进制旧格式，额外需要一个后端（二选一，按可用性自动选择）：
@@ -63,22 +64,22 @@ cp .env.example .env
 
 ```bash
 # 1) 建库（解析 + 分块 + 向量化 + 入库，全量重建）
-.venv/bin/python -m rag.cli build
+python -m rag.cli build
 
 # 2) 问答（检索 + 生成）
-.venv/bin/python -m rag.cli ask "扎根理论的研究程序是什么？"
-.venv/bin/python -m rag.cli ask "学位论文开题阶段要完成什么？" -k 6
-.venv/bin/python -m rag.cli ask "文献综述怎么写？" --mode hybrid --rerank --where category=002
+python -m rag.cli ask "扎根理论的研究程序是什么？"
+python -m rag.cli ask "学位论文开题阶段要完成什么？" -k 6
+python -m rag.cli ask "文献综述怎么写？" --mode hybrid --rerank --where category=002
 
 # 3) 常驻服务（模型/向量库只加载一次，反复问，消除每次 ~18s 重载）
-.venv/bin/python -m rag.cli serve             # 交互式 REPL
-.venv/bin/python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
+python -m rag.cli serve             # 交互式 REPL
+python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
 
 # 4) 评估
-.venv/bin/python -m rag.cli eval retrieval              # BM25 vs 稠密向量检索指标
-.venv/bin/python -m rag.cli eval split                  # 切分 data_benchmark -> train/test
-.venv/bin/python -m rag.cli eval answer --limit 20      # 答案质量评测（LLM-as-judge）
-.venv/bin/python -m rag.cli eval answer --ablate        # 消融：dense/hybrid/rerank/改写 对比
+python -m rag.cli eval retrieval              # BM25 vs 稠密向量检索指标
+python -m rag.cli eval split                  # 切分 data_benchmark -> train/test
+python -m rag.cli eval answer --limit 20      # 答案质量评测（LLM-as-judge）
+python -m rag.cli eval answer --ablate        # 消融：dense/hybrid/rerank/改写 对比
 ```
 
 启动 `serve --http` 后，浏览器打开 **http://127.0.0.1:8000/** 即前端对话界面：
