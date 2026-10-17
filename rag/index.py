@@ -3,6 +3,8 @@
 用法：python -m rag.cli build
 - 每次执行全量重建（幂等）。
 - 向量化结果会缓存到 rag/cache/，内容未变时跳过向量化（加速后续重建）。
+- 写入前先把旧库快照到 rag/cache/snapshots/（保留最近 SNAPSHOT_KEEP 份），
+  新库写失败时自动回滚。
 - chunk 主键使用「相对路径哈希 + 文件名 + 序号」，避免重名文件冲突。
 """
 from __future__ import annotations
@@ -10,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +27,8 @@ from .config import (
     EMBED_MODEL,
     PARENT_CHILD_ENABLED,
     PARENT_SIZE,
+    SNAPSHOT_DIR,
+    SNAPSHOT_KEEP,
     STORE_DIR,
     SUPPORTED_EXTS,
 )
@@ -173,7 +179,11 @@ def _load_cache(sig: str):
 
 def build() -> None:
     _report_parsers()
+    if not DATA_DIR.is_dir():
+        raise SystemExit(f"资料目录不存在：{DATA_DIR}（检查 RAG_DATA_DIR）")
     files = _collect_files()
+    if not files:
+        raise SystemExit(f"{DATA_DIR} 下没有可入库的文件（支持 {sorted(SUPPORTED_EXTS)}）")
     _check_broken_names(files)
     sig = _signature(files)
     skipped: list[tuple[str, str]] = []
@@ -212,21 +222,55 @@ def build() -> None:
     print("写入 Chroma …")
     import chromadb
 
-    client = chromadb.PersistentClient(path=str(STORE_DIR))
+    snapshot = _snapshot_store()
     try:
-        client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-    collection = client.create_collection(
-        COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
-    )
-    collection.add(
-        ids=[r[0] for r in rows],
-        documents=[r[1] for r in rows],
-        metadatas=[r[2] for r in rows],
-        embeddings=[e.tolist() for e in embeddings],
-    )
+        client = chromadb.PersistentClient(path=str(STORE_DIR))
+        try:
+            client.delete_collection(COLLECTION_NAME)
+        except Exception:
+            pass
+        collection = client.create_collection(
+            COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        )
+        collection.add(
+            ids=[r[0] for r in rows],
+            documents=[r[1] for r in rows],
+            metadatas=[r[2] for r in rows],
+            embeddings=[e.tolist() for e in embeddings],
+        )
+    except BaseException:
+        if snapshot:
+            print("写入失败，正在从快照回滚 …")
+            _restore_store(snapshot)
+        raise
     print(f"完成：已入库 {len(rows)} 个 chunk，向量库位于 {STORE_DIR}")
+
+
+def _snapshot_store(stamp: str | None = None) -> Path | None:
+    """把现有向量库整目录复制到快照区；库不存在时返回 None。
+
+    切换 git 分支会用仓库里的旧库覆盖工作区，build 中途失败也会留下半个库，
+    有了快照就能直接回滚。
+    """
+    if not (STORE_DIR / "chroma.sqlite3").exists():
+        return None
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    dest = SNAPSHOT_DIR / stamp
+    shutil.copytree(STORE_DIR, dest)
+    _prune_snapshots()
+    print(f"旧库已快照：{dest}")
+    return dest
+
+
+def _prune_snapshots() -> None:
+    snaps = sorted(p for p in SNAPSHOT_DIR.iterdir() if p.is_dir())
+    for old in snaps[: max(0, len(snaps) - SNAPSHOT_KEEP)]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _restore_store(snapshot: Path) -> None:
+    shutil.rmtree(STORE_DIR, ignore_errors=True)
+    shutil.copytree(snapshot, STORE_DIR)
 
 
 def _save_parents_sidecar(parents: dict[str, str]) -> None:
