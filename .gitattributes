@@ -1,0 +1,3 @@
+# 向量库二进制：禁止文本转换与 diff，避免 autocrlf 改动 sqlite
+rag/chroma_db/** -text -diff
+*.sqlite3 -text -diff

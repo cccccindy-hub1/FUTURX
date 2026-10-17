@@ -10,7 +10,10 @@ __pycache__/
 *.pem
 
 # ---- 向量库与缓存（可由 `python -m rag.cli build` 重建，勿提交）----
-rag/chroma_db/
+# 例外：feat/chroma-db 分支用于分发已建好的向量库，见 .gitattributes
+rag/chroma_db/**
+!rag/chroma_db/**/**
+!rag/chroma_db/**
 rag/cache/
 
 # ---- 原始知识库资料（默认不公开）----
