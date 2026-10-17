@@ -244,14 +244,16 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 - ✅ 父子分块落地（默认关闭）：子块入库 + 父块 sidecar + 查询期上下文展开。
 - ✅ 评测闭环落地：data_benchmark 按用户分组切分 + LLM-as-judge（含词法降级）+ 消融对比。
 - ✅ 离线测试覆盖解析/分块/检索/切分/打分（`pytest`，需要模型与数据的用例自动跳过）。
-- ✅ 全量建库完成：`nlp_/` 30 个来源 → 2750 chunk 入 Chroma（collection `nlp_degree_thesis`）；
+- ✅ 全量建库完成：`nlp_/` 30 个来源 → 5125 chunk 入 Chroma（collection `nlp_degree_thesis`）；
   `ask` 与 `serve --http` 冒烟通过。
 - ✅ 扫描件兜底：`OCR_ENABLED=true` 时对文本过少的 PDF/图片走 RapidOCR（`OCR_MIN_CHARS` / `OCR_DPI`）。
 - ✅ 建库前置校验：`nlp_/` 若来自 GBK 环境解压的 zip，中文文件名会变成 `鍏稿瀷闂…` 这类乱码，
   `build` 会在入库前检出 U+FFFD / 私用区字符并直接报错，要求从原始来源重新拷贝。
-- ⚠️ 已知遗留：当前 `nlp_/` 中约 30 个文件名编码已损坏（正文无损），
-  Chroma 里的 `source/filename/category` 带乱码；重拷原始文件后 `build` 即可修复
-  （向量缓存按路径签名，重拷后需重新向量化）。
+- ✅ 文件名乱码已修复：72 个损坏文件名按 `utf-8 → cp437` 无损回转，重建后
+  `source/filename/category` 三类 metadata 的损坏数均为 0（前一轮混入乱码的向量缓存已作废）。
+- ✅ 保库与防空库：`build` 写库前把现有库快照到 `rag/cache/snapshots/<时间戳>/`
+  （保留最近 `SNAPSHOT_KEEP`=2 份），写失败自动回滚；`RAG_DATA_DIR` 不存在或没有可入库
+  文件时直接报错退出，不再静默生成空库。
 
 ---
 

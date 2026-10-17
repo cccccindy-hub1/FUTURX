@@ -135,3 +135,52 @@ def test_signature_changes_with_parent_child_flag(fake_corpus, monkeypatch):
     s1 = index._signature(files)
     monkeypatch.setattr(index, "PARENT_CHILD_ENABLED", not index.PARENT_CHILD_ENABLED)
     assert index._signature(files) != s1
+
+
+def _make_store(root, chunks):
+    (root / "chroma_db").mkdir(parents=True)
+    (root / "chroma_db" / "chroma.sqlite3").write_bytes(b"x" * chunks)
+
+
+def test_snapshot_store_keeps_recent_n(tmp_path, monkeypatch):
+    store = tmp_path / "store"
+    _make_store(store, 10)
+    monkeypatch.setattr(index, "STORE_DIR", store / "chroma_db")
+    monkeypatch.setattr(index, "SNAPSHOT_DIR", tmp_path / "snaps")
+    monkeypatch.setattr(index, "SNAPSHOT_KEEP", 2)
+
+    snaps = [index._snapshot_store(stamp=s) for s in ("20260101-000000", "20260102-000000", "20260103-000000")]
+    assert snaps[0] is not None
+    left = sorted(p.name for p in (tmp_path / "snaps").iterdir())
+    assert left == ["20260102-000000", "20260103-000000"], "只保留最近 SNAPSHOT_KEEP 份"
+
+
+def test_snapshot_store_skips_missing_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "STORE_DIR", tmp_path / "chroma_db")
+    monkeypatch.setattr(index, "SNAPSHOT_DIR", tmp_path / "snaps")
+    assert index._snapshot_store() is None
+    assert not (tmp_path / "snaps").exists()
+
+
+def test_restore_store_reverts_half_written_db(tmp_path, monkeypatch):
+    store = tmp_path / "store"
+    _make_store(store, 10)
+    monkeypatch.setattr(index, "STORE_DIR", store / "chroma_db")
+    monkeypatch.setattr(index, "SNAPSHOT_DIR", tmp_path / "snaps")
+    snap = index._snapshot_store(stamp="good")
+
+    (store / "chroma_db" / "chroma.sqlite3").write_bytes(b"")  # 模拟写坏
+    index._restore_store(snap)
+    assert (store / "chroma_db" / "chroma.sqlite3").read_bytes() == b"x" * 10
+
+
+def test_build_rejects_missing_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "DATA_DIR", tmp_path / "nope")
+    with pytest.raises(SystemExit, match="资料目录不存在"):
+        index.build()
+
+
+def test_build_rejects_empty_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "DATA_DIR", tmp_path)
+    with pytest.raises(SystemExit, match="没有可入库的文件"):
+        index.build()

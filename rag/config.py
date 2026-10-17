@@ -19,6 +19,8 @@ load_dotenv(RAG_DIR / ".env")
 DATA_DIR = Path(os.environ.get("RAG_DATA_DIR", ROOT / "nlp_"))   # 原始资料目录
 STORE_DIR = Path(os.environ.get("STORE_DIR", RAG_DIR / "chroma_db"))  # 向量库持久化目录
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", RAG_DIR / "cache"))      # 向量/索引缓存目录
+SNAPSHOT_DIR = Path(os.environ.get("SNAPSHOT_DIR", CACHE_DIR / "snapshots"))  # build 前的库快照
+SNAPSHOT_KEEP = int(os.environ.get("SNAPSHOT_KEEP", "2"))     # 保留最近 N 份快照
 
 # ---- 向量化 ----
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-m3")
