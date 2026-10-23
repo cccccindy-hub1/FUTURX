@@ -116,7 +116,11 @@ class RAGService:
         """保持 Chroma query() 的嵌套列表返回形状（兼容既有调用方）。"""
         return self.retrieve_result(query, top_k).as_chroma()
 
-    def answer(self, query: str, top_k: int = TOP_K):
+    def prepare(self, query: str, top_k: int = TOP_K):
+        """检索 + 组装上下文，返回 (contexts, sources, messages)。
+
+        供 answer / 流式生成 / OpenAI 兼容接口共用，避免提示词与过滤逻辑分叉。
+        """
         result = self.retrieve_result(query, top_k)
 
         docs = result.documents
@@ -135,22 +139,54 @@ class RAGService:
             {"source": m.get("source", ""), "section": m.get("section", ""), "distance": float(d)}
             for m, d in zip(metas, dists)
         ]
-        if not self.llm:
-            return None, sources, docs
-
         ctx = "\n\n".join(
             f"[来源{i + 1}: {m.get('source', '')}]（{m.get('section', '')}）\n{d}"
             for i, (d, m) in enumerate(zip(docs, metas))
         )
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"资料：\n{ctx}\n\n问题：{query}"},
+        ]
+        return docs, sources, messages
+
+    def answer(self, query: str, top_k: int = TOP_K):
+        docs, sources, messages = self.prepare(query, top_k)
+        if not self.llm:
+            return None, sources, docs
+
         resp = self.llm.chat.completions.create(
             model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"资料：\n{ctx}\n\n问题：{query}"},
-            ],
+            messages=messages,
             temperature=0.2,
         )
         return resp.choices[0].message.content, sources, docs
+
+    def open_stream(self, query: str, top_k: int = TOP_K):
+        """流式生成，返回 (contexts, sources, delta_iter)。
+
+        delta_iter 逐段产出增量文本；无 LLM 时抛 RuntimeError（由调用方转成 HTTP 错误）。
+        """
+        docs, sources, messages = self.prepare(query, top_k)
+        if not self.llm:
+            raise RuntimeError("未配置 LLM_API_KEY，无法生成回答")
+
+        def _deltas():
+            stream = self.llm.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+            )
+            for chunk in stream:
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                text = getattr(delta, "content", None) if delta is not None else None
+                if text:
+                    yield text
+
+        return docs, sources, _deltas()
 
 
 def retrieve(query: str, top_k: int = TOP_K) -> dict:

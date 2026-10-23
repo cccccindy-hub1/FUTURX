@@ -54,26 +54,32 @@ def run_repl(**service_kwargs) -> None:
         _print_answer(ans, sources, docs)
 
 
-def run_http(host: str, port: int, **service_kwargs) -> None:
-    import uvicorn
+def build_app(**service_kwargs):
+    """构造 FastAPI 应用（模型与向量库在启动时加载一次）。"""
     from pathlib import Path
 
     from fastapi import FastAPI
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
+    from .api import router as openai_router
+
     svc = RAGService(**service_kwargs)
     app = FastAPI(title="FUTURX RAG 查询服务")
+    app.state.service = svc
     web_dir = Path(__file__).resolve().parent / "web"
 
     @app.get("/health")
     def health():
         return {"status": "ok"}
 
+    # 同源网页直接调用；浏览器端无法安全保存密钥，因此 /ask 不鉴权（仅 /v1/* 校验）。
     @app.post("/ask")
     def ask(req: AskRequest):
         ans, sources, docs = svc.answer(req.question, req.top_k)
         return {"answer": ans, "sources": sources, "contexts": docs}
+
+    app.include_router(openai_router)
 
     if web_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
@@ -82,5 +88,18 @@ def run_http(host: str, port: int, **service_kwargs) -> None:
         def index():
             return FileResponse(web_dir / "index.html")
 
-    print(f"服务启动：http://{host}:{port}  （浏览器打开首页即前端，GET /health 探活，POST /ask 提问）")
+    return app
+
+
+def run_http(host: str, port: int, **service_kwargs) -> None:
+    import uvicorn
+
+    app = build_app(**service_kwargs)
+    print(
+        f"服务启动：http://{host}:{port}\n"
+        f"  Web 前端   GET  /\n"
+        f"  探活       GET  /health\n"
+        f"  原生问答   POST /ask\n"
+        f"  OpenAI 兼容 POST /v1/chat/completions   GET /v1/models"
+    )
     uvicorn.run(app, host=host, port=port, log_level="warning")

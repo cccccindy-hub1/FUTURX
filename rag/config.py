@@ -52,6 +52,12 @@ PARENT_CHILD_ENABLED = os.environ.get("PARENT_CHILD_ENABLED", "false").lower() i
 PARENT_SIZE = int(os.environ.get("PARENT_SIZE", "1500"))       # 父块字符数上限
 CONTEXT_EXPAND_ENABLED = os.environ.get("CONTEXT_EXPAND_ENABLED", "false").lower() in ("1", "true", "yes")
 
+# ---- HTTP 对外接口（OpenAI 兼容层：POST /v1/chat/completions）----
+# 逗号分隔的密钥列表；留空则不校验（仅建议在内网/本机时留空）。
+API_KEYS = [k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()]
+# 对外暴露的模型名，客户端 model 字段填它即可（实际生成模型由 LLM_MODEL 决定）。
+API_MODEL_NAME = os.environ.get("API_MODEL_NAME", "ai-li-teacher")
+
 # ---- 生成（OpenAI 兼容协议，默认指向 DeepSeek）----
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_API_BASE = os.environ.get("LLM_API_BASE", "https://api.deepseek.com")

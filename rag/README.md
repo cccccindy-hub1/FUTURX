@@ -84,6 +84,51 @@ cp .env.example .env
 启动 `serve --http` 后，浏览器打开 **http://127.0.0.1:8000/** 即前端对话界面：
 支持提问、选择检索片段数（top_k）、查看带 `[来源N]` 的回答与可展开的参考来源卡片。
 
+## 对外接口（OpenAI 兼容）
+
+把 AI 李老师当成一个「模型」暴露出去，任何 OpenAI SDK / 智能体平台都能直接调用：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/v1/models` | 列出可用模型（id 为 `API_MODEL_NAME`，默认 `ai-li-teacher`） |
+| POST | `/v1/chat/completions` | 对话补全，支持 `stream: true` 的 SSE 流式 |
+| POST | `/ask` | 原生单轮问答，返回 `{answer, sources, contexts}` |
+| GET | `/health` | 探活 |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="sk-futurx-xxxx")
+r = client.chat.completions.create(
+    model="ai-li-teacher",
+    messages=[{"role": "user", "content": "扎根理论的三级编码是什么？"}],
+)
+print(r.choices[0].message.content)
+```
+
+```bash
+# 流式
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Authorization: Bearer sk-futurx-xxxx' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ai-li-teacher","stream":true,"messages":[{"role":"user","content":"文献综述怎么写？"}]}'
+```
+
+约定与限制：
+
+- **鉴权**：`.env` 里配置 `API_KEYS`（逗号分隔）后，`/v1/*` 要求
+  `Authorization: Bearer <key>`，不匹配返回 401；未配置则放行（只建议本机/内网）。
+- **`/ask` 不鉴权**：它由同源网页（`GET /`）直接调用，浏览器里无法安全保存密钥，
+  因此只对 `/v1/*` 做密钥校验。若把 `/ask` 直接暴露到公网，请改用 `/v1/chat/completions`。
+- **模型名**：客户端 `model` 填 `API_MODEL_NAME`；实际生成模型由 `LLM_MODEL` 决定。
+  填错不报错，仍按当前配置生成。
+- **单轮**：`messages` 里取**最后一条 user 消息**作为检索问题，历史消息不参与检索
+  （多轮上下文尚未落地）。
+- **扩展字段**：响应里额外带 `sources`（检索来源与距离），流式模式在终止帧
+  `finish_reason=stop` 上带；标准客户端会忽略，前端可选用。
+- **`top_k`**：请求体可直接传 `top_k` 覆盖默认检索片段数。
+- **无 LLM key**：`/v1/chat/completions` 返回 503；`/ask` 仍返回检索结果（`answer` 为 null）。
+
 ## 检索流水线
 
 ```
