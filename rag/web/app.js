@@ -169,6 +169,13 @@ function renderMarkdown(md) {
   return html;
 }
 
+function showError(text) {
+  const err = document.createElement('div');
+  err.className = 'bubble assistant error';
+  err.textContent = text;
+  addMessage('assistant', err);
+}
+
 /* ---- 发送 ---- */
 function autoGrow() {
   input.style.height = 'auto';
@@ -195,15 +202,19 @@ async function send() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, top_k: topk }),
     });
-    const data = await r.json();
+    let data = null;
+    try { data = await r.json(); } catch { /* 非 JSON 响应 */ }
     pending.closest('.msg').remove();
+    if (!r.ok) {
+      const msg = (data && data.detail && data.detail.error && data.detail.error.message)
+        || (data && data.detail) || ('HTTP ' + r.status);
+      showError('请求失败：' + (typeof msg === 'string' ? msg : JSON.stringify(msg)));
+      return;
+    }
     addAssistant(data.answer, data.sources, data.contexts);
   } catch (e) {
     pending.closest('.msg').remove();
-    const err = document.createElement('div');
-    err.className = 'bubble assistant error';
-    err.textContent = '请求失败：' + e;
-    addMessage('assistant', err);
+    showError('请求失败：' + e);
   }
 }
 
