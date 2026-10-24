@@ -233,7 +233,7 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 
 ## 7. 当前进展
 
-- ✅ 依赖环境搭建（venv + pymupdf / sentence-transformers / chromadb / openai / python-dotenv）。
+- ✅ 依赖环境搭建（Conda futurx + pymupdf / sentence-transformers / chromadb / openai / python-dotenv）。
 - ✅ 解析、分块、向量化、入库、检索、生成六层代码全部实现。
 - ✅ 分块逻辑、解析逻辑、ID 唯一性均已验证（68 文件 → 5133 chunk → 5133 唯一 ID）。
 - ✅ 已修复重名文件导致的 chunk ID 冲突；已加入向量缓存。
@@ -261,22 +261,22 @@ cache/           向量缓存 / BM25 索引 / 父块 sidecar（build 后生成�
 
 ```bash
 # 建库（首次或资料变更后）；Word COM 解析在 Windows 下单会话复用，速度明显更快
-.venv/bin/python -m rag.cli build
+python -m rag.cli build
 # 含扫描件的资料：OCR 兜底 + 国内镜像下载模型
-# HF_ENDPOINT=https://hf-mirror.com OCR_ENABLED=true .venv/bin/python -m rag.cli build
+# HF_ENDPOINT=https://hf-mirror.com OCR_ENABLED=true python -m rag.cli build
 
 # 问答（需先在 .env 配 LLM_API_KEY；不配则纯检索）
-.venv/bin/python -m rag.cli ask "扎根理论的三级编码是什么？"
-.venv/bin/python -m rag.cli ask "开题报告要写哪些内容？" -k 6
+python -m rag.cli ask "扎根理论的三级编码是什么？"
+python -m rag.cli ask "开题报告要写哪些内容？" -k 6
 
 # 开启检索增强（按需）
-.venv/bin/python -m rag.cli ask "文献综述怎么写？" --mode hybrid --rerank
-.venv/bin/python -m rag.cli ask "文献综述怎么写？" --where category=002
+python -m rag.cli ask "文献综述怎么写？" --mode hybrid --rerank
+python -m rag.cli ask "文献综述怎么写？" --where category=002
 
 # 常驻服务 / 评测
-.venv/bin/python -m rag.cli serve --http
-.venv/bin/python -m rag.cli eval split     # 产出 train/test/probe 并打印比例与排除来源
-.venv/bin/python -m rag.cli eval answer --ablate
+python -m rag.cli serve --http
+python -m rag.cli eval split     # 产出 train/test/probe 并打印比例与排除来源
+python -m rag.cli eval answer --ablate
 ```
 
 ---

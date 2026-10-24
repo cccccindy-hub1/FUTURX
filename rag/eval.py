@@ -1,9 +1,9 @@
 """检索质量评估：对比 BM25 与 BGE-m3 稠密向量，计算 Recall@k / MRR@k / nDCG@k。
 
 用法（在项目根目录 FUTURX 下）：
-  .venv/bin/python -m rag.eval
+  python -m rag.eval
 
-评估专用依赖：.venv/bin/pip install rank_bm25 jieba
+评估专用依赖：pip install rank_bm25 jieba
 
 说明：
 - 测试集来自 nlp_/001、003 的问答对，问题已改写（paraphrase）以规避「原文问题
@@ -82,7 +82,7 @@ def run() -> None:
         from rank_bm25 import BM25Okapi
         import jieba
     except ImportError:
-        print("\n缺少评估依赖，请先安装：.venv/bin/pip install rank_bm25 jieba")
+        print("\n缺少评估依赖，请先安装：pip install rank_bm25 jieba")
         return
 
     tokenize = jieba.lcut

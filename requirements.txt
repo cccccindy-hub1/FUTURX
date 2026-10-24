@@ -1,0 +1,23 @@
+# 核心依赖
+pymupdf
+sentence-transformers
+chromadb
+openai
+python-dotenv
+fastapi
+uvicorn
+
+# 文档解析（跨平台；.doc/.ppt 为二进制旧格式，另需 LibreOffice 或 Word+pywin32）
+python-docx
+python-pptx
+pywin32; sys_platform == "win32"
+
+# 检索增强（rag.retrieval：BM25 稀疏检索 / 混合检索）
+rank-bm25
+jieba
+
+# 开发与测试
+pytest
+
+# 可选依赖（扫描版 PDF OCR 识别，需在 .env 启用 OCR_ENABLED=true）
+# rapidocr-onnxruntime

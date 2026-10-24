@@ -1,10 +1,10 @@
 """命令行入口。
 
 用法（在项目根目录 FUTURX 下）：
-  .venv/bin/python -m rag.cli build
-  .venv/bin/python -m rag.cli ask "文献综述应该怎么写？"
-  .venv/bin/python -m rag.cli serve             # 交互式 REPL（加载一次反复问）
-  .venv/bin/python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
+  python -m rag.cli build
+  python -m rag.cli ask "文献综述应该怎么写？"
+  python -m rag.cli serve             # 交互式 REPL（加载一次反复问）
+  python -m rag.cli serve --http      # FastAPI 服务（默认 127.0.0.1:8000）
 """
 from __future__ import annotations
 
