@@ -89,9 +89,33 @@ class _StubChoice:
         self.message = _StubMessage(content)
 
 
+class _StubDelta:
+    def __init__(self, content):
+        self.content = content
+
+
+class _StubStreamChoice:
+    def __init__(self, content):
+        self.delta = _StubDelta(content)
+
+
+class _StubStreamChunk:
+    def __init__(self, content):
+        self.choices = [_StubStreamChoice(content)]
+
+
 class _StubCompletion:
+    """同时满足非流式（.choices[0].message）与流式（可迭代出 delta 分片）两种用法。"""
+
     def __init__(self, content):
         self.choices = [_StubChoice(content)]
+        self._content = content
+
+    def __iter__(self):
+        half = len(self._content) // 2 or len(self._content)
+        yield _StubStreamChunk(self._content[:half])
+        if self._content[half:]:
+            yield _StubStreamChunk(self._content[half:])
 
 
 class _StubCompletions:

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel
 
 from .config import TOP_K
@@ -15,6 +17,10 @@ from .query import RAGService
 class AskRequest(BaseModel):
     question: str
     top_k: int = TOP_K
+
+
+def _sse(payload: dict) -> bytes:
+    return b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
 
 
 def _print_answer(ans, sources, docs) -> None:
@@ -58,8 +64,8 @@ def build_app(**service_kwargs):
     """构造 FastAPI 应用（模型与向量库在启动时加载一次）。"""
     from pathlib import Path
 
-    from fastapi import FastAPI
-    from fastapi.responses import FileResponse
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 
     from .api import router as openai_router
@@ -78,6 +84,30 @@ def build_app(**service_kwargs):
     def ask(req: AskRequest):
         ans, sources, docs = svc.answer(req.question, req.top_k)
         return {"answer": ans, "sources": sources, "contexts": docs}
+
+    @app.post("/ask/stream")
+    def ask_stream(req: AskRequest):
+        """SSE 流式问答：先推 sources，再逐段推 delta，避免前端长时间空等。"""
+        try:
+            docs, sources, deltas = svc.open_stream(req.question, req.top_k)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+        def gen():
+            yield _sse({"type": "sources", "sources": sources, "contexts": docs})
+            try:
+                for text in deltas:
+                    yield _sse({"type": "delta", "text": text})
+            except Exception as e:  # 流已开始，只能以事件告知
+                yield _sse({"type": "error", "message": f"生成中断：{e}"})
+                return
+            yield _sse({"type": "done"})
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     app.include_router(openai_router)
 

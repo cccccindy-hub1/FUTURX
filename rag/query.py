@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import time
+
 from openai import OpenAI
 
 from .config import (
@@ -19,6 +21,8 @@ from .config import (
     LLM_API_BASE,
     LLM_API_KEY,
     LLM_MODEL,
+    LLM_REASONING_EFFORT,
+    LLM_TIMEOUT,
     MAX_DISTANCE,
     QUERY_REWRITE_ENABLED,
     RERANK_ENABLED,
@@ -54,10 +58,19 @@ class RAGService:
         import chromadb
         from sentence_transformers import SentenceTransformer
 
-        self.model = SentenceTransformer(EMBED_MODEL)
+        # 优先走本地缓存：直连 HF 校验版本/权重会多等数秒，离线命中时没必要。
+        # 缓存缺失再回退到联网下载，保证首次部署仍可用。
+        try:
+            self.model = SentenceTransformer(EMBED_MODEL, local_files_only=True)
+        except Exception:
+            self.model = SentenceTransformer(EMBED_MODEL)
         client = chromadb.PersistentClient(path=str(STORE_DIR))
         self.collection = client.get_collection(COLLECTION_NAME)
-        self.llm = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE) if LLM_API_KEY else None
+        self.llm = (
+            OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE, timeout=LLM_TIMEOUT, max_retries=1)
+            if LLM_API_KEY
+            else None
+        )
 
         self.mode = mode
         self.where = where
@@ -74,6 +87,22 @@ class RAGService:
 
     def _embed(self, text: str) -> list[float]:
         return self.model.encode(text, normalize_embeddings=True).tolist()
+
+    def _llm_kwargs(self, messages: list[dict]) -> dict:
+        """生成请求的公共参数。
+
+        推理模型默认会先产出「思考」token，而思考 token 不计入 content 增量，
+        客户端只能干等（实测首字节 32s+）。这里按配置关掉思考，首字节降到 ~2.7s。
+        """
+        kwargs: dict = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": True,
+        }
+        if LLM_REASONING_EFFORT:
+            kwargs["reasoning_effort"] = LLM_REASONING_EFFORT
+        return kwargs
 
     def _retrieval_query(self, query: str) -> str:
         """按开关做查询改写 / HyDE；无 LLM 时原样返回。"""
@@ -161,16 +190,43 @@ class RAGService:
         return docs, sources, messages
 
     def answer(self, query: str, top_k: int = TOP_K):
+        self.timing: dict = {
+            "retrieval": 0.0,
+            "llm_ttft": 0.0,
+            "llm_generation": 0.0,
+            "llm_total": 0.0,
+        }
+
+        t0 = time.perf_counter()
         docs, sources, messages = self.prepare(query, top_k)
+        self.timing["retrieval"] = time.perf_counter() - t0
         if not self.llm:
             return None, sources, docs
 
-        resp = self.llm.chat.completions.create(
-            model=LLM_MODEL,
-            messages=messages,
-            temperature=0.2,
+        t_llm0 = time.perf_counter()
+        stream = self.llm.chat.completions.create(**self._llm_kwargs(messages))
+        parts: list[str] = []
+        first_token_at: float | None = None
+        for chunk in stream:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            text = getattr(delta, "content", None) if delta is not None else None
+            if text:
+                if first_token_at is None:
+                    first_token_at = time.perf_counter()
+                parts.append(text)
+        t_llm_end = time.perf_counter()
+
+        self.timing["llm_ttft"] = (
+            (first_token_at - t_llm0) if first_token_at is not None else (t_llm_end - t_llm0)
         )
-        return resp.choices[0].message.content, sources, docs
+        self.timing["llm_generation"] = (
+            t_llm_end - (first_token_at if first_token_at is not None else t_llm0)
+        )
+        self.timing["llm_total"] = t_llm_end - t_llm0
+        return "".join(parts), sources, docs
 
     def open_stream(self, query: str, top_k: int = TOP_K):
         """流式生成，返回 (contexts, sources, delta_iter)。
@@ -182,12 +238,7 @@ class RAGService:
             raise RuntimeError("未配置 LLM_API_KEY，无法生成回答")
 
         def _deltas():
-            stream = self.llm.chat.completions.create(
-                model=LLM_MODEL,
-                messages=messages,
-                temperature=0.2,
-                stream=True,
-            )
+            stream = self.llm.chat.completions.create(**self._llm_kwargs(messages))
             for chunk in stream:
                 choices = getattr(chunk, "choices", None)
                 if not choices:
