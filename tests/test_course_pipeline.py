@@ -10,7 +10,7 @@ from xml.sax.saxutils import escape
 import pytest
 from openpyxl import Workbook
 
-from rag.course import agent_select, answer, bm25, chunker, evidence, llm, ontology, pipeline, prompts, recall
+from rag.course import agent_select, answer, bm25, chunker, evidence, llm, ontology, passage_filter, pipeline, prompts, recall
 from rag.course.aliases import build_alias_table
 from rag.course.llm import LLMNotConfigured, LLMResult, ToolCall, Trace, TracingLLM
 from rag.course.textbook import parse_docx
@@ -585,7 +585,7 @@ def test_filter_prompt_has_short_refs_and_no_recall_reason_or_chunk_id(ctx):
     assert it.chunk_id not in user and "de:" not in user
     for leaked in ("召回原因", "edge_evidence", "mention", "dependsOn", "supports", "C01-"):
         assert leaked not in user
-    assert "拿不准时判 true" in sysm
+    assert "较低的一档" in sysm and "拿不准时判 true" not in sysm
 
 
 # ---------------------------------------------------------------- Step 4：作答与引用
@@ -837,7 +837,7 @@ def test_every_prompt_template_formats_without_error():
     for n in names:
         getattr(prompts, n).format(**values)               # 任何一个模板花括号写错都会在这里抛 KeyError / ValueError
     # JSON 示例经 format 后必须是合法 JSON 片段（单花括号）
-    assert '{"verdicts":[{"id":"S1","useful":true' in prompts.FILTER_SYSTEM.format()
+    assert '{"verdicts":[{"id":"S1","grade":"direct"' in prompts.FILTER_SYSTEM.format()
     assert '{"tool": "finish"' in prompts.SELECT_JSON_PROTOCOL.format()
     assert json.loads(prompts.FILTER_SYSTEM.format().split("输出严格 JSON：")[1].split("\n")[0])["verdicts"][0]["id"] == "S1"
 
@@ -847,7 +847,93 @@ def test_prompt_contents_follow_review():
     assert "6 轮" in sel and "换说法" in sel and "泛词不要选" in sel
     assert "召回原因" not in prompts.FILTER_ITEM and "{reasons}" not in prompts.FILTER_ITEM
     assert "chunk_id" not in prompts.FILTER_SYSTEM and "chunk_id" not in prompts.ANSWER_SYSTEM
-    assert "[S#]" in prompts.ANSWER_SYSTEM and "拿不准时判 true" in prompts.FILTER_SYSTEM
+    assert "[S#]" in prompts.ANSWER_SYSTEM and "较低的一档" in prompts.FILTER_SYSTEM and "拿不准时判 true" not in prompts.FILTER_SYSTEM
+    assert all(g in prompts.FILTER_SYSTEM for g in ("direct", "background", "irrelevant"))
+
+
+def grades(*pairs) -> LLMResult:
+    """pairs: (S# 编号, grade)。"""
+    return jtxt({"verdicts": [{"id": r, "grade": g, "reason": "r"} for r, g in pairs]})
+
+
+def test_filter_grades_legacy_useful_and_invalid_grade(ctx):
+    items = ordered(ctx, SEL2)[:3]
+    assert len(items) == 3
+    llm_ = ScriptedLLM([jtxt({"verdicts": [
+        {"id": "S1", "grade": "Background", "reason": "r"}, {"id": "S2", "useful": True, "reason": "r"},
+        {"id": "S3", "grade": "maybe", "reason": "r"}]})])
+    fr = pipeline.filter_passages("q", [items], llm_, native_tools=True)
+    assert [v.grade for v in fr.verdicts] == ["background", "direct"]                  # 旧格式 useful=true 视为 direct
+    assert fr.useful_ids == [i.chunk_id for i in items[:2]]
+    assert fr.unjudged == [items[2].chunk_id] and fr.batches[0]["invalid_grade"] == 1  # 不合法等级不静默当作无用
+    assert fr.verdicts[1].to_dict()["grade"] == "direct"
+
+
+def test_pick_for_answer_direct_first_then_background_with_cap(ctx):
+    items = ordered(ctx, SEL2)
+    assert len(items) >= 3
+    gs = ["background", "direct"] + ["irrelevant"] * (len(items) - 3) + ["direct"]
+    fr = pipeline.filter_passages("q", [items], ScriptedLLM([grades(*zip(refs_for(items), gs))]), native_tools=True)
+    kept, capped = passage_filter.pick_for_answer(items, fr, max_chunks=10)
+    assert [k.chunk_id for k in kept] == [items[1].chunk_id, items[-1].chunk_id, items[0].chunk_id]
+    assert capped == []
+    kept2, capped2 = passage_filter.pick_for_answer(items, fr, max_chunks=2)
+    assert [k.chunk_id for k in kept2] == [items[1].chunk_id, items[-1].chunk_id] and capped2 == [items[0].chunk_id]
+
+
+def test_pipeline_answer_uses_capped_graded_material(ctx, monkeypatch):
+    monkeypatch.setattr("rag.course.config.COURSE_ANSWER_MAX_CHUNKS", 1)
+    items = ordered(ctx, SEL2)
+    gs = ["background"] + ["irrelevant"] * (len(items) - 2) + ["direct"]
+    llm_ = ScriptedLLM([finish_native(*SEL2), grades(*zip(refs_for(items), gs)), LLMResult(content="见[S1]")])
+    res = pipeline.ask("q", ctx=ctx, llm=llm_)
+    st = res["trace"].stages["answer"]
+    assert st["kept"] == 1 and st["kept_grades"] == {"direct": 1, "background": 0} and st["capped"] == [items[0].chunk_id]
+    ans_user = llm_.calls[-1]["messages"][1]["content"]
+    assert items[-1].text in ans_user and items[0].text not in ans_user                  # 只给 direct，background 被上限截掉
+    assert res["citations"][0]["chunk_id"] == items[-1].chunk_id
+
+
+def test_all_background_or_irrelevant_still_answers_only_when_some_background(ctx):
+    sel = [("C01-0003", "question_concept")]
+    items = ordered(ctx, sel)
+    llm_ = ScriptedLLM([finish_native(*sel), grades(*[(r, "irrelevant") for r in refs_for(items)])])
+    assert pipeline.ask("q", ctx=ctx, llm=llm_)["fallback"]["reason"] == "all_filtered_out"
+    llm2 = ScriptedLLM([finish_native(*sel), grades(*[(r, "background") for r in refs_for(items)]),
+                        LLMResult(content="见[S1]")])
+    assert pipeline.ask("q", ctx=ctx, llm=llm2)["fallback"] is None
+
+
+def test_reasoning_param_mapping_and_validation():
+    assert llm.reasoning_param("") is None and llm.reasoning_param("  ") is None
+    assert llm.reasoning_param("disabled") == {"type": "disabled"}
+    assert llm.reasoning_param("LOW") == {"type": "enabled", "effort": "low"}
+    with pytest.raises(ValueError):
+        llm.reasoning_param("off")
+
+
+def test_client_sends_reasoning_per_step_and_trace_records_it(monkeypatch):
+    seen = []
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key, timeout):
+            self.chat = _Obj(completions=_Obj(create=lambda **kw: (seen.append(kw), _fake_response())[1]))
+
+    monkeypatch.setitem(sys.modules, "openai", _Obj(OpenAI=FakeOpenAI))
+    monkeypatch.setattr("rag.course.config.COURSE_REASONING", {"select": "", "filter": "disabled", "answer": "low"})
+    c = llm.OpenAICompatClient(base="http://example.invalid/v1", key=SENTINEL_KEY)
+    tr = Trace()
+    t = TracingLLM(c, tr)
+    for step in ("select", "filter", "answer"):
+        t.chat(step, [{"role": "user", "content": "x"}], model="m")
+    assert "extra_body" not in seen[0]
+    assert seen[1]["extra_body"] == {"reasoning": {"type": "disabled"}}
+    assert seen[2]["extra_body"] == {"reasoning": {"type": "enabled", "effort": "low"}}
+    assert [x["reasoning"] for x in tr.calls] == ["", "disabled", "low"]
+    assert [x["reasoning"] for x in Trace(calls=[]).calls] == []
+    t2 = Trace()
+    TracingLLM(ScriptedLLM([LLMResult(content="x")]), t2).chat("answer", [], model="m")
+    assert t2.calls[0]["reasoning"] is None                                           # mock 不声明 reasoning_for
 
 
 def test_tool_specs_are_plain_json_schema():

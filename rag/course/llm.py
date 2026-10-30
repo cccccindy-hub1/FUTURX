@@ -69,6 +69,9 @@ class OpenAICompatClient:
     def _redact(self, text: str) -> str:
         return text.replace(self._key, "***") if self._key else text
 
+    def reasoning_for(self, step: str) -> str:
+        return config.COURSE_REASONING.get(step, "")
+
     def chat(self, step: str, messages: list[dict], *, model: str,
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
         kwargs: dict = {"model": model, "messages": messages, "temperature": 0}
@@ -76,12 +79,30 @@ class OpenAICompatClient:
             kwargs["tools"] = tools
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        reasoning = reasoning_param(self.reasoning_for(step))
+        if reasoning:
+            kwargs["extra_body"] = {"reasoning": reasoning}
         t0 = time.perf_counter()
         try:
             resp = self._client.chat.completions.create(**kwargs)
         except Exception as e:  # noqa: BLE001 - 统一脱敏后重抛
             raise LLMError(f"[{step}] LLM 调用失败：{type(e).__name__}: {self._redact(str(e))}") from None
         return parse_response(resp, time.perf_counter() - t0)
+
+
+_EFFORTS = ("low", "medium", "high")
+
+
+def reasoning_param(mode: str) -> dict | None:
+    """COURSE_*_REASONING -> 胜算云 reasoning 对象；空值返回 None（不发送，用模型默认）。"""
+    mode = (mode or "").strip().lower()
+    if not mode:
+        return None
+    if mode == "disabled":
+        return {"type": "disabled"}
+    if mode in _EFFORTS:
+        return {"type": "enabled", "effort": mode}
+    raise ValueError(f"无效的 reasoning 设置：{mode}（可选 disabled / low / medium / high）")
 
 
 def parse_response(resp, latency_s: float = 0.0) -> LLMResult:
@@ -165,8 +186,10 @@ class TracingLLM:
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
         t0 = time.perf_counter()
         res = self.inner.chat(step, messages, model=model, tools=tools, json_mode=json_mode)
+        reasoning_for = getattr(self.inner, "reasoning_for", None)
         self.trace.calls.append({
             "step": step, "model": model, "tools": bool(tools), "json_mode": json_mode,
+            "reasoning": reasoning_for(step) if reasoning_for else None,
             "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
             "reasoning_tokens": res.reasoning_tokens, "reasoning_chars": res.reasoning_chars,
             "latency_s": round(res.latency_s or (time.perf_counter() - t0), 3),

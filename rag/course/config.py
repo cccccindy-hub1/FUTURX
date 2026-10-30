@@ -43,3 +43,11 @@ COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：
 COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "6"))      # Step 1 最多工具调用轮数
 COURSE_RECALL_MAX_CHARS = int(os.environ.get("COURSE_RECALL_MAX_CHARS", "12000"))  # Step 3 单批子块正文字符上限
 SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))           # 标题行证据下沉的覆盖率阈值
+# Step 4 最多使用的子块数：先取筛选为 direct 的，再取 background，超出部分记入 trace
+COURSE_ANSWER_MAX_CHUNKS = int(os.environ.get("COURSE_ANSWER_MAX_CHUNKS", "15"))
+# 各步骤的思考模式（胜算云 reasoning 参数）：disabled / low / medium / high；留空则不发送，用模型默认
+COURSE_REASONING = {
+    "select": os.environ.get("COURSE_SELECT_REASONING", "").strip(),
+    "filter": os.environ.get("COURSE_FILTER_REASONING", "disabled").strip(),
+    "answer": os.environ.get("COURSE_ANSWER_REASONING", "low").strip(),
+}

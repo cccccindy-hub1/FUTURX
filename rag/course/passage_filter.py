@@ -1,8 +1,9 @@
-"""Step 3：LLM 逐块判断召回子块是否有助于回答，按批调用后合并。
+"""Step 3：LLM 给召回子块逐块定级（direct / background / irrelevant），按批调用后合并。
 
 - 子块在 prompt 中用短编号 S1、S2…（全局递增，跨批不重复），LLM 看不到 chunk_id；本模块负责映射回 chunk_id；
 - 只接受输入批次中出现过的编号，编造的编号丢弃并记录；
-- 批内某个子块没有被判断：不静默当作无用，记为 unjudged（默认视为 useful=False 并记录）；
+- 批内某个子块没有被判断，或等级不合法：不静默当作无用，记为 unjudged（默认不进入作答并记录）；
+- 作答材料由 pick_for_answer 选出：先 direct 后 background，各自保持召回顺序，最多 max_chunks 个；
 - 原生路径：response_format=json_object；回退路径：prompt 要求 JSON + 本地解析，失败带错误重试 1 次。
 """
 from __future__ import annotations
@@ -16,6 +17,9 @@ from .recall import Recalled
 
 _REF_RE = re.compile(r"^\[?\s*[Ss](\d+)\s*\]?$")
 
+DIRECT, BACKGROUND, IRRELEVANT = "direct", "background", "irrelevant"
+GRADES = (DIRECT, BACKGROUND, IRRELEVANT)
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -23,9 +27,21 @@ class Verdict:
     useful: bool
     reason: str
     ref: str = ""
+    grade: str = ""
 
     def to_dict(self) -> dict:
-        return {"chunk_id": self.chunk_id, "ref": self.ref, "useful": self.useful, "reason": self.reason}
+        return {"chunk_id": self.chunk_id, "ref": self.ref, "grade": self.grade, "useful": self.useful,
+                "reason": self.reason}
+
+
+def _grade_of(it: dict) -> str | None:
+    """读取等级；兼容旧格式 useful=true/false（true 视为 direct）。不合法返回 None。"""
+    g = str(it.get("grade", "")).strip().lower()
+    if g in GRADES:
+        return g
+    if "grade" not in it and isinstance(it.get("useful"), bool):
+        return DIRECT if it["useful"] else IRRELEVANT
+    return None
 
 
 @dataclass
@@ -40,6 +56,9 @@ class FilterResult:
     @property
     def useful_ids(self) -> list[str]:
         return [v.chunk_id for v in self.verdicts if v.useful]
+
+    def grade_of(self, chunk_id: str) -> str | None:
+        return next((v.grade for v in self.verdicts if v.chunk_id == chunk_id), None)
 
     def to_dict(self) -> dict:
         return {"verdicts": [v.to_dict() for v in self.verdicts], "dropped_unknown_ids": self.dropped_unknown_ids,
@@ -108,15 +127,27 @@ def filter_passages(question: str, batches: list[list[Recalled]], llm: LLMClient
                 continue
             ref = _norm_ref(it.get("id", it.get("ref", it.get("chunk_id"))))
             cid = allowed.get(ref)
+            grade = _grade_of(it)
             if cid is None:
                 out.dropped_unknown_ids.append(ref)
             elif cid in judged:
                 out.duplicates.append(ref)
+            elif grade is None:
+                meta["invalid_grade"] = meta.get("invalid_grade", 0) + 1
             else:
                 judged.add(cid)
-                out.verdicts.append(Verdict(cid, it.get("useful") is True, str(it.get("reason", "")).strip(), ref))
+                out.verdicts.append(Verdict(cid, grade != IRRELEVANT, str(it.get("reason", "")).strip(), ref, grade))
         miss = [i.chunk_id for i in batch if i.chunk_id not in judged]
         out.unjudged += miss
         meta["unjudged"] = len(miss)
         out.batches.append(meta)
     return out
+
+
+def pick_for_answer(items: list[Recalled], fr: FilterResult, max_chunks: int | None = None,
+                    ) -> tuple[list[Recalled], list[str]]:
+    """选作答材料：先 direct 后 background，各自保持召回顺序，最多 max_chunks 个。返回 (材料, 因上限被截掉的 chunk_id)。"""
+    max_chunks = config.COURSE_ANSWER_MAX_CHUNKS if max_chunks is None else max_chunks
+    grade = {v.chunk_id: v.grade for v in fr.verdicts}
+    ranked = [i for g in (DIRECT, BACKGROUND) for i in items if grade.get(i.chunk_id) == g]
+    return ranked[:max_chunks], [i.chunk_id for i in ranked[max_chunks:]]

@@ -19,8 +19,8 @@ from .chunker import ChunkSet, chunk_textbook
 from .evidence import AnchorIndex
 from .llm import LLMClient, Trace, TracingLLM
 from .ontology import ConceptTable, OntologyPaths, Record, load_concepts, load_records
-from .passage_filter import filter_passages
-from .recall import DEFAULT_STRATEGY, Recalled, Recaller, batch_by_budget, dry_run_report
+from .passage_filter import filter_passages, pick_for_answer
+from .recall import DEFAULT_STRATEGY, Recaller, batch_by_budget, dry_run_report
 from .textbook import Textbook, parse_docx
 from .vocab_tools import VocabIndex
 
@@ -115,8 +115,7 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     fr = filter_passages(question, batches, traced)
     trace.stages["filter"] = {k: v for k, v in fr.to_dict().items() if k != "verdicts"}
     res["filtered"] = [v.to_dict() for v in fr.verdicts]
-    useful = set(fr.useful_ids)
-    kept: list[Recalled] = [i for i in rr.items if i.chunk_id in useful]
+    kept, capped = pick_for_answer(rr.items, fr)
     if not kept:
         res["fallback"] = _fallback("all_filtered_out", "召回的子块被全部判为无助于回答")
         return res
@@ -124,7 +123,9 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     # Step 4
     relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
     ar = answer_question(question, kept, relations, traced)
-    trace.stages["answer"] = {"kept": len(kept), "relations": len(relations),
+    trace.stages["answer"] = {"kept": len(kept), "kept_grades": {g: sum(fr.grade_of(k.chunk_id) == g for k in kept)
+                                                                 for g in ("direct", "background")},
+                              "capped": capped, "relations": len(relations),
                               "invalid_citations": ar.invalid_citations}
     res["answer"] = ar.to_dict()
     res["citations"] = [{"chunk_id": c, "path": next(k.path for k in kept if k.chunk_id == c)} for c in ar.citations]

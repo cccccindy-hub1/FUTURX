@@ -31,11 +31,13 @@ SELECT_JSON_PROTOCOL = """
 
 SELECT_USER = "学生问题：{question}"
 
-FILTER_SYSTEM = """判断下面每个教材子块是否有助于回答学生问题。只依据子块内容判断，不依据你自己的知识。
-useful=true 的标准：子块直接包含回答所需的定义、论述、例子或数据，或提供不可缺少的背景。
-仅仅出现相同词语、但与问题无关的，判为 false。
-拿不准时判 true（后面的作答步骤还会再把关）。
-输出严格 JSON：{{"verdicts":[{{"id":"S1","useful":true,"reason":"一句话"}}]}}
+FILTER_SYSTEM = """给下面每个教材子块定一个等级，表示它对回答学生问题的作用。只依据子块内容判断，不依据你自己的知识。
+等级（grade）：
+- direct：子块本身包含回答所需的定义、论述、例子或数据，引用它就能回答问题的某一部分；
+- background：不直接回答，但理解答案离不开它，例如问题所依赖的前提概念；
+- irrelevant：与问题无关，或只是出现了相同词语。
+拿不准时取相邻两档中较低的一档。
+输出严格 JSON：{{"verdicts":[{{"id":"S1","grade":"direct","reason":"一句话"}}]}}
 每个输入的编号（S1、S2…）必须恰好出现一次；不得输出输入中没有的编号。"""
 
 # 不支持 response_format=json_object 时追加
