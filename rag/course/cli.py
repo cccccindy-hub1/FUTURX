@@ -1,11 +1,13 @@
-"""课程知识库命令行：教材解析与分块（chunk）、检索问答（ask）、HTTP 服务（serve）。
+"""课程知识库命令行：教材解析与分块（chunk）、政策库切块（policy-chunk）、检索问答（ask）、HTTP 服务（serve）。
 
 用法（在项目根目录 FUTURX 下）：
   python -m rag.course.cli chunk --textbook /path/书稿.docx [--out DIR]
+  python -m rag.course.cli policy-chunk --doc /path/数据政策汇编.docx [--out DIR]
   python -m rag.course.cli ask "什么是数据要素？" [--json]
   python -m rag.course.cli serve [--host 127.0.0.1] [--port 8100]   # HTTP 服务，见 rag.course.api
 
 输出到 COURSE_CACHE_DIR/<版本>/：units.jsonl、parents.jsonl、chunks.jsonl、stats.json。
+政策库输出到 COURSE_CACHE_DIR/policy/：docs.jsonl、chunks.jsonl、stats.json、review.xlsx（人工审阅用）。
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .chunker import ChunkSet, chunk_textbook
-from .config import BOOK_VERSION, COURSE_CACHE_DIR, COURSE_TEXTBOOK, PARA_SPLIT
+from .config import BOOK_VERSION, COURSE_CACHE_DIR, COURSE_POLICY_DOC, COURSE_TEXTBOOK, PARA_SPLIT
 from .textbook import Textbook, parse_docx
 
 
@@ -73,6 +75,61 @@ def export(textbook: Path, out_dir: Path, version: str = BOOK_VERSION) -> dict:
     return summary
 
 
+_REVIEW_DOC_COLS = ["doc_no", "policy", "level", "doc_type", "status", "doc_number", "date", "chars",
+                    "n_chunks", "n_indexed", "excluded", "duplicate_of", "superseded_by"]
+_REVIEW_CHUNK_COLS = ["chunk_id", "doc_no", "policy", "doc_type", "kind", "path", "title", "part", "chars",
+                      "indexed", "flags", "text"]
+
+
+def _write_policy_review(path: Path, ps, summary: dict) -> None:
+    """审阅表：统计 / 政策文件 / 切块 三个工作表。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "统计"
+    for k, v in summary.items():
+        ws.append([k, json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v])
+    ws.column_dimensions["A"].width, ws.column_dimensions["B"].width = 22, 120
+
+    from .policy import doc_row
+    ws = wb.create_sheet("政策文件")
+    ws.append(_REVIEW_DOC_COLS)
+    for d in ps.docs:
+        row = doc_row(d)
+        ws.append([row[k] for k in _REVIEW_DOC_COLS])
+    ws.column_dimensions["B"].width = 50
+
+    ws = wb.create_sheet("切块")
+    ws.append(_REVIEW_CHUNK_COLS)
+    for c in ps.chunks:
+        ws.append([c.chunk_id, c.doc_no, c.policy, c.doc_type, c.kind, " › ".join(c.path), c.title, c.part,
+                   len(c.text), c.indexed, ",".join(c.flags), c.text])
+    for col, w in zip("ABCDEFGHIJKL", (26, 7, 30, 9, 9, 30, 24, 5, 6, 7, 16, 90)):
+        ws.column_dimensions[col].width = w
+    for row in ws.iter_rows(min_row=2, min_col=12, max_col=12):
+        row[0].alignment = Alignment(wrap_text=True, vertical="top")
+    for sheet in wb.worksheets[1:]:
+        sheet.freeze_panes = "A2"
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+    wb.save(path)
+
+
+def export_policy(doc: Path, out_dir: Path) -> dict:
+    from .policy import build_policy_set, doc_row, policy_stats
+
+    ps = build_policy_set(doc)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(out_dir / "docs.jsonl", (doc_row(d) for d in ps.docs))
+    _write_jsonl(out_dir / "chunks.jsonl", (c.to_dict() for c in ps.chunks))
+    summary = policy_stats(ps)
+    (out_dir / "stats.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_policy_review(out_dir / "review.xlsx", ps, summary)
+    return summary
+
+
 def _run_ask(args) -> None:
     from .llm import LLMNotConfigured, OpenAICompatClient
     from .pipeline import CourseContext, ask, result_to_json
@@ -109,6 +166,10 @@ def main() -> None:
     ch.add_argument("--out", default=None, help="输出目录，默认 COURSE_CACHE_DIR/<版本>")
     ch.add_argument("--version", default=BOOK_VERSION, help="教材版本号（写入 chunk_id）")
 
+    pc = sub.add_parser("policy-chunk", help="数据政策汇编按条/事项切块，输出 JSONL、统计与审阅表（不写向量库）")
+    pc.add_argument("--doc", default=None, help="汇编 docx 路径，默认取 COURSE_POLICY_DOC")
+    pc.add_argument("--out", default=None, help="输出目录，默认 COURSE_CACHE_DIR/policy")
+
     ask = sub.add_parser("ask", help="Agentic 检索问答（选词→召回→筛选→作答）")
     ask.add_argument("question", help="学生问题")
     ask.add_argument("--root", default=None, help="本体数据根目录（只读），默认 COURSE_ONTO_ROOT")
@@ -136,6 +197,15 @@ def main() -> None:
         from .api import run_http
         run_http(args.host, args.port, root=Path(args.root) if args.root else None,
                  textbook=Path(args.textbook) if args.textbook else None)
+        return
+    if args.cmd == "policy-chunk":
+        doc = Path(args.doc) if args.doc else COURSE_POLICY_DOC
+        if not doc.is_file():
+            raise SystemExit(f"政策汇编文件不存在：{doc}（用 --doc 或 COURSE_POLICY_DOC 指定）")
+        out = Path(args.out) if args.out else COURSE_CACHE_DIR / "policy"
+        summary = export_policy(doc, out)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        print(f"已写出：{out}")
         return
     if args.cmd == "chunk":
         textbook = Path(args.textbook) if args.textbook else COURSE_TEXTBOOK
