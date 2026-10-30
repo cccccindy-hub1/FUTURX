@@ -6,9 +6,10 @@ import re
 
 import pytest
 
-from rag.course import config, policy
-from rag.course.cli import export_policy
-from rag.course.policy import build_policy_set, policy_stats
+from rag.policy import chunker as policy
+from rag.policy import config
+from rag.policy.chunker import build_policy_set, policy_stats
+from rag.policy.cli import export_policy
 
 from tests.test_course_chunk import _p, _tbl, _write
 
@@ -313,8 +314,8 @@ def test_stats_counts(tmp_path):
 
 
 def test_cli_requires_existing_doc(tmp_path, monkeypatch):
-    monkeypatch.setattr("sys.argv", ["rag.course", "policy-chunk", "--doc", str(tmp_path / "missing.docx")])
-    from rag.course import cli
+    monkeypatch.setattr("sys.argv", ["rag.policy", "chunk", "--doc", str(tmp_path / "missing.docx")])
+    from rag.policy import cli
     with pytest.raises(SystemExit, match="政策汇编文件不存在"):
         cli.main()
 

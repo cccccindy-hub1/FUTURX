@@ -13,9 +13,13 @@ __pycache__/
 rag/chroma_db/
 rag/cache/
 rag/course_cache/
+rag/policy_cache/
 
 # ---- 课程教材原文（受版权保护，用 COURSE_TEXTBOOK 指向本机文件）----
 rag/course_data/
+
+# ---- 数据政策汇编（用 POLICY_DOC 指向本机文件）----
+rag/policy_data/
 
 # ---- 原始知识库资料（默认不公开）----
 # nlp_/ 内含已发表期刊论文（受版权保护）与内部私密材料（答辩点评、规范等），

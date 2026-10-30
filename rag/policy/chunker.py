@@ -32,9 +32,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from ..course.chunker import split_sentences
+from ..course.textbook import _HEADING_STYLE_RE, _W, _collect_text, _style_map, _table_rows  # docx XML 底层读取
 from . import config
-from .chunker import split_sentences
-from .textbook import _HEADING_STYLE_RE, _W, _collect_text, _style_map, _table_rows
 
 PATH_SEP = " › "
 

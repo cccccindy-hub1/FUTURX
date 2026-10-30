@@ -54,14 +54,3 @@ COURSE_REASONING = {
 # HTTP 接口（rag.course.api）单个问题的字符上限，防止超长输入放大 LLM 费用
 COURSE_QUESTION_MAX_CHARS = int(os.environ.get("COURSE_QUESTION_MAX_CHARS", "500"))
 
-# ---- 政策库（rag.course.policy）：数据政策汇编，按「一条完整的意思」切块 ----
-# 汇编为整理的外部资料，默认不放进仓库：用 COURSE_POLICY_DOC 指向本机文件；输出到 COURSE_CACHE_DIR/policy
-COURSE_POLICY_DOC = Path(os.environ.get("COURSE_POLICY_DOC", RAG_DIR / "course_data" / "数据政策汇编.docx"))
-POLICY_CHUNK_MAX = int(os.environ.get("COURSE_POLICY_CHUNK_MAX", "1500"))      # 超过此长度的条/事项才拆开
-POLICY_PART_TARGET = int(os.environ.get("COURSE_POLICY_PART_TARGET", "1000"))  # 拆开时每片的目标长度
-# 标题含这些词的文件不入政策库（数据字典类标准：逐字段定义，不是政策条文），逗号分隔
-POLICY_EXCLUDE_TITLES = tuple(
-    s.strip() for s in os.environ.get("COURSE_POLICY_EXCLUDE_TITLES", "数据规范").split(",") if s.strip()
-)
-POLICY_DUP_JACCARD = float(os.environ.get("COURSE_POLICY_DUP_JACCARD", "0.8"))     # 两文件正文相似度达到即视为重复
-POLICY_DRAFT_JACCARD = float(os.environ.get("COURSE_POLICY_DRAFT_JACCARD", "0.5"))  # 征求意见稿与正式稿的相似度门槛
