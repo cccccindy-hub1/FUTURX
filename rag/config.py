@@ -75,6 +75,28 @@ CONTEXTUAL_MODEL = os.environ.get("CONTEXTUAL_MODEL", "") or REWRITE_MODEL
 CONTEXTUAL_DOC_MAX_CHARS = int(os.environ.get("CONTEXTUAL_DOC_MAX_CHARS", "6000"))  # 送给 LLM 的文档窗口上限
 CONTEXTUAL_WORKERS = int(os.environ.get("CONTEXTUAL_WORKERS", "4"))                 # 并发调用数
 
+# ---- 全局 LLM 路由（统一入口 rag.unified；一次调用、JSON 输出，复用 rag.course.llm.OpenAICompatClient）----
+# 默认复用课程库的胜算云配置；API_BASE / KEY 都不设默认值，未配置时路由退化为规则判断。
+ROUTER_MODEL = os.environ.get("ROUTER_MODEL") or "deepseek/deepseek-v4-pro"
+ROUTER_API_BASE = (os.environ.get("ROUTER_API_BASE") or os.environ.get("COURSE_LLM_API_BASE", "")).strip()
+ROUTER_API_KEY = (os.environ.get("ROUTER_API_KEY") or os.environ.get("COURSE_LLM_API_KEY", "")).strip()
+ROUTER_REASONING = os.environ.get("ROUTER_REASONING", "disabled").strip()  # disabled / low / medium / high
+ROUTER_TIMEOUT = float(os.environ.get("ROUTER_TIMEOUT", "15"))             # 秒；超时走规则兜底
+ROUTER_REFUSAL_TEXT = os.environ.get("ROUTER_REFUSAL_TEXT") or (
+    "抱歉，我只能回答以下范围的问题：①学位论文写作与指导（选题、开题、文献综述、研究方法等）；"
+    "②《数据要素》课程知识点；③数据相关政策法规。您的问题不在这些范围内，请换一个相关问题试试。"
+)
+ROUTER_POLICY_TEXT = os.environ.get("ROUTER_POLICY_TEXT") or "政策检索尚未上线：您的问题已被识别为数据政策法规类，目前暂时无法检索政策库，敬请期待。"
+
+# ---- 原 RAG 自适应（rag.adaptive）：simple 一次检索；低置信度改写重查一次；complex 拆子问题 ----
+# 重排最高分低于该值视为检索不可靠（bge-reranker-v2-m3 经 CrossEncoder 默认 sigmoid，分数 0~1；初始值未经评测校准）
+ADAPTIVE_MIN_RERANK_SCORE = float(os.environ.get("ADAPTIVE_MIN_RERANK_SCORE", "0.3"))
+# 未开重排且为纯稠密检索时，最近邻余弦距离高于该值视为不可靠；hybrid/bm25 且无重排时跳过纠错
+ADAPTIVE_MAX_DISTANCE = float(os.environ.get("ADAPTIVE_MAX_DISTANCE", "0.6"))
+ADAPTIVE_MAX_SUBQUESTIONS = max(1, min(3, int(os.environ.get("ADAPTIVE_MAX_SUBQUESTIONS", "3"))))
+ADAPTIVE_MAX_ROUNDS = max(1, min(3, int(os.environ.get("ADAPTIVE_MAX_ROUNDS", "2"))))  # complex 检索总轮数硬上限
+ADAPTIVE_INSUFFICIENT_TEXT = os.environ.get("ADAPTIVE_INSUFFICIENT_TEXT") or "资料不足：现有论文指导资料中没有找到足以回答该问题的内容，建议换个问法或补充资料。"
+
 # ---- data_benchmark 评测（默认从 <项目根>/data_benchmark 读取）----
 BENCHMARK_DIR = Path(os.environ.get("BENCHMARK_DIR", ROOT / "data_benchmark"))
 BENCHMARK_SEED = int(os.environ.get("BENCHMARK_SEED", "42"))

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import pickle
+import time
 from dataclasses import dataclass, field
 
 from .config import CACHE_DIR, FETCH_K, RRF_K, TOP_K
@@ -271,6 +272,7 @@ class HybridRetriever:
 
         # 重排序（可选）：对候选池重排后取 top_k
         if self._reranker is not None and docs:
+            t_rerank = time.perf_counter()
             pairs = self._reranker.rerank(query, docs, min(top_k, len(docs)))
             rerank_scores = {ids[i]: s for i, s in pairs}
             order = [i for i, _ in pairs]
@@ -278,6 +280,7 @@ class HybridRetriever:
             docs = [docs[i] for i in order]
             fused_scores = [rerank_scores[i] for i in ids]
             debug["rerank_scores"] = rerank_scores
+            debug["rerank_s"] = round(time.perf_counter() - t_rerank, 4)
 
         out_dists = []
         for i in ids:

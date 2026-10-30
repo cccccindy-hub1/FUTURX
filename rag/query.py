@@ -132,8 +132,10 @@ class RAGService:
 
         供 answer / 流式生成 / OpenAI 兼容接口共用，避免提示词与过滤逻辑分叉。
         """
-        result = self.retrieve_result(query, top_k)
+        return self.prepare_from(query, self.retrieve_result(query, top_k))
 
+    def prepare_from(self, query: str, result):
+        """由已有的检索结果组装 (contexts, sources, messages)；自适应流程复用，避免提示词分叉。"""
         docs = result.documents
         metas = result.metadatas
         dists = result.distances

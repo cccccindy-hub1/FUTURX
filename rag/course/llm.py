@@ -48,7 +48,8 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatClient:
-    def __init__(self, base: str | None = None, key: str | None = None, *, timeout: float = 120.0):
+    def __init__(self, base: str | None = None, key: str | None = None, *, timeout: float = 120.0,
+                 reasoning: dict[str, str] | None = None):
         self._base = (config.COURSE_LLM_API_BASE if base is None else base).strip()
         self._key = (config.COURSE_LLM_API_KEY if key is None else key).strip()
         if not self._base:
@@ -61,6 +62,8 @@ class OpenAICompatClient:
             import openai
         except ImportError:
             raise LLMNotConfigured("未安装 openai 包（pip install openai）。") from None
+        # reasoning：覆盖 step -> 思考模式（供路由等非课程步骤使用）；缺省按 config.COURSE_REASONING
+        self._reasoning = reasoning
         self._client = openai.OpenAI(base_url=self._base, api_key=self._key, timeout=timeout)
 
     def __repr__(self) -> str:
@@ -70,6 +73,8 @@ class OpenAICompatClient:
         return text.replace(self._key, "***") if self._key else text
 
     def reasoning_for(self, step: str) -> str:
+        if self._reasoning is not None and step in self._reasoning:
+            return self._reasoning[step]
         return config.COURSE_REASONING.get(step, "")
 
     def chat(self, step: str, messages: list[dict], *, model: str,

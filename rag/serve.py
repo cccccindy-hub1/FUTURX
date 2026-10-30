@@ -81,6 +81,13 @@ def build_app(**service_kwargs):
 
     app.include_router(openai_router)
 
+    # 统一入口 POST /auto/ask：先路由再分发；路由客户端未配置时只用规则。课程库需另行注入 course_ctx/course_llm。
+    from .router import build_router_client
+    from .unified import UnifiedService, router as unified_router
+
+    app.state.unified = UnifiedService(rag=svc, router_client=build_router_client())
+    app.include_router(unified_router)
+
     if web_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
 
@@ -100,6 +107,7 @@ def run_http(host: str, port: int, **service_kwargs) -> None:
         f"  Web 前端   GET  /\n"
         f"  探活       GET  /health\n"
         f"  原生问答   POST /ask\n"
+        f"  统一入口   POST /auto/ask（LLM 路由 + 自适应）\n"
         f"  OpenAI 兼容 POST /v1/chat/completions   GET /v1/models"
     )
     uvicorn.run(app, host=host, port=port, log_level="warning")
