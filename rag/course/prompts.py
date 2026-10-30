@@ -31,6 +31,9 @@ SELECT_JSON_PROTOCOL = """
 
 SELECT_USER = "学生问题：{question}"
 
+# 工具调用达到 max_steps 轮后追加；原生路径下一轮只提供 finish 工具
+SELECT_FORCE_FINISH = "已用完 {max_steps} 轮工具调用。请根据已经获得的信息立即调用 finish 提交选择（没有合适概念时提交空列表），不要再调用其他工具。"
+
 FILTER_SYSTEM = """给下面每个教材子块定一个等级，表示它对回答学生问题的作用。只依据子块内容判断，不依据你自己的知识。
 等级（grade）：
 - direct：子块本身包含回答所需的定义、论述、例子或数据，引用它就能回答问题的某一部分；

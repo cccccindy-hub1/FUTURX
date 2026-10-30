@@ -265,8 +265,44 @@ def test_select_native_loop_validates_and_drops_invalid(ctx):
 def test_select_step_limit_truncates(ctx):
     llm_ = ScriptedLLM([tc("search_vocab", query="数据要素")] * 5)
     r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=2, native_tools=True)
-    assert r.steps == 2 and r.truncated and not r.finished and r.selected == []
-    assert len(llm_.calls) == 3          # 第 3 次调用发出但被拒绝执行
+    assert r.steps == 2 and r.truncated and not r.finished and r.selected == [] and r.end_reason == "truncated"
+    assert len(llm_.calls) == 3          # 第 3 次调用只提供 finish，LLM 仍不 finish → 结束
+    assert [t["function"]["name"] for t in llm_.calls[2]["tools"]] == ["finish"]
+    assert "已用完 2 轮工具调用" in llm_.calls[2]["messages"][-1]["content"]
+
+
+def _multi(*calls) -> LLMResult:
+    return LLMResult(tool_calls=[ToolCall(f"m{i}", n, a) for i, (n, a) in enumerate(calls)])
+
+
+def test_select_counts_rounds_not_parallel_tool_calls_and_forced_finish_keeps_selection(ctx):
+    llm_ = ScriptedLLM([
+        _multi(("search_vocab", {"query": "数据要素"}), ("search_vocab", {"query": "数据资产"})),
+        _multi(("get_concept", {"concept_id": "C01-0001"}), ("get_concept", {"concept_id": "C01-0002"}),
+               ("get_neighbors", {"concept_id": "C01-0001"})),
+        finish_native(("C01-0001", "question_concept"))])
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=2, native_tools=True)
+    assert r.steps == 2 and len(r.tool_log) == 5                     # 5 个工具调用、2 轮
+    assert r.truncated and r.finished and r.end_reason == "finish"
+    assert [s.concept_id for s in r.selected] == ["C01-0001"]
+    tool_msgs = [m for m in llm_.calls[2]["messages"] if m["role"] == "tool"]
+    assert len(tool_msgs) == 5                                        # 每个 tool_call 都有对应的 tool 结果
+
+
+def test_select_finish_in_parallel_batch_is_taken(ctx):
+    llm_ = ScriptedLLM([_multi(("search_vocab", {"query": "x"}),
+                               ("finish", {"selected": [{"concept_id": "C01-0001", "reason": "r", "role": "question_concept"}]}))])
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=6, native_tools=True)
+    assert [s.concept_id for s in r.selected] == ["C01-0001"] and r.steps == 0 and len(llm_.calls) == 1
+
+
+def test_select_json_path_forced_finish(ctx):
+    llm_ = ScriptedLLM([jtxt({"tool": "search_vocab", "args": {"query": "数据要素"}}),
+                        jtxt({"tool": "finish", "args": {"selected": [
+                            {"concept_id": "C01-0001", "reason": "r", "role": "question_concept"}]}})])
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=1, native_tools=False)
+    assert r.truncated and r.end_reason == "finish" and [s.concept_id for s in r.selected] == ["C01-0001"]
+    assert "已用完 1 轮工具调用" in llm_.calls[1]["messages"][-1]["content"]
 
 
 def test_select_active_concepts_rendered_in_prompt(ctx):
@@ -953,3 +989,16 @@ def test_tool_specs_are_plain_json_schema():
                 no_type_arrays(v)
 
     no_type_arrays(prompts.TOOL_SPECS)
+
+
+def test_select_records_end_reason_for_text_only_reply_and_bad_finish(ctx):
+    sr = agent_select.select_concepts("q", (), ctx.index, ScriptedLLM([
+        tc("search_vocab", query="数据要素"), LLMResult(content="我选 C01-0001 数据要素")]))
+    assert sr.selected == [] and not sr.finished
+    assert sr.end_reason == "no_tool_call" and sr.final_text == "我选 C01-0001 数据要素"
+    sr = agent_select.select_concepts("q", (), ctx.index, ScriptedLLM([
+        tc("finish", concepts=[{"concept_id": "C01-0001", "reason": "r", "role": "question_concept"}])]))
+    assert sr.selected == [] and sr.finished and sr.end_reason == "finish"
+    assert sr.dropped == [{"reason": "finish_missing_selected", "keys": ["concepts"]}]
+    sr = agent_select.select_concepts("q", (), ctx.index, ScriptedLLM([finish_native(("C01-0001", "question_concept"))]))
+    assert sr.end_reason == "finish" and sr.to_dict()["end_reason"] == "finish" and sr.final_text == ""

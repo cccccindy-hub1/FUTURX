@@ -3,7 +3,8 @@
 两条路径（COURSE_LLM_NATIVE_TOOLS 切换）：
 - 原生：tools=TOOL_SPECS，读 tool_calls；
 - 回退：prompt 约定每轮回复一个 {"tool","args"} JSON，本地解析；解析失败带错误重试 1 次，仍失败则以当前选择结束。
-最多 max_steps 轮工具调用；超出后以当前选择结束（truncated=True）。
+最多 max_steps 轮工具调用（一轮 = 一次 LLM 回复，其中可并行多个工具调用）；达到上限后追加一条提示，
+再给一次只能 finish 的机会（truncated=True）；这一轮仍不 finish 才以当前选择结束（end_reason=truncated）。
 校验：finish 里的 concept_id 必须存在、未被排除、未被 blocked，否则丢弃并记录到 dropped。
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ from .vocab_tools import VocabIndex
 ROLES = ("question_concept", "related_concept")
 TOOL_NAMES = ("search_vocab", "get_concept", "get_neighbors", "finish")
 MAX_NEIGHBORS_SHOWN = 60
+FINISH_ONLY = [t for t in prompts.TOOL_SPECS if t["function"]["name"] == "finish"]
 
 
 @dataclass(frozen=True)
@@ -34,16 +36,19 @@ class Selection:
 class SelectResult:
     selected: list[Selection] = field(default_factory=list)
     dropped: list[dict] = field(default_factory=list)
-    steps: int = 0                 # 已执行的工具调用轮数（不含 finish）
-    truncated: bool = False        # 超出 max_steps 被强制结束
+    steps: int = 0                 # 已执行的工具调用轮数（不含 finish；一轮可含多个并行工具调用）
+    truncated: bool = False        # 达到 max_steps，被要求立即 finish
     finished: bool = False         # LLM 主动调用了 finish
     parse_failures: int = 0
     tool_log: list[dict] = field(default_factory=list)
+    # 结束原因：finish / truncated / no_tool_call（LLM 只回了文字）/ parse_failed（JSON 路径重试后仍无法解析）
+    end_reason: str = ""
+    final_text: str = ""           # end_reason 为 no_tool_call / parse_failed 时 LLM 回复的前 300 字，便于排查
 
     def to_dict(self) -> dict:
         return {"selected": [s.to_dict() for s in self.selected], "dropped": self.dropped, "steps": self.steps,
                 "truncated": self.truncated, "finished": self.finished, "parse_failures": self.parse_failures,
-                "tool_log": self.tool_log}
+                "tool_log": self.tool_log, "end_reason": self.end_reason, "final_text": self.final_text}
 
 
 def run_tool(index: VocabIndex, name: str, args: dict) -> dict:
@@ -90,6 +95,13 @@ def _validate(raw, index: VocabIndex, result: SelectResult) -> None:
             result.selected.append(Selection(cid, str(it.get("reason", "")).strip(), role))
 
 
+def _finish(args: dict, index: VocabIndex, result: SelectResult) -> None:
+    if "selected" not in args:
+        result.dropped.append({"reason": "finish_missing_selected", "keys": sorted(args)})
+    _validate(args.get("selected", []), index, result)
+    result.finished, result.end_reason = True, "finish"
+
+
 def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMClient, *,
                     max_steps: int | None = None, model: str | None = None,
                     native_tools: bool | None = None) -> SelectResult:
@@ -112,28 +124,32 @@ def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMC
 
 def _loop_native(messages, index, llm, model, max_steps, result: SelectResult) -> None:
     while True:
-        res = llm.chat("select", messages, model=model, tools=prompts.TOOL_SPECS)
+        res = llm.chat("select", messages, model=model, tools=FINISH_ONLY if result.truncated else prompts.TOOL_SPECS)
         calls = res.tool_calls
-        if not calls:
-            return                       # LLM 没调工具也没 finish：以当前选择结束
+        if not calls:                    # LLM 没调工具也没 finish：以当前选择结束，记录回复便于排查
+            result.end_reason, result.final_text = "no_tool_call", (res.content or "")[:300]
+            return
         messages.append({
             "role": "assistant", "content": res.content or None,
             "tool_calls": [{"id": c.id, "type": "function",
                             "function": {"name": c.name, "arguments": json.dumps(c.args, ensure_ascii=False)}}
                            for c in calls],
         })
+        fin = next((c for c in calls if c.name == "finish"), None)
+        if fin is not None:
+            _finish(fin.args, index, result)
+            return
+        if result.truncated:             # 已要求立即 finish 仍未提交
+            result.end_reason = "truncated"
+            return
+        result.steps += 1
         for c in calls:
-            if c.name == "finish":
-                _validate(c.args.get("selected", []), index, result)
-                result.finished = True
-                return
-            if result.steps >= max_steps:
-                result.truncated = True
-                return
-            result.steps += 1
             out = run_tool(index, c.name, c.args)
             result.tool_log.append({"tool": c.name, "args": c.args, "ok": "error" not in out})
             messages.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(out, ensure_ascii=False)})
+        if result.steps >= max_steps:
+            result.truncated = True
+            messages.append({"role": "user", "content": prompts.SELECT_FORCE_FINISH.format(max_steps=max_steps)})
 
 
 def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> None:
@@ -147,8 +163,9 @@ def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> 
                 raise ValueError(f"tool 必须是 {list(TOOL_NAMES)} 之一，args 必须是对象")
         except ValueError as e:
             result.parse_failures += 1
-            if retried:
-                return                   # 重试后仍失败：以当前选择结束
+            if retried:                  # 重试后仍失败：以当前选择结束
+                result.end_reason, result.final_text = "parse_failed", (res.content or "")[:300]
+                return
             retried = True
             messages.append({"role": "assistant", "content": res.content})
             messages.append({"role": "user", "content": prompts.RETRY_JSON.format(error=str(e)[:80])})
@@ -156,13 +173,16 @@ def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> 
         retried = False
         messages.append({"role": "assistant", "content": res.content})
         if name == "finish":
-            _validate(args.get("selected", []), index, result)
-            result.finished = True
+            _finish(args, index, result)
             return
-        if result.steps >= max_steps:
-            result.truncated = True
+        if result.truncated:             # 已要求立即 finish 仍未提交
+            result.end_reason = "truncated"
             return
         result.steps += 1
         out = run_tool(index, name, args)
         result.tool_log.append({"tool": name, "args": args, "ok": "error" not in out})
-        messages.append({"role": "user", "content": "工具结果：" + json.dumps(out, ensure_ascii=False)})
+        tail = ""
+        if result.steps >= max_steps:
+            result.truncated = True
+            tail = "\n" + prompts.SELECT_FORCE_FINISH.format(max_steps=max_steps)
+        messages.append({"role": "user", "content": "工具结果：" + json.dumps(out, ensure_ascii=False) + tail})
