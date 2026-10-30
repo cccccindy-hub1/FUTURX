@@ -51,3 +51,5 @@ COURSE_REASONING = {
     "filter": os.environ.get("COURSE_FILTER_REASONING", "disabled").strip(),
     "answer": os.environ.get("COURSE_ANSWER_REASONING", "low").strip(),
 }
+# HTTP 接口（rag.course.api）单个问题的字符上限，防止超长输入放大 LLM 费用
+COURSE_QUESTION_MAX_CHARS = int(os.environ.get("COURSE_QUESTION_MAX_CHARS", "500"))

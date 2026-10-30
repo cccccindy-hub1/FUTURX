@@ -16,6 +16,9 @@ pywin32; sys_platform == "win32"
 rank-bm25
 jieba
 
+# 课程知识库（rag.course：读取本体概念总表 xlsx）
+openpyxl
+
 # 开发与测试
 pytest
 

@@ -1,7 +1,9 @@
-"""课程知识库命令行（M1：教材解析与分块，不建向量库）。
+"""课程知识库命令行：教材解析与分块（chunk）、检索问答（ask）、HTTP 服务（serve）。
 
 用法（在项目根目录 FUTURX 下）：
   python -m rag.course.cli chunk --textbook /path/书稿.docx [--out DIR]
+  python -m rag.course.cli ask "什么是数据要素？" [--json]
+  python -m rag.course.cli serve [--host 127.0.0.1] [--port 8100]   # HTTP 服务，见 rag.course.api
 
 输出到 COURSE_CACHE_DIR/<版本>/：units.jsonl、parents.jsonl、chunks.jsonl、stats.json。
 """
@@ -119,10 +121,21 @@ def main() -> None:
     ask.add_argument("--select", nargs="*", default=[],
                      help="dry-run 手动指定概念，形如 C01-0001 或 C01-0001:related_concept")
     ask.add_argument("--json", action="store_true", help="输出完整 JSON")
+
+    serve = sub.add_parser("serve", help="HTTP 服务：教材与本体加载一次，POST /course/ask 提问")
+    serve.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    serve.add_argument("--port", type=int, default=8100, help="端口（默认 8100，与 rag.serve 的 8000 分开）")
+    serve.add_argument("--root", default=None, help="本体数据根目录（只读），默认 COURSE_ONTO_ROOT")
+    serve.add_argument("--textbook", default=None, help="教材 docx，默认在数据根目录/教材 下查找")
     args = parser.parse_args()
 
     if args.cmd == "ask":
         _run_ask(args)
+        return
+    if args.cmd == "serve":
+        from .api import run_http
+        run_http(args.host, args.port, root=Path(args.root) if args.root else None,
+                 textbook=Path(args.textbook) if args.textbook else None)
         return
     if args.cmd == "chunk":
         textbook = Path(args.textbook) if args.textbook else COURSE_TEXTBOOK
