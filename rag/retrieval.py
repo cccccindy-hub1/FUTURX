@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import pickle
@@ -99,11 +100,14 @@ class BM25Index:
 
     @classmethod
     def build(cls, collection, name: str) -> "BM25Index":
-        """从 Chroma collection 构建，命中磁盘缓存则直接复用。"""
-        data = collection.get(include=["documents"])
-        ids, docs = list(data["ids"]), list(data["documents"])
+        """从 Chroma collection 构建，命中磁盘缓存则直接复用。索引文本与向量化一致（contextual_text）。"""
+        from .chunk import contextual_text
+
+        data = collection.get(include=["documents", "metadatas"])
+        ids = list(data["ids"])
+        docs = [contextual_text(d, m or {}) for d, m in zip(data["documents"], data["metadatas"])]
         cache_file = CACHE_DIR / f"{name}.bm25.pkl"
-        fingerprint = (len(ids), hash(tuple(sorted(ids))))
+        fingerprint = ("v2", len(ids), hashlib.md5("\n".join(sorted(ids)).encode("utf-8")).hexdigest())
 
         if cache_file.exists():
             try:
@@ -249,18 +253,23 @@ class HybridRetriever:
 
         if self.mode == "dense":
             # 稠密模式：直接用余弦距离排序（越小越近），与旧行为一致
-            fused = [(i, dists.get(i, 1.0)) for i in rank_lists[0]][:top_k]
+            fused = [(i, dists.get(i, 1.0)) for i in rank_lists[0]]
         elif self.mode == "bm25":
-            fused = [(i, 0.0) for i in rank_lists[0]][:top_k]
+            fused = [(i, 0.0) for i in rank_lists[0]]
         else:
-            fused = rrf_fuse(rank_lists, self.rrf_k)[:top_k]
+            fused = rrf_fuse(rank_lists, self.rrf_k)
 
+        # 重排序时先保留整个候选池（最多 fetch_k），重排后再截到 top_k；
+        # 否则重排只能在已选定的 top_k 内调换顺序，排在 top_k 之外的好结果永远进不来
+        fused = fused if self._reranker is not None else fused[:top_k]
         debug["fused"] = [i for i, _ in fused]
         ids = [i for i, _ in fused]
-        docs = self._fetch_docs(ids)
+        docs, fetched_metas = self._fetch(ids)
+        for i in ids:                       # BM25 独有的命中没有稠密结果的元数据，从库里补
+            metas.setdefault(i, fetched_metas.get(i, {}))
         fused_scores = [s for _, s in fused]
 
-        # 重排序（可选）：对候选重排后重新取 top_k
+        # 重排序（可选）：对候选池重排后取 top_k
         if self._reranker is not None and docs:
             pairs = self._reranker.rerank(query, docs, min(top_k, len(docs)))
             rerank_scores = {ids[i]: s for i, s in pairs}
@@ -284,12 +293,12 @@ class HybridRetriever:
             debug=debug,
         )
 
-    def _fetch_docs(self, ids: list[str]) -> list[str]:
+    def _fetch(self, ids: list[str]) -> tuple[list[str], dict[str, dict]]:
         if not ids:
-            return []
-        got = self.collection.get(ids=ids, include=["documents"])
-        by_id = dict(zip(got["ids"], got["documents"]))
-        return [by_id.get(i, "") for i in ids]
+            return [], {}
+        got = self.collection.get(ids=ids, include=["documents", "metadatas"])
+        docs = dict(zip(got["ids"], got["documents"]))
+        return [docs.get(i, "") for i in ids], dict(zip(got["ids"], got["metadatas"]))
 
 
 def _match(meta: dict, where: dict) -> bool:

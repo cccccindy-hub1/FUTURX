@@ -49,12 +49,12 @@ def test_parse_parent_child_mode(fake_corpus, monkeypatch):
 
     for rid, text, meta in rows:
         assert meta["parent_id"] in parents, "子块必须指向存在的父块"
-        assert text.startswith(f"〔{meta['parent_id']}〕"), "子块应带父块 header 标记"
+        assert "〔" not in text, "父块 id 只放元数据，不写进子块正文（否则会被向量化）"
         parent = parents[meta["parent_id"]]
         off, length = meta["parent_offset"], meta["parent_length"]
         assert off >= 0
         # 父块保留段落换行、子块按行拼接，故忽略换行后应完全一致
-        body = text.split("\n", 1)[1] if "\n" in text else text
+        body = text
         snippet = parent[off : off + length]
         assert snippet.replace("\n", "") == body.replace("\n", "")
 
