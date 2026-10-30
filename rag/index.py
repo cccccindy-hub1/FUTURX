@@ -23,6 +23,8 @@ from .config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     COLLECTION_NAME,
+    CONTEXTUAL_ENABLED,
+    CONTEXTUAL_MODEL,
     DATA_DIR,
     EMBED_MODEL,
     PARENT_CHILD_ENABLED,
@@ -32,7 +34,7 @@ from .config import (
     STORE_DIR,
     SUPPORTED_EXTS,
 )
-from .chunk import chunk_parent_child, chunk_text
+from .chunk import chunk_parent_child, chunk_text, contextual_text
 from .extract import extract_files, file_category, ocr_status, parser_status
 from .retrieval import parents_path
 
@@ -68,6 +70,8 @@ def _signature(files: list[Path]) -> str:
     # 建库参数变了必须让向量缓存失效，否则会张冠李戴复用旧向量
     key += f"\n{EMBED_MODEL}\n{COLLECTION_NAME}\n{CHUNK_SIZE}\n{CHUNK_OVERLAP}"
     key += f"\nparent_child={PARENT_CHILD_ENABLED}\nparent_size={PARENT_SIZE}"
+    # 分块规则 / 向量化文本格式（contextual_text）变化时也要让缓存失效
+    key += f"\nchunker=v2\ncontextual={CONTEXTUAL_ENABLED}:{CONTEXTUAL_MODEL if CONTEXTUAL_ENABLED else ''}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
 
 
@@ -125,6 +129,9 @@ def _parse(files: list[Path]) -> tuple[list[tuple[str, str, dict]], list[tuple[s
                 meta["section"] = section or ""
                 rows.append((f"{uid}::{f.stem}::chunk{i}", text, meta))
             n = len(chunks)
+        if CONTEXTUAL_ENABLED and n:
+            from .contextual import add_contexts
+            add_contexts(rec["text"], rows[-n:])
         logging.info("解析 %s -> %d chunks（%s）", f.name, n, category)
     return rows, skipped, parents
 
@@ -202,7 +209,7 @@ def build() -> None:
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(EMBED_MODEL)
-        docs = [r[1] for r in rows]
+        docs = [contextual_text(r[1], r[2]) for r in rows]   # 向量化带「文件名 › 章节」前缀；入库仍存正文
         print(f"向量化 {len(rows)} 个 chunk …")
         embeddings = model.encode(docs, normalize_embeddings=True, show_progress_bar=True)
         _save_cache(sig, rows, embeddings, skipped)

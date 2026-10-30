@@ -137,16 +137,19 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 
 ## 检索流水线
 
+建库时，每个 chunk 用于向量化和 BM25 的文本是「文件名 › 章节」+（可选）LLM 生成的上下文 + 正文
+（`chunk.contextual_text`）；入库并送给 LLM 的仍是正文本身。
+
 ```
 question
   │
   ├─(可选) 查询改写 / HyDE ── enhance.py ── 需 LLM
   │
   ├─ 稠密召回 (BGE-m3, Chroma) ─┐
-  │                              ├─ RRF 融合 ─(可选) CrossEncoder 重排序 ─> top_k
+  │                              ├─ RRF 融合（候选池 fetch_k）─(可选) CrossEncoder 重排序 ─> top_k
   ├─ 稀疏召回 (BM25 + jieba) ───┘
   │
-  ├─(可选) 父块展开 ── 命中子块替换为父块上下文
+  ├─(可选) 父块展开 ── 命中子块替换为父块全文（同一父块只保留一次）
   │
   └─(可选) 余弦距离阈值过滤 ──> 拼 [来源N] 上下文 ──> LLM 生成
 ```
@@ -162,6 +165,12 @@ question
 | 查询改写 | `--rewrite` | `QUERY_REWRITE_ENABLED=false` |
 | HyDE | `--hyde` | `HYDE_ENABLED=false` |
 | 父块展开 | `--expand` | `CONTEXT_EXPAND_ENABLED=false` |
+| Contextual Retrieval（建库） | — | `CONTEXTUAL_ENABLED=false` |
+
+> **Contextual Retrieval**（Anthropic, 2024）：建库时 LLM 为每个 chunk 写一两句「它在全文中讲什么」，
+> 拼进向量化与 BM25 文本。每个新 chunk 一次 LLM 调用，结果缓存在 `cache/contextual_cache.json`，
+> 内容不变的重建不再调用；建议用便宜的小模型（`CONTEXTUAL_MODEL`），开启前先估算 chunk 数与费用。
+> 修改该开关会使向量缓存失效、触发重新向量化。
 
 > **建库与查询的开关必须匹配**：父块 sidecar 只在 `PARENT_CHILD_ENABLED=true` 建库时生成，
 > 此时才应使用 `--expand`。用默认参数建库、却加 `--expand` 会拿不到父块（自动退回子块原文，不报错）。

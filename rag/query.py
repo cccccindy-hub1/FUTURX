@@ -97,20 +97,31 @@ class RAGService:
         return result
 
     def _expand(self, result) -> None:
-        """父子分块：把命中子块替换为其父块全文，供生成阶段获得更完整上下文。"""
+        """父子分块：把命中子块替换为其父块全文，供生成阶段获得更完整上下文。
+
+        同一父块下的多个子块只保留排名最靠前的那一条，避免同一段上下文重复送给 LLM。
+        找不到父块（未用父子分块建库）时保留子块原文。
+        """
         if self._parents is None:
             self._parents = load_parents(COLLECTION_NAME)
         if not self._parents:
             return
+        seen: set[str] = set()
+        keep: list[int] = []
         for k, meta in enumerate(result.metadatas):
-            parent = self._parents.get(meta.get("parent_id", ""))
-            if not parent:
-                continue
-            off, length = meta.get("parent_offset"), meta.get("parent_length")
-            if isinstance(off, int) and isinstance(length, int):
-                result.documents[k] = parent[off : off + length]
-            else:
+            pid = meta.get("parent_id", "")
+            parent = self._parents.get(pid)
+            if parent:
+                if pid in seen:
+                    continue
+                seen.add(pid)
                 result.documents[k] = parent
+            keep.append(k)
+        n = len(result.metadatas)
+        for name in ("ids", "documents", "metadatas", "distances", "scores"):
+            vals = getattr(result, name)
+            if len(vals) == n:
+                setattr(result, name, [vals[k] for k in keep])
 
     def retrieve(self, query: str, top_k: int = TOP_K) -> dict:
         """保持 Chroma query() 的嵌套列表返回形状（兼容既有调用方）。"""

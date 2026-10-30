@@ -1,4 +1,4 @@
-"""父子分块测试：子块带 header、父子映射一致、上下文可按偏移展开。"""
+"""父子分块测试：父子映射一致、子块正文不含 id 标记、上下文可按偏移定位。"""
 from __future__ import annotations
 
 from rag.chunk import chunk_parent_child
@@ -17,14 +17,14 @@ def test_parent_child_returns_both_levels():
     assert all({"parent_id", "text", "section", "parent_offset", "parent_length"} <= set(c) for c in children)
 
 
-def test_parent_ids_are_unique_and_child_headers_match():
+def test_parent_ids_are_unique_and_children_carry_no_id_marker():
     children, parents = chunk_parent_child(_sample_text(), "uid123", parent_size=300)
     parent_ids = [p["parent_id"] for p in parents]
     assert len(parent_ids) == len(set(parent_ids)), "父块 id 必须唯一"
     by_id = {p["parent_id"]: p["text"] for p in parents}
     for c in children:
         assert c["parent_id"] in by_id
-        assert c["text"].startswith(f"〔{c['parent_id']}〕")
+        assert "〔" not in c["text"] and c["parent_id"] not in c["text"]
 
 
 def test_child_offset_restores_body_from_parent():
@@ -32,8 +32,8 @@ def test_child_offset_restores_body_from_parent():
     by_id = {p["parent_id"]: p["text"] for p in parents}
     for c in children:
         parent = by_id[c["parent_id"]]
-        body = c["text"].split("\n", 1)[1]
-        assert parent[c["parent_offset"] : c["parent_offset"] + c["parent_length"]] == body
+        snippet = parent[c["parent_offset"] : c["parent_offset"] + c["parent_length"]]
+        assert snippet.replace("\n", "") == c["text"].replace("\n", "")
 
 
 def test_children_are_smaller_than_parents():
