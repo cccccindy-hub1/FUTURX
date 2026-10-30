@@ -268,6 +268,45 @@ def test_oversized_parent_split_at_unit_boundaries(book, monkeypatch):
     assert len(anchors) == len(set(anchors))  # 单元不重复、不被切开
 
 
+# ---------------------------------------------------------------- 分章目录（toc）
+
+def _toc_book(tmp_path):
+    body = [
+        _p("第一章 数据要素", "Heading1"),                          # P1
+        _p("第一节 数据要素的概念", "Heading2"),                    # P2
+        _p("数据要素是参与价值创造的数据资源。"),                    # P3
+        _p("引用文献"),                                              # P4 -> references
+        _p("[1]某某.数据的本质[J].2017."),                           # P5
+        _p("一、数据产品化的核心环节"),                              # P6 下一章目录行：在引用文献之后、下一章标题之前
+        _p("第二章 数据产品", "Heading1"),                           # P7
+        _p("第一节 数据产品的界定", "Heading2"),                     # P8
+        _p("一、数据产品化的核心环节", "Heading3"),                  # P9 正文真实标题
+        _p("数据产品化是把数据加工成可交付产品的过程。"),            # P10
+        _p("引用文献"),                                              # P11
+        _p("[2]某某.数据产品[J].2020."),                             # P12
+    ]
+    return parse_docx(_write(tmp_path, body, "toc.docx"))
+
+
+def test_toc_lines_after_references_are_marked(tmp_path):
+    book = _toc_book(tmp_path)
+    assert _unit(book, "P0005").zone == "references"
+    assert _unit(book, "P0006").zone == "toc"          # 与下一章正文标题同名的短行
+    assert _unit(book, "P0012").zone == "references"   # 最后一章之后没有目录行，不误伤
+
+
+def test_toc_lines_are_not_chunked(tmp_path):
+    cs = chunk_textbook(_toc_book(tmp_path), version="t1")
+    assert not any("P0006" in c.anchors for c in cs.chunks)
+    assert any("P0010" in c.anchors for c in cs.chunks)
+
+
+def test_toc_key_ignores_page_numbers_and_dots():
+    from rag.course.textbook import toc_key
+
+    assert toc_key("一、数据产品化的核心环节 ……12") == toc_key("一、数据产品化的核心环节")
+
+
 # ---------------------------------------------------------------- 工具函数与隔离
 
 def test_split_sentences_hard_splits_overlong_sentence():

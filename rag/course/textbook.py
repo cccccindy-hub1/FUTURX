@@ -8,7 +8,8 @@
   `Document.paragraphs` 序号一致，即本体 CSV 中 source_anchor 的编号方式；
 - 表格按在正文中的原位置输出（锚点 T##），不再追加到全文末尾；
 - 文本框单独成单元，不混进所在段落；
-- 按区域标注：front（书名/目录等首章之前内容）、body、summary（小结）、references（引用/参考文献）。
+- 按区域标注：front（书名/目录等首章之前内容）、body、summary（小结）、references（引用/参考文献）、
+  toc（引用文献之后、下一章标题之前，与下一章正文标题同名的短行，即该章的分章目录）。
 
 不依赖 python-docx，只用标准库。
 """
@@ -33,6 +34,8 @@ _SENTENCE_END = "。！？；：!?;:"
 _REFERENCES_RE = re.compile(r"^(引用文献|参考文献)\s*$")
 _SUMMARY_TITLES = {"小结", "本章小结"}
 _CAPTION_RE = re.compile(r"^[图表]\s*\d+")
+_TOC_MAX = 60
+_TOC_TAIL_RE = re.compile(r"[\s.．·…\-–—]*\d*$")
 
 _CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
@@ -219,6 +222,31 @@ class _Outline:
         return 0
 
 
+def toc_key(text: str) -> str:
+    """目录行与正文标题的比对键：去空白，并去掉末尾的点线与页码。"""
+    return _TOC_TAIL_RE.sub("", re.sub(r"\s+", "", text or ""))
+
+
+def _mark_toc(units: list[Unit]) -> None:
+    """把 references 区里属于「下一章分章目录」的行改标为 toc。
+
+    从后往前扫，维护「紧随其后的那一章」的全部标题键（含章标题自身）；references 区内
+    与之同名的短段落即目录行。最后一章之后没有下一章，不会误伤。
+    """
+    chapter_keys: set[str] = set()
+    following: set[str] = set()
+    for u in reversed(units):
+        if u.kind in ("heading", "subheading") and u.zone in ("body", "summary"):
+            key = toc_key(u.text)
+            if key:
+                chapter_keys.add(key)
+            if u.kind == "heading" and u.level == 1 and _CHAPTER_RE.match(u.text):
+                following, chapter_keys = chapter_keys, set()
+        elif u.zone == "references" and u.kind == "paragraph" and len(u.text) <= _TOC_MAX:
+            if toc_key(u.text) in following:
+                u.zone = "toc"
+
+
 def _is_subheading(text: str) -> bool:
     return (
         len(text) <= _SUBHEADING_MAX
@@ -302,6 +330,7 @@ def parse_docx(path: str | Path) -> Textbook:
                     rows=rows,
                 )
 
+    _mark_toc(units)
     return Textbook(
         path=str(path),
         sha256=hashlib.sha256(raw).hexdigest(),
