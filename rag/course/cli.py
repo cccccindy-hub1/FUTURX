@@ -71,6 +71,34 @@ def export(textbook: Path, out_dir: Path, version: str = BOOK_VERSION) -> dict:
     return summary
 
 
+def _run_ask(args) -> None:
+    from .llm import LLMNotConfigured, OpenAICompatClient
+    from .pipeline import CourseContext, ask, result_to_json
+
+    ctx = CourseContext.load(Path(args.root) if args.root else None, Path(args.textbook) if args.textbook else None)
+    select = []
+    for s in args.select:
+        cid, _, role = s.partition(":")
+        select.append((cid, role or "question_concept"))
+    llm = None
+    if not args.dry_run:
+        try:
+            llm = OpenAICompatClient()
+        except LLMNotConfigured as e:
+            raise SystemExit(str(e))
+    result = result_to_json(ask(args.question, ctx=ctx, llm=llm, active_concepts=args.active,
+                                strategy=args.strategy, dry_run=args.dry_run, select=select))
+    if args.json or args.dry_run:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if result["fallback"]:
+        print(f"[insufficient_evidence] {result['fallback']['reason']}：{result['fallback']['detail']}")
+        return
+    print(result["answer"]["text"])
+    print("\n引用：" + "；".join(f"{c['chunk_id']}（{' › '.join(c['path'])}）" for c in result["citations"]))
+    print(f"调用统计：{json.dumps(result['trace']['totals'], ensure_ascii=False)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rag.course", description="《数据要素》课程知识库")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -78,8 +106,24 @@ def main() -> None:
     ch.add_argument("--textbook", default=None, help="教材 docx 路径，默认取 COURSE_TEXTBOOK")
     ch.add_argument("--out", default=None, help="输出目录，默认 COURSE_CACHE_DIR/<版本>")
     ch.add_argument("--version", default=BOOK_VERSION, help="教材版本号（写入 chunk_id）")
+
+    ask = sub.add_parser("ask", help="Agentic 检索问答（选词→召回→筛选→作答）")
+    ask.add_argument("question", help="学生问题")
+    ask.add_argument("--root", default=None, help="本体数据根目录（只读），默认 COURSE_ONTO_ROOT")
+    ask.add_argument("--textbook", default=None, help="教材 docx，默认在数据根目录/教材 下查找")
+    ask.add_argument("--active", nargs="*", default=[], help="对话中已激活的概念ID")
+    ask.add_argument("--strategy", choices=["A", "B"], default="B",
+                     help="mention 召回策略：B（默认）=仅 question_concept 做字面召回，related_concept 只召回边证据；"
+                          "A=所有选中概念都做字面召回")
+    ask.add_argument("--dry-run", action="store_true", help="不调用任何 LLM：只跑本地召回估算（需 --select）")
+    ask.add_argument("--select", nargs="*", default=[],
+                     help="dry-run 手动指定概念，形如 C01-0001 或 C01-0001:related_concept")
+    ask.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = parser.parse_args()
 
+    if args.cmd == "ask":
+        _run_ask(args)
+        return
     if args.cmd == "chunk":
         textbook = Path(args.textbook) if args.textbook else COURSE_TEXTBOOK
         if not textbook.is_file():

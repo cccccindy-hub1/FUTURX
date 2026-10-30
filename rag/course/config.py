@@ -24,3 +24,22 @@ CHILD_MAX = int(os.environ.get("COURSE_CHILD_MAX", "500"))     # 子块打包上
 CHILD_MIN = int(os.environ.get("COURSE_CHILD_MIN", "120"))     # 短于此的段落与相邻段合并
 # 只有超过此长度的单段才按句切。书稿0906最长段 671 字，取 800 保证任何段落（含整段定义）都不被切开
 PARA_SPLIT = int(os.environ.get("COURSE_PARA_SPLIT", "800"))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    return default if v is None or not v.strip() else v.strip().lower() in ("1", "true", "yes", "on")
+
+
+# ---- 问答管线（M3）：胜算云 DeepSeek V4 Pro，OpenAI 兼容协议 ----
+# 与 Claude Code 的 ANTHROPIC_* 无关。API_BASE 不设默认值，未配置时 llm.OpenAICompatClient 会报错提示。
+COURSE_LLM_API_BASE = os.environ.get("COURSE_LLM_API_BASE", "").strip()
+COURSE_LLM_API_KEY = os.environ.get("COURSE_LLM_API_KEY", "").strip()
+COURSE_LLM_MODEL = os.environ.get("COURSE_LLM_MODEL") or "deepseek/deepseek-v4-pro"
+COURSE_SELECT_MODEL = os.environ.get("COURSE_SELECT_MODEL") or COURSE_LLM_MODEL
+COURSE_FILTER_MODEL = os.environ.get("COURSE_FILTER_MODEL") or COURSE_LLM_MODEL
+COURSE_ANSWER_MODEL = os.environ.get("COURSE_ANSWER_MODEL") or COURSE_LLM_MODEL
+COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：prompt 约定 JSON + 本地解析
+COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "6"))      # Step 1 最多工具调用轮数
+COURSE_RECALL_MAX_CHARS = int(os.environ.get("COURSE_RECALL_MAX_CHARS", "12000"))  # Step 3 单批子块正文字符上限
+SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))           # 标题行证据下沉的覆盖率阈值
