@@ -1,7 +1,7 @@
 """路由评测：对 rag/eval_data/router_eval.json 每题只调一次路由模型，不重试、不追加、不走规则兜底。
 
 用法：python -m rag.eval_router [--out rag/eval_data/router_eval_result.json] [--wait]
-- 只在北京时间 12–14 点或 18 点以后运行；--wait 时在窗口外等待到下一个窗口，否则直接退出；
+- 只在非高峰运行（北京时间高峰 09–12、14–18 点）；--wait 时在高峰期等待到非高峰，否则直接退出；
 - 失败（超时/报错/JSON 或字段非法）的题记为失败，不重试；
 - 结果与日志只记异常类型名，不含 key。
 """
@@ -23,8 +23,9 @@ BJ = timezone(timedelta(hours=8))
 
 
 def in_window(now: datetime) -> bool:
+    """非高峰：北京时间高峰为 09–12、14–18 点（价格翻倍），其余时段为非高峰。"""
     h = now.astimezone(BJ).hour
-    return 12 <= h < 14 or h >= 18
+    return not (9 <= h < 12 or 14 <= h < 18)
 
 
 def single_call(client, question: str) -> dict:

@@ -359,6 +359,10 @@ def test_eval_router_single_call_no_retry_and_summary():
     C.calls = 0
     assert er.run(C(), qs, lambda: datetime(2026, 10, 31, 15, 0, tzinfo=er.BJ))["skipped_outside_window"] == 3 and C.calls == 0
     assert er.in_window(datetime(2026, 10, 31, 12, 30, tzinfo=er.BJ)) and not er.in_window(datetime(2026, 10, 31, 14, 0, tzinfo=er.BJ))
+    # 高峰 09–12、14–18；其余（含凌晨 0–9 点）均为非高峰
+    hours = {h: er.in_window(datetime(2026, 10, 31, h, 30, tzinfo=er.BJ)) for h in range(24)}
+    assert [h for h, ok in hours.items() if not ok] == [9, 10, 11, 14, 15, 16, 17]
+    assert hours[0] and hours[8] and hours[12] and hours[13] and hours[18] and hours[23]
 
 
 def test_course_eval_counting_llm_hard_cap_blocks_before_calling(monkeypatch):

@@ -1,6 +1,6 @@
 """课程题完整评测（真实调用）：直接调用 pipeline.ask，记录每块来源（ontology/bm25/both）、筛选等级、引用。
 
-规则：仅非高峰（北京时间 12–14 / 18 点后）；每题 1 遍、不重试（SDK 自动重试已关）、失败记失败；
+规则：仅非高峰（北京时间高峰为 09–12、14–18 点）；每题 1 遍、不重试（SDK 自动重试已关）、失败记失败；
 调用硬上限 max_calls，到上限立即停止。结果只含异常类型名，不含 key。
 用法：python -m rag.course.eval_full [--max-calls 100] [--out rag/eval_data/course_full_eval_result.json]
 """
