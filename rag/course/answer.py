@@ -67,6 +67,8 @@ def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str],
             if cid not in valid:
                 valid.append(cid)
             return f"[{cid}]"
+        if tag in ("S#", "S＃"):           # 模型照抄提示词里的占位符：直接去掉，不计入无效引用
+            return ""
         if tag.startswith("de:"):          # 绕过编号直接写 chunk_id：一律不信任
             if tag not in invalid:
                 invalid.append(tag)

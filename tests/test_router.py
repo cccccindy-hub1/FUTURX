@@ -358,3 +358,34 @@ def test_eval_router_single_call_no_retry_and_summary():
     C.calls = 0
     assert er.run(C(), qs, lambda: datetime(2026, 10, 31, 15, 0, tzinfo=er.BJ))["skipped_outside_window"] == 3 and C.calls == 0
     assert er.in_window(datetime(2026, 10, 31, 12, 30, tzinfo=er.BJ)) and not er.in_window(datetime(2026, 10, 31, 14, 0, tzinfo=er.BJ))
+
+
+def test_course_eval_counting_llm_hard_cap_blocks_before_calling(monkeypatch):
+    from datetime import datetime
+    from rag import eval_course as ec
+
+    monkeypatch.setattr(ec, "in_window", lambda now: True)
+    inner = RouterLLM({"route": "course"})
+    shared = {"calls": 0, "cap": 2, "q_calls": 0, "q_in": 0, "q_out": 0}
+    c = ec.CountingLLM(inner, shared)
+    c.chat("a", [], model="m"); c.chat("a", [], model="m")
+    with pytest.raises(ec.CapReached):
+        c.chat("a", [], model="m")
+    assert len(inner.calls) == 2 and shared["calls"] == 2
+    monkeypatch.setattr(ec, "in_window", lambda now: False)
+    shared["cap"] = 9
+    with pytest.raises(ec.CapReached):
+        c.chat("a", [], model="m")
+    assert len(inner.calls) == 2
+
+
+# ---------------------------------------------------------------- 作答占位符 [S#]
+
+def test_sanitize_strips_literal_placeholder_and_keeps_valid_refs():
+    from rag.course import prompts
+    from rag.course.answer import sanitize_citations
+
+    text, valid, invalid, _ = sanitize_citations("依据均为教材原文 [S#]，见[S1]。", {"S1": "de:x"})
+    assert "[S#]" not in text and "S#" not in text and valid == ["de:x"] and invalid == []
+    assert "[de:x]" in text
+    assert "[S#]" not in prompts.ANSWER_SYSTEM.replace("“[S#]”", "")      # 提示词不再把 [S#] 当示例
