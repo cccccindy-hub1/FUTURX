@@ -10,7 +10,7 @@ from xml.sax.saxutils import escape
 import pytest
 from openpyxl import Workbook
 
-from rag.course import agent_select, answer, bm25, chunker, evidence, llm, ontology, passage_filter, pipeline, prompts, recall
+from rag.course import config, agent_select, answer, bm25, chunker, evidence, llm, ontology, passage_filter, pipeline, prompts, recall
 from rag.course.aliases import build_alias_table
 from rag.course.llm import LLMNotConfigured, LLMResult, ToolCall, Trace, TracingLLM
 from rag.course.textbook import parse_docx
@@ -89,6 +89,8 @@ def _concept_row(cid, ch, name, expert="", issue="通过核验", ctx=""):
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
     # 夹具段落都很短，默认阈值下 M1 会把 P0005/P0006/P0008 合并成一个子块；调小阈值让每段独立成块
+    # 既有测试脚本化多轮选词；快速路径另有专门测试（tests/test_router.py），这里默认关闭
+    monkeypatch.setattr(config, "COURSE_SELECT_FAST_PATH", False)
     monkeypatch.setattr(chunker, "CHILD_MIN", 10)
     monkeypatch.setattr(chunker, "CHILD_MAX", 30)
     cx = tmp_path / "c.xlsx"

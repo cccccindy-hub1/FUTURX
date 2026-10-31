@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from . import config, prompts
 from .llm import LLMClient, LLMError, parse_json_object
+from .aliases import norm, split_name
 from .vocab_tools import VocabIndex
 
 ROLES = ("question_concept", "related_concept")
@@ -43,12 +45,14 @@ class SelectResult:
     tool_log: list[dict] = field(default_factory=list)
     # 结束原因：finish / truncated / no_tool_call（LLM 只回了文字）/ parse_failed（JSON 路径重试后仍无法解析）
     end_reason: str = ""
+    fast_path: str = ""            # 非空表示走了快速路径（值为命中的别名），此时 0 次 LLM 调用
+    rounds: list[dict] = field(default_factory=list)   # 每轮 LLM 调用的耗时与 token
     final_text: str = ""           # end_reason 为 no_tool_call / parse_failed 时 LLM 回复的前 300 字，便于排查
 
     def to_dict(self) -> dict:
         return {"selected": [s.to_dict() for s in self.selected], "dropped": self.dropped, "steps": self.steps,
                 "truncated": self.truncated, "finished": self.finished, "parse_failures": self.parse_failures,
-                "tool_log": self.tool_log, "end_reason": self.end_reason, "final_text": self.final_text}
+                "tool_log": self.tool_log, "fast_path": self.fast_path, "rounds": self.rounds, "end_reason": self.end_reason, "final_text": self.final_text}
 
 
 def run_tool(index: VocabIndex, name: str, args: dict) -> dict:
@@ -102,12 +106,59 @@ def _finish(args: dict, index: VocabIndex, result: SelectResult) -> None:
     result.finished, result.end_reason = True, "finish"
 
 
+def _log_round(result: SelectResult, res) -> None:
+    result.rounds.append({"round": len(result.rounds) + 1, "latency_s": round(res.latency_s, 3),
+                          "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
+                          "tools": [c.name for c in res.tool_calls]})
+
+
+_MULTI_CUES = ("和", "与", "及", "以及", "或", "、", "区别", "不同", "异同", "比较", "对比", "关系", "联系", "之间",
+               "分别", "各自", "哪些", "为什么", "如何", "怎么", "怎样")
+_UNMATCHED_TERM_RE = re.compile(r"数据[一-鿿]{2,}")
+FAST_MAX_QUESTION_CHARS = 30
+
+
+def fast_select(question: str, index: VocabIndex) -> SelectResult | None:
+    """保守快速路径：问题里只命中唯一、无歧义的概念别名时直接选中，不调用 LLM。
+
+    必须同时满足（任一不满足返回 None，照常走多轮）：
+    1. 去掉被更长命中别名包含的别名后，恰好剩 1 个别名；
+    2. 该别名只对应 1 个概念（无同形多概念）；
+    3. 该概念可选，且没有同名的跨章概念（_name_groups 中仅它一个）。
+    只选 question_concept，不补关联概念——这是快速路径对覆盖面的主要代价。
+    """
+    q = question.strip()
+    if len(q) > FAST_MAX_QUESTION_CHARS or any(c in q for c in _MULTI_CUES):
+        return None                    # 对比 / 并列 / 开放式问题可能涉及多个概念，交给多轮
+    hits = index.aliases.find_aliases(question)
+    keys = [a.key for a in hits]
+    top = [a for a in hits if not any(a.key != k and a.key in k for k in keys)]
+    if len(top) != 1 or top[0].ambiguous:
+        return None
+    cid = top[0].concept_ids[0]
+    if index.reject_reason(cid) is not None:
+        return None
+    rest = norm(q).replace(top[0].key, "")
+    if _UNMATCHED_TERM_RE.search(rest):    # 剩余文本里还有没匹配上的「数据××」术语：可能漏掉第二个概念
+        return None
+    c = index.concepts[cid]
+    if len(index._name_groups.get(norm(split_name(c.name)[0]), [])) > 1:
+        return None
+    r = SelectResult(finished=True, end_reason="fast_path", fast_path=top[0].surface)
+    r.selected.append(Selection(cid, f"问题直接命中唯一概念别名「{top[0].surface}」", "question_concept"))
+    return r
+
+
 def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMClient, *,
                     max_steps: int | None = None, model: str | None = None,
-                    native_tools: bool | None = None) -> SelectResult:
+                    native_tools: bool | None = None, fast_path: bool | None = None) -> SelectResult:
     max_steps = config.COURSE_AGENT_MAX_STEPS if max_steps is None else max_steps
     model = model or config.COURSE_SELECT_MODEL
     native = config.COURSE_LLM_NATIVE_TOOLS if native_tools is None else native_tools
+    if config.COURSE_SELECT_FAST_PATH if fast_path is None else fast_path:
+        fast = fast_select(question, index)
+        if fast is not None:
+            return fast
     active = list(active_concepts or [])
     active_txt = "、".join(
         f"{c}《{index.concepts[c].name}》" if c in index.concepts else c for c in active) or "（无）"
@@ -125,6 +176,7 @@ def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMC
 def _loop_native(messages, index, llm, model, max_steps, result: SelectResult) -> None:
     while True:
         res = llm.chat("select", messages, model=model, tools=FINISH_ONLY if result.truncated else prompts.TOOL_SPECS)
+        _log_round(result, res)
         calls = res.tool_calls
         if not calls:                    # LLM 没调工具也没 finish：以当前选择结束，记录回复便于排查
             result.end_reason, result.final_text = "no_tool_call", (res.content or "")[:300]
@@ -156,6 +208,7 @@ def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> 
     retried = False
     while True:
         res = llm.chat("select", messages, model=model)
+        _log_round(result, res)
         try:
             obj = parse_json_object(res.content)
             name, args = obj.get("tool"), obj.get("args") or {}

@@ -40,7 +40,9 @@ COURSE_SELECT_MODEL = os.environ.get("COURSE_SELECT_MODEL") or COURSE_LLM_MODEL
 COURSE_FILTER_MODEL = os.environ.get("COURSE_FILTER_MODEL") or COURSE_LLM_MODEL
 COURSE_ANSWER_MODEL = os.environ.get("COURSE_ANSWER_MODEL") or COURSE_LLM_MODEL
 COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：prompt 约定 JSON + 本地解析
-COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "6"))      # Step 1 最多工具调用轮数
+COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "4"))      # Step 1 最多工具调用轮数
+# Step 1 快速路径：问题里只命中唯一、无歧义的概念别名时，不调用 LLM 直接选中（保守版，见 agent_select.fast_select）
+COURSE_SELECT_FAST_PATH = _env_bool("COURSE_SELECT_FAST_PATH", True)
 COURSE_RECALL_MAX_CHARS = int(os.environ.get("COURSE_RECALL_MAX_CHARS", "12000"))  # Step 3 单批子块正文字符上限
 SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))           # 标题行证据下沉的覆盖率阈值
 # Step 4 最多使用的子块数：先取筛选为 direct 的，再取 background，超出部分记入 trace

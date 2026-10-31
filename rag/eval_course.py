@@ -76,7 +76,10 @@ def main() -> None:
                        citation_paths=[c.get("path") for c in out["sources"]],
                        fallback=course.get("fallback"),
                        selected_concepts=course.get("selected_concepts"),
-                       steps=[c["step"] for c in ctr.get("calls", [])])
+                       steps=[c["step"] for c in ctr.get("calls", [])],
+                       select_rounds=((ctr.get("stages") or {}).get("select") or {}).get("rounds", []),
+                       fast_path=((ctr.get("stages") or {}).get("select") or {}).get("fast_path", ""),
+                       s_placeholder_in_answer="[S#]" in (out["answer"] or "") or "S#" in (out["answer"] or ""))
         except CapReached as e:
             row["error"], stopped = f"CapReached:{e}", str(e)
         except Exception as e:  # noqa: BLE001 - 只记类型名

@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from rag import config
+from test_course_pipeline import ctx  # noqa: F401  (课程夹具)
 from rag.adaptive import AdaptiveRAG
 from rag.course.llm import LLMResult, OpenAICompatClient
 from rag.query import RAGService
@@ -389,3 +390,53 @@ def test_sanitize_strips_literal_placeholder_and_keeps_valid_refs():
     assert "[S#]" not in text and "S#" not in text and valid == ["de:x"] and invalid == []
     assert "[de:x]" in text
     assert "[S#]" not in prompts.ANSWER_SYSTEM.replace("“[S#]”", "")      # 提示词不再把 [S#] 当示例
+
+
+# ---------------------------------------------------------------- 选词快速路径 + 每轮 trace
+
+def test_fast_path_unique_alias_skips_llm(ctx, monkeypatch):
+    from rag.course import agent_select, config as cc
+    monkeypatch.setattr(cc, "COURSE_SELECT_FAST_PATH", True)
+
+    class NoLLM:
+        def chat(self, *a, **k):
+            raise AssertionError("快速路径不应调用 LLM")
+    r = agent_select.select_concepts("数据要素的定义是什么", [], ctx.index, NoLLM(), native_tools=True)
+    assert r.fast_path and r.end_reason == "fast_path" and r.rounds == []
+    assert [(s.concept_id, s.role) for s in r.selected] == [("C01-0001", "question_concept")]
+
+
+@pytest.mark.parametrize("q", ["数据要素和数据权属有什么区别", "什么是数据要素以及它的特征、分类、价值、来源、治理和流通的全部内容"])
+def test_fast_path_declines_multi_concept_or_long_questions(ctx, q):
+    from rag.course import agent_select
+    assert agent_select.fast_select(q, ctx.index) is None
+
+
+def test_fast_path_declines_ambiguous_alias_and_unknown(ctx):
+    from rag.course import agent_select
+    assert agent_select.fast_select("今天天气", ctx.index) is None
+    for a in [a for a in ctx.index.aliases.active() if a.ambiguous]:     # 同形多概念的别名一律不走快速路径
+        assert agent_select.fast_select(f"{a.surface}是什么", ctx.index) is None
+
+
+def test_fast_path_declines_when_same_name_across_chapters(ctx, monkeypatch):
+    from rag.course import agent_select
+    monkeypatch.setitem(ctx.index._name_groups, "数据要素", ["C01-0001", "C09-0001"])
+    assert agent_select.fast_select("数据要素的定义是什么", ctx.index) is None
+
+
+def test_select_logs_each_round_latency_and_tokens(ctx):
+    from rag.course import agent_select
+    from test_course_pipeline import ScriptedLLM, finish_native, tc
+    llm_ = ScriptedLLM([tc("search_vocab", query="数据要素"), finish_native(("C01-0001", "question_concept"))])
+    r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, llm_, native_tools=True, fast_path=False)
+    assert [x["round"] for x in r.rounds] == [1, 2] and r.rounds[0]["tools"] == ["search_vocab"]
+    assert {"latency_s", "prompt_tokens", "completion_tokens"} <= set(r.rounds[0])
+    assert r.to_dict()["rounds"] == r.rounds and r.to_dict()["fast_path"] == ""
+
+
+def test_default_max_steps_is_four():
+    import os
+    from rag.course import config as cc
+    if "COURSE_AGENT_MAX_STEPS" not in os.environ:
+        assert cc.COURSE_AGENT_MAX_STEPS == 4
