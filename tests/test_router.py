@@ -644,3 +644,37 @@ def test_recall_gold_file_shape():
     g = json.load(open("rag/eval_data/course_recall_gold.json", encoding="utf-8"))
     assert [x["id"] for x in g] == [f"r{i}" for i in range(11, 21)]
     assert all(1 <= len(x["must_recall"]) <= 3 for x in g)
+
+
+# ---------------------------------------------------------------- 完整评测汇总（离线）
+
+def test_eval_full_summarize_counts_hits_grades_and_citations():
+    from rag.course.eval_full_report import summarize
+    gold = [{"id": "r11", "must_recall": [{"key": "a", "chunks": ["c1"]}, {"key": "b", "chunks": ["c2"]}]},
+            {"id": "r14", "must_recall": [{"key": "c", "chunks": ["c9"]}]}]
+    rows = [{"id": "r11", "error": "", "fallback": None, "citations": ["c1", "c3"],
+             "recalled": [{"chunk_id": "c1", "source": "ontology", "grade": "direct"},
+                          {"chunk_id": "c2", "source": "bm25", "grade": "background"},
+                          {"chunk_id": "c3", "source": "bm25", "grade": "direct"},
+                          {"chunk_id": "c4", "source": "bm25", "grade": "irrelevant"}]},
+            {"id": "r14", "error": "", "fallback": None, "citations": [],
+             "recalled": [{"chunk_id": "c9", "source": "both", "grade": "direct"}]},
+            {"id": "r15", "error": "CapReached:call cap reached"}]
+    s = summarize(rows, gold)
+    assert s["hit_rate"]["r11-r13"]["ontology_only"] == "1/2" and s["hit_rate"]["r11-r13"]["ontology_plus_bm25"] == "2/2"
+    assert s["hit_rate"]["r14-r20"]["ontology_only"] == "1/1"            # both 算作本体召回到
+    assert s["bm25_only_chunk_grades"] == {"direct": 1, "background": 1, "irrelevant": 1, "ungraded": 0}
+    assert s["bm25_only_chunks_cited_in_answers"] == 1                   # c3 是纯 BM25 块且被引用；c1 来自本体
+    assert s["per_question"][2] == {"id": "r15", "error": "CapReached:call cap reached"}
+
+
+def test_eval_full_capped_llm_stops_before_calling(monkeypatch):
+    from rag.course import eval_full as ef
+    monkeypatch.setattr(ef, "in_window", lambda now: True)
+    inner = RouterLLM({"route": "course"})
+    sh = {"calls": 0, "cap": 1}
+    c = ef.CappedLLM(inner, sh)
+    c.chat("a", [], model="m")
+    with pytest.raises(ef.CapReached):
+        c.chat("a", [], model="m")
+    assert len(inner.calls) == 1
