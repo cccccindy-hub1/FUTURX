@@ -281,3 +281,49 @@ def test_eval_set_shape():
     from collections import Counter
     assert len(rows) == 40 and Counter(r["expected_route"] for r in rows) == {k: 10 for k in
                                                                               ("thesis", "course", "policy", "off_topic")}
+
+
+# ---------------------------------------------------------------- serve 接线课程库
+
+def test_load_course_backend_unconfigured_returns_none(monkeypatch):
+    import rag.course.llm as cl
+    from rag import serve
+
+    def no_cfg(*a, **k):
+        raise cl.LLMNotConfigured("x")
+    monkeypatch.setattr(cl, "OpenAICompatClient", no_cfg)
+    assert serve.load_course_backend() == (None, None)
+
+
+def test_load_course_backend_missing_data_degrades_without_leaking(monkeypatch, caplog):
+    import rag.course.llm as cl
+    import rag.course.pipeline as pl
+    from rag import serve
+
+    monkeypatch.setattr(cl, "OpenAICompatClient", lambda *a, **k: object())
+
+    def boom(*a, **k):
+        raise FileNotFoundError(f"/secret/path {SECRET}")
+    monkeypatch.setattr(pl.CourseContext, "load", classmethod(lambda cls, *a, **k: boom()))
+    with caplog.at_level(logging.DEBUG):
+        assert serve.load_course_backend() == (None, None)
+    assert SECRET not in caplog.text and "FileNotFoundError" in caplog.text
+
+
+def test_build_app_injects_course_and_survives_degradation(monkeypatch):
+    from rag import serve
+
+    class FakeSvc:
+        llm = None
+        mode = "dense"
+    monkeypatch.setattr(serve, "RAGService", lambda **kw: FakeSvc())
+    ctx, llm = object(), object()
+    monkeypatch.setattr(serve, "load_course_backend", lambda: (ctx, llm))
+    u = serve.build_app().state.unified
+    assert u.course_ctx is ctx and u.course_llm is llm and u.rag is not None
+    monkeypatch.setattr(serve, "load_course_backend", lambda: (None, None))
+    app = serve.build_app()                      # 论文 RAG 照常启动
+    assert app.state.unified.course_ctx is None
+    assert TestClient(app).get("/health").json() == {"status": "ok"}
+    out = app.state.unified.__class__(router_client=route_llm("course"), course_ctx=None, course_llm=None).ask("什么是数据要素")
+    assert out["status"] == "unavailable"

@@ -54,6 +54,31 @@ def run_repl(**service_kwargs) -> None:
         _print_answer(ans, sources, docs)
 
 
+def load_course_backend():
+    """启动时加载一次课程库（与 rag.course.api.build_app 一致）：返回 (CourseContext, LLM 客户端)。
+
+    课程数据缺失、解析失败或 COURSE_LLM_* 未配置时返回 (None, None)，统一入口的 course 路由降级为
+    unavailable，不影响论文 RAG 启动。日志只记异常类型名，避免泄露路径细节或 key。
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    from .course.llm import LLMNotConfigured, OpenAICompatClient
+
+    try:
+        llm = OpenAICompatClient()
+    except LLMNotConfigured:
+        log.warning("课程库未启用：COURSE_LLM_* 未配置，/auto/ask 的 course 路由将返回 unavailable")
+        return None, None
+    try:
+        from .course.pipeline import CourseContext
+
+        return CourseContext.load(), llm
+    except Exception as e:  # noqa: BLE001 - 课程数据问题不能拖垮论文 RAG
+        log.warning("课程库未启用：加载失败（%s），/auto/ask 的 course 路由将返回 unavailable", type(e).__name__)
+        return None, None
+
+
 def build_app(**service_kwargs):
     """构造 FastAPI 应用（模型与向量库在启动时加载一次）。"""
     from pathlib import Path
@@ -81,11 +106,13 @@ def build_app(**service_kwargs):
 
     app.include_router(openai_router)
 
-    # 统一入口 POST /auto/ask：先路由再分发；路由客户端未配置时只用规则。课程库需另行注入 course_ctx/course_llm。
+    # 统一入口 POST /auto/ask：先路由再分发；路由客户端未配置时只用规则。课程库启动时加载一次，缺失则降级。
     from .router import build_router_client
     from .unified import UnifiedService, router as unified_router
 
-    app.state.unified = UnifiedService(rag=svc, router_client=build_router_client())
+    course_ctx, course_llm = load_course_backend()
+    app.state.unified = UnifiedService(rag=svc, router_client=build_router_client(),
+                                       course_ctx=course_ctx, course_llm=course_llm)
     app.include_router(unified_router)
 
     if web_dir.is_dir():
