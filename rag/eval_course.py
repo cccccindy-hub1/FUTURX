@@ -47,6 +47,7 @@ class CountingLLM:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=3)
+    ap.add_argument("--ids", default="", help="逗号分隔的题号（如 r13）；给定时忽略 --n")
     ap.add_argument("--max-calls", type=int, default=30)
     ap.add_argument("--out", default=str(EVAL_PATH.with_name("course_eval_result.json")))
     a = ap.parse_args()
@@ -61,7 +62,8 @@ def main() -> None:
         c._client = c._client.with_options(max_retries=0)
     shared = {"calls": 0, "cap": a.max_calls, "q_calls": 0, "q_in": 0, "q_out": 0}
     svc = UnifiedService(router_client=CountingLLM(rclient, shared), course_ctx=ctx, course_llm=CountingLLM(cllm, shared))
-    qs = [q for q in json.load(open(EVAL_PATH, encoding="utf-8")) if q["expected_route"] == "course"][: a.n]
+    qs = [q for q in json.load(open(EVAL_PATH, encoding="utf-8")) if q["expected_route"] == "course"]
+    qs = [q for q in qs if q["id"] in a.ids.split(",")] if a.ids else qs[: a.n]
     rows, stopped = [], ""
     for q in qs:
         shared.update(q_calls=0, q_in=0, q_out=0)
@@ -89,7 +91,9 @@ def main() -> None:
         rows.append(row)
         if stopped:
             break
-    res = {"model": config.ROUTER_MODEL, "started_bj": datetime.now(BJ).isoformat(timespec="seconds"),
+    from .course import config as cc
+    res = {"fast_path": cc.COURSE_SELECT_FAST_PATH, "max_steps": cc.COURSE_AGENT_MAX_STEPS,
+           "model": config.ROUTER_MODEL, "started_bj": datetime.now(BJ).isoformat(timespec="seconds"),
            "total_calls": shared["calls"], "cap": a.max_calls, "stopped": stopped, "rows": rows}
     Path(a.out).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"done: calls={shared['calls']}/{a.max_calls} rows={len(rows)} stopped={stopped!r}")
