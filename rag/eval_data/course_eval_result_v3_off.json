@@ -318,11 +318,157 @@
   {
    "id": "r13",
    "question": "数据资产入表的基本思路是什么？",
-   "error": "CapReached:call cap reached",
-   "llm_calls": 6,
-   "prompt_tokens": 19628,
-   "completion_tokens": 1813,
-   "elapsed_s": 39.54
+   "error": "",
+   "route": "course",
+   "status": "ok",
+   "answer": "数据资产入表的基本思路可以从定义定位、会计确认依据、实践路径和前提条件几个方面理解。\n\n首先，从定义与定位看，数据资产入表是将符合确认条件的数据资产纳入企业财务报表体系的过程，是数据资产化的制度保障 [de:0906:ch03.1.2.3.i2:001:be356630]；其核心意义在于实现数据资产从表外资源向表内资产的转化，使其成为企业可计量、可核算、可管理的正式财富形态 [de:0906:ch03.1.2.3.i2:001:be356630]。本体中记录为“数据资产化—包含步骤→数据资产入表”[本体]，但教材原文更强调其作为制度保障的定位 [de:0906:ch03.1.2.3.i2:001:be356630]。\n\n其次，从会计确认依据看，依据财政部《企业数据资源相关会计处理暂行规定》，满足条件的数据资产可按无形资产或存货等科目进行表内确认与计量 [de:0906:ch03.1.2.3.i2:001:be356630][de:0906:ch04.3.3:000:24f4dc38]。本体中记录为“数据资产入表—受其规制→财政部《企业数据资源相关会计处理暂行规定》”[本体]。\n\n第三，从实践路径看，入表驱动型路径以组织数据资源会计处理为抓手，核心目标是使数据价值从“隐性”走向“显性”，通过财务报表反映数据资产的存在，并通过会计确认要求倒逼企业补齐数据资产管理短板 [de:0906:ch04.3.3:000:24f4dc38]。该路径通常包括六个步骤：数据资源盘点、权属与合规审查、资产识别、成本归集、价值评估与会计判断、持续披露与后续管理 [de:0906:ch04.3.3:000:24f4dc38]。本体中记录为这些步骤是入表驱动型路径的“包含步骤”[本体]。\n\n第四，从入表前提条件看，数据产品入表要求组织证明数据来源合法、受自身控制、能带来经济利益、成本或价值可靠计量；若缺少数据目录、权属证明、成本台账和质量报告，入表就缺乏依据 [de:0906:ch04.2.2.3:001:9133ee39]。因此，入表的基本思路也体现为以会计确认要求倒逼建立数据资产管理体系，完善数据盘点、合规审查、成本归集、价值评估和信息披露 [de:0906:ch04.2.2.3:001:9133ee39]。",
+   "citations": [
+    "de:0906:ch03.1.2.3.i2:001:be356630",
+    "de:0906:ch04.3.3:000:24f4dc38",
+    "de:0906:ch04.2.2.3:001:9133ee39"
+   ],
+   "citation_paths": [
+    [
+     "第三章 数据价值",
+     "第一节 数据价值的形成",
+     "二、数据价值的形成",
+     "（三）数据资产化",
+     "2.数据资产化的主要环节"
+    ],
+    [
+     "第四章 数据资产",
+     "第三节 数据资产化的实践路径",
+     "三、入表驱动型路径"
+    ],
+    [
+     "第四章 数据资产",
+     "第二节 数据资产化的管理活动框架",
+     "二、数据运营管理",
+     "（三）数据产品入表"
+    ]
+   ],
+   "fallback": null,
+   "selected_concepts": [
+    {
+     "concept_id": "C03-0071",
+     "reason": "问题直接询问数据资产入表，是该主题的核心概念",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C04-0194",
+     "reason": "入表驱动型路径直接回答入表的基本思路/路径",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C04-0197",
+     "reason": "数据资源盘点是入表路径的起始环节",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C04-0198",
+     "reason": "权属与合规审查是入表路径的必要环节",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C04-0199",
+     "reason": "资产识别是判断能否入表的关键环节",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C04-0249",
+     "reason": "成本归集是入表计量与会计处理的基础",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C04-0193",
+     "reason": "价值评估与会计判断是入表的核心步骤",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C04-0195",
+     "reason": "持续披露与后续管理是入表后的管理环节",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0072",
+     "reason": "财政部会计处理规定是入表的制度依据",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0065",
+     "reason": "数据资产化是理解入表的上位背景概念",
+     "role": "related_concept"
+    }
+   ],
+   "steps": [
+    "select",
+    "select",
+    "select",
+    "select",
+    "filter",
+    "answer"
+   ],
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 9.209,
+     "prompt_tokens": 995,
+     "completion_tokens": 171,
+     "tools": [
+      "search_vocab",
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 13.249,
+     "prompt_tokens": 8001,
+     "completion_tokens": 351,
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 7.493,
+     "prompt_tokens": 3561,
+     "completion_tokens": 221,
+     "tools": [
+      "get_neighbors",
+      "get_neighbors",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 13.835,
+     "prompt_tokens": 4796,
+     "completion_tokens": 826,
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "fast_path": "",
+   "s_placeholder_in_answer": false,
+   "llm_calls": 7,
+   "prompt_tokens": 22985,
+   "completion_tokens": 4414,
+   "elapsed_s": 91.42
   }
- ]
+ ],
+ "r13_truncated_first_attempt": {
+  "error": "CapReached:call cap reached",
+  "llm_calls": 6,
+  "note": "首次因 20 次总上限被截断，已补跑"
+ },
+ "r13_rerun": {
+  "started_bj": "2026-10-31T20:09:56+08:00",
+  "total_calls": 7,
+  "cap": 10
+ }
 }
