@@ -327,3 +327,34 @@ def test_build_app_injects_course_and_survives_degradation(monkeypatch):
     assert TestClient(app).get("/health").json() == {"status": "ok"}
     out = app.state.unified.__class__(router_client=route_llm("course"), course_ctx=None, course_llm=None).ask("什么是数据要素")
     assert out["status"] == "unavailable"
+
+
+# ---------------------------------------------------------------- 路由评测脚本（mock）
+
+def test_eval_router_single_call_no_retry_and_summary():
+    from datetime import datetime
+    from rag import eval_router as er
+
+    qs = [{"id": "1", "question": "a", "expected_route": "course", "expected_complexity": "simple"},
+          {"id": "2", "question": "b", "expected_route": "thesis", "expected_complexity": "simple"},
+          {"id": "3", "question": "c", "expected_route": "off_topic", "expected_complexity": "simple"}]
+    replies = iter([{"route": "course", "complexity": "simple", "reason": "r"}, "not json",
+                    {"route": "policy", "complexity": "simple", "reason": "x"}])
+
+    class C:
+        calls = 0
+
+        def chat(self, step, messages, *, model, tools=None, json_mode=False):
+            C.calls += 1
+            r = next(replies)
+            return LLMResult(content=r if isinstance(r, str) else json.dumps(r), latency_s=0.5)
+    ok_time = lambda: datetime(2026, 10, 31, 19, 0, tzinfo=er.BJ)
+    out = er.run(C(), qs, ok_time)
+    assert C.calls == 3                                     # 每题 1 次，失败也不重试
+    s = out["summary"]
+    assert s["failures"] == 1 and s["per_class"]["thesis"]["failed"] == 1
+    assert s["confusion"]["off_topic->policy"] == 1 and s["overall_accuracy"] == round(1 / 3, 3)
+    # 窗口外不调用
+    C.calls = 0
+    assert er.run(C(), qs, lambda: datetime(2026, 10, 31, 15, 0, tzinfo=er.BJ))["skipped_outside_window"] == 3 and C.calls == 0
+    assert er.in_window(datetime(2026, 10, 31, 12, 30, tzinfo=er.BJ)) and not er.in_window(datetime(2026, 10, 31, 14, 0, tzinfo=er.BJ))
