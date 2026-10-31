@@ -17,6 +17,7 @@ from .aliases import AliasTable, build_alias_table
 from .answer import answer_question
 from .chunker import ChunkSet, chunk_textbook
 from .evidence import AnchorIndex
+from .fallback import ChunkBM25
 from .llm import LLMClient, Trace, TracingLLM
 from .ontology import ConceptTable, OntologyPaths, Record, load_concepts, load_records
 from .passage_filter import filter_passages, pick_for_answer
@@ -37,6 +38,7 @@ class CourseContext:
     index: VocabIndex
     anchors: AnchorIndex
     recaller: Recaller
+    bm25: ChunkBM25 | None = None     # 兜底召回索引（COURSE_BM25_TOPK=0 时仍构建，只是不使用）
 
     @classmethod
     def build(cls, concepts: ConceptTable, records: list[Record], book: Textbook,
@@ -46,7 +48,7 @@ class CourseContext:
         anchors = AnchorIndex(book)
         return cls(concepts, records, book, chunkset, aliases,
                    VocabIndex(concepts, aliases, records, use_jieba=use_jieba), anchors,
-                   Recaller(records, chunkset, anchors, aliases, concepts))
+                   Recaller(records, chunkset, anchors, aliases, concepts), ChunkBM25(chunkset, use_jieba=use_jieba))
 
     @classmethod
     def load(cls, root: Path | None = None, textbook: Path | None = None) -> "CourseContext":
@@ -93,22 +95,31 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     sr: SelectResult = select_concepts(question, active_concepts, ctx.index, traced)
     trace.stages["select"] = {k: v for k, v in sr.to_dict().items() if k != "selected"}
     res["selected_concepts"] = [s.to_dict() for s in sr.selected]
-    if not sr.selected:
+    use_bm25 = ctx.bm25 is not None and config.COURSE_BM25_TOPK > 0
+    if not sr.selected and not use_bm25:
         res["fallback"] = _fallback("no_valid_concepts", "Step 1 没有选出任何有效概念")
         return res
 
     # Step 2
     rr = ctx.recaller.recall([(s.concept_id, s.role) for s in sr.selected], strategy)
+    onto_ids = {i.chunk_id for i in rr.items}
+    bm25_stats = None
+    if use_bm25:
+        bm25_stats = ctx.recaller.merge_extra(rr, ctx.bm25.search(question, config.COURSE_BM25_TOPK))
     batches = batch_by_budget(rr.items, max_chars)
     trace.stages["recall"] = {
         "strategy": strategy, "chunks": len(rr.items), "batches": [
             {"index": i, "size": len(b), "chars": sum(len(x.text) for x in b),
              "tier_min": b[0].tier, "tier_max": b[-1].tier} for i, b in enumerate(batches)],
         "excluded": rr.excluded, "sunk": rr.sunk, "zero_mention": rr.zero_mention,
-        "ontology_only": rr.ontology_only}
+        "ontology_only": rr.ontology_only, "bm25": bm25_stats,
+        "sources": {"ontology": sum(i.source == "ontology" for i in rr.items), "bm25": sum(i.source == "bm25" for i in rr.items),
+                    "both": sum(i.source == "both" for i in rr.items)}, "ontology_chunks": len(onto_ids)}
     res["recalled"] = [i.to_dict(with_text=False) for i in rr.items]
     if not rr.items:
-        res["fallback"] = _fallback("no_recall", "选中概念没有召回到任何教材子块")
+        res["fallback"] = _fallback("no_valid_concepts" if not sr.selected else "no_recall",
+                                    "Step 1 没有选出任何有效概念，BM25 兜底也没有命中" if not sr.selected
+                                    else "选中概念没有召回到任何教材子块")
         return res
 
     # Step 3

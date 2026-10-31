@@ -1,0 +1,219 @@
+[
+ {
+  "id": "r11",
+  "question": "什么是数据要素？",
+  "must_recall": [
+   {
+    "key": "数据要素是指根据特定生产需求"
+   },
+   {
+    "key": "数据要素则是数据成为生产要素后"
+   }
+  ],
+  "ontology_selection_v1": [
+   {
+    "concept_id": "C01-0001",
+    "role": "question_concept"
+   },
+   {
+    "concept_id": "C01-0028",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C01-0027",
+    "role": "related_concept"
+   }
+  ]
+ },
+ {
+  "id": "r12",
+  "question": "数据产权和数据所有权有什么不同？",
+  "must_recall": [
+   {
+    "key": "而非传统意义上的所有权"
+   },
+   {
+    "key": "从“所有权思维”到“权能分割思维”的转变"
+   },
+   {
+    "key": "数据资源持有权、数据加工使用权和数据产品经营权三类权利"
+   }
+  ],
+  "ontology_selection_v1": [
+   {
+    "concept_id": "C02-0177",
+    "role": "question_concept"
+   },
+   {
+    "concept_id": "C04-0042",
+    "role": "question_concept"
+   },
+   {
+    "concept_id": "C02-0176",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C02-0188",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C02-0185",
+    "role": "related_concept"
+   }
+  ]
+ },
+ {
+  "id": "r13",
+  "question": "数据资产入表的基本思路是什么？",
+  "must_recall": [
+   {
+    "key": "数据资产入表是将符合确认条件的数据资产纳入企业财务报表体系"
+   },
+   {
+    "key": "入表驱动型路径以组织数据资源会计处理为抓手"
+   },
+   {
+    "key": "管理筑基型路径强调在尚未具备大规模运营"
+   }
+  ],
+  "ontology_selection_v1": [
+   {
+    "concept_id": "C03-0071",
+    "role": "question_concept"
+   },
+   {
+    "concept_id": "C04-0194",
+    "role": "question_concept"
+   },
+   {
+    "concept_id": "C03-0072",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C03-0066",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0197",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0198",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0199",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0193",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0249",
+    "role": "related_concept"
+   },
+   {
+    "concept_id": "C04-0195",
+    "role": "related_concept"
+   }
+  ]
+ },
+ {
+  "id": "r14",
+  "question": "数据要素市场有哪些构成部分？",
+  "must_recall": [
+   {
+    "key": "数据市场，简单而言就是以数据产品为交易标的的制度场域"
+   },
+   {
+    "key": "交易撮合机制是连接供需双方的桥梁和纽带"
+   },
+   {
+    "key": "价格发现机制解决数据定价的问题"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r15",
+  "question": "数据确权为什么难？",
+  "must_recall": [
+   {
+    "key": "当前学界关于数据是否应当确权存在根本性分歧"
+   },
+   {
+    "key": "数据非权利客体论认为"
+   },
+   {
+    "key": "数据产权难以实现论认为"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r16",
+  "question": "数据价值化包括哪些环节？",
+  "must_recall": [
+   {
+    "key": "数据资源化是数据要素价值实现的基础环节"
+   },
+   {
+    "key": "数据要素化是数据价值形成的核心环节"
+   },
+   {
+    "key": "涉及资源化、要素化、资产化与资本化四个环节"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r17",
+  "question": "数据交易所和数据交易平台的区别？",
+  "must_recall": [
+   {
+    "key": "数据交易所与场外市场是数据交易的两种基本组织形态"
+   },
+   {
+    "key": "场内交易是指在数据交易所"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r18",
+  "question": "数据要素的非竞争性体现在哪？",
+  "must_recall": [
+   {
+    "key": "竞争性是指一方的使用会减少另一方可用性的程度"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r19",
+  "question": "数据定价有哪些常见方法？",
+  "must_recall": [
+   {
+    "key": "价格发现机制解决数据定价的问题"
+   },
+   {
+    "key": "公开可信的交易案例仍然有限"
+   }
+  ],
+  "ontology_selection_v1": null
+ },
+ {
+  "id": "r20",
+  "question": "数据治理与数据管理的关系是什么？",
+  "must_recall": [
+   {
+    "key": "数据治理的概念在理论研究和机构实践两个层面尚未形成完全统一的共识"
+   },
+   {
+    "key": "数据资产管理目标决定了数据资产化的方向"
+   }
+  ],
+  "ontology_selection_v1": null
+ }
+]

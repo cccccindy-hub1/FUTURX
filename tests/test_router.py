@@ -438,13 +438,13 @@ def test_select_logs_each_round_latency_and_tokens(ctx):
     assert r.to_dict()["rounds"] == r.rounds and r.to_dict()["fast_path"] == ""
 
 
-def test_default_max_steps_is_seven_and_select_reasoning_default_unchanged():
+def test_default_max_steps_is_seven_and_select_reasoning_disabled():
     import os
     from rag.course import config as cc
     if "COURSE_AGENT_MAX_STEPS" not in os.environ:
         assert cc.COURSE_AGENT_MAX_STEPS == 7                      # 6 次探索 + 1 次强制 finish
     if "COURSE_SELECT_REASONING" not in os.environ:
-        assert cc.COURSE_REASONING["select"] == ""                 # 默认值本次不改：不发送 reasoning 参数
+        assert cc.COURSE_REASONING["select"] == "disabled"         # 选词默认关闭思考
 
 
 # ---------------------------------------------------------------- 快速路径关联概念 / 默认关闭 / 压缩 / 上限 / 本体为空
@@ -559,3 +559,88 @@ def test_select_rounds_without_reasoning_for_records_none(ctx):
     r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, ScriptedLLM([finish_native(("C01-0001", "question_concept"))]),
                                      native_tools=True, fast_path=False)
     assert r.rounds[0]["reasoning_mode"] is None and r.rounds[0]["reasoning_sent"] is None
+
+
+# ---------------------------------------------------------------- BM25 兜底召回
+
+def test_chunk_bm25_finds_by_question_and_drops_stopwords(ctx):
+    from rag.course.fallback import ChunkBM25
+    b = ChunkBM25(ctx.chunkset, use_jieba=False)
+    assert "什么" not in b.query_tokens("什么是数据要素") and b.search("数据要素", 0) == []
+    hits = b.search("数据要素", 3)
+    assert hits and all(s > 0 for _, s in hits) and hits == sorted(hits, key=lambda x: -x[1])
+
+
+def test_merge_extra_dedups_and_marks_source(ctx):
+    from rag.course.recall import BM25_VIA
+    rr = ctx.recaller.recall([("C01-0001", "question_concept")])
+    onto = {i.chunk_id for i in rr.items}
+    extra = [c for c in ctx.chunkset.chunks if c.chunk_id not in onto][:2]
+    both = ctx.chunkset.chunks[[c.chunk_id for c in ctx.chunkset.chunks].index(next(iter(onto)))]
+    st = ctx.recaller.merge_extra(rr, [(both, 3.0)] + [(c, 1.0) for c in extra])
+    ids = [i.chunk_id for i in rr.items]
+    assert len(ids) == len(set(ids))                                      # 去重
+    by = {i.chunk_id: i for i in rr.items}
+    assert by[both.chunk_id].source == "both" and all(by[c.chunk_id].source == "bm25" for c in extra)
+    assert all(i.source == "ontology" for i in rr.items if i.chunk_id in onto and i.chunk_id != both.chunk_id)
+    assert st["overlap"] == 1 and st["added"] == len(extra) and st["hits"][0]["also_ontology"] is True
+    assert by[extra[0].chunk_id].tier == 3 and any(r.via == BM25_VIA for r in by[extra[0].chunk_id].reasons)
+    assert [i.tier for i in rr.items] == sorted(i.tier for i in rr.items)  # 仍按 tier 升序，BM25 命中不插队
+    assert "source" in rr.items[0].to_dict() and rr.items[0].to_dict()["source"] in ("ontology", "both", "bm25")
+
+
+def test_pipeline_bm25_rescues_missed_concept(ctx, monkeypatch):
+    from rag.course import config as cc, pipeline
+    from test_course_pipeline import ScriptedLLM, finish_native
+    sel = [("C01-0003", "question_concept")]                               # 选词漏选了 C01-0001
+    onto = {i.chunk_id for i in ctx.recaller.recall(sel).items}
+    monkeypatch.setattr(cc, "COURSE_BM25_TOPK", 5)
+    only_bm25 = [c for c, _ in ctx.bm25.search("什么是数据要素", 5) if c.chunk_id not in onto]
+    assert only_bm25, "夹具里应有只被 BM25 召回的块"
+    llm_ = ScriptedLLM([finish_native(*sel), lambda s, m: (_ for _ in ()).throw(RuntimeError("stop"))])
+    with pytest.raises(RuntimeError, match="stop"):
+        pipeline.ask("什么是数据要素", ctx=ctx, llm=llm_)
+    filter_prompt = llm_.calls[1]["messages"][1]["content"]
+    assert all(c.text in filter_prompt for c in only_bm25)                 # 漏选概念对应的块靠 BM25 进入了筛选
+    monkeypatch.setattr(cc, "COURSE_BM25_TOPK", 0)
+    llm2 = ScriptedLLM([finish_native(*sel), lambda s, m: (_ for _ in ()).throw(RuntimeError("stop"))])
+    with pytest.raises(RuntimeError):
+        pipeline.ask("什么是数据要素", ctx=ctx, llm=llm2)
+    assert not any(c.text in llm2.calls[1]["messages"][1]["content"] for c in only_bm25)   # 关闭后不会出现
+
+
+def test_pipeline_trace_marks_sources_and_allows_empty_selection(ctx, monkeypatch):
+    from rag.course import config as cc, pipeline
+    from test_course_pipeline import ScriptedLLM, finish_native
+    monkeypatch.setattr(cc, "COURSE_BM25_TOPK", 5)
+    llm_ = ScriptedLLM([finish_native(), lambda s, m: (_ for _ in ()).throw(RuntimeError("stop"))])
+    with pytest.raises(RuntimeError, match="stop"):                       # 选词一个概念都没选，也能靠 BM25 进入筛选
+        pipeline.ask("数据要素", ctx=ctx, llm=llm_)
+    monkeypatch.setattr(cc, "COURSE_BM25_TOPK", 0)
+    r = pipeline.ask("q", ctx=ctx, llm=ScriptedLLM([finish_native()]))
+    assert r["fallback"]["reason"] == "no_valid_concepts"                  # 关闭兜底时行为不变
+
+
+def test_bm25_topk_zero_disables_and_default_is_eight():
+    import os
+    from rag.course import config as cc
+    if "COURSE_BM25_TOPK" not in os.environ:
+        assert cc.COURSE_BM25_TOPK == 8
+
+
+def test_recall_eval_runs_offline_and_counts_hits(ctx):
+    from rag.course import recall_eval
+    gold = [{"id": "g1", "question": "数据要素", "must_recall": [{"key": "数据要素"}],
+             "ontology_selection_v1": [{"concept_id": "C01-0001", "role": "question_concept"}]},
+            {"id": "g2", "question": "数据要素", "must_recall": [{"key": "数据要素"}], "ontology_selection_v1": None}]
+    res = recall_eval.evaluate(ctx, gold, 3)
+    assert res["comparable_questions"] == ["g1"] and res["questions_without_ontology_record"] == ["g2"]
+    assert res["summary_comparable"]["ontology+bm25"]["total"] == 1
+    with pytest.raises(ValueError):
+        recall_eval.evaluate(ctx, [{"id": "x", "question": "q", "must_recall": [{"key": "不存在的关键句XYZ"}]}], 3)
+
+
+def test_recall_gold_file_shape():
+    g = json.load(open("rag/eval_data/course_recall_gold.json", encoding="utf-8"))
+    assert [x["id"] for x in g] == [f"r{i}" for i in range(11, 21)]
+    assert all(1 <= len(x["must_recall"]) <= 3 for x in g)

@@ -31,6 +31,7 @@ DEFINITION_PREDICATE = "hasDefinition"
 EXPERT_MIN = 0.99          # expert_relevance_weight 达到此值视为专家来源（数据中取值 1 / 0.8 / 0.6）
 EDGE = "edge_evidence"
 MENTION = "mention"
+BM25_VIA = "bm25"           # 兜底召回：问题对教材子块做 BM25（见 rag.course.fallback）
 STRATEGY_A = "A"           # 所有选中概念都做 mention 召回（--strategy A）
 STRATEGY_B = "B"           # 只有 question_concept 做 mention 召回；related_concept 只召回边证据（默认）
 DEFAULT_STRATEGY = STRATEGY_B
@@ -53,8 +54,11 @@ class Reason:
     sunk: str | None = None        # 下沉方式（SINK_MATCHED / SINK_FIRST），未下沉为 None
     sink_score: float | None = None
     confidence: float | None = None
+    score: float | None = None     # 仅 bm25：BM25 得分
 
     def label(self) -> str:
+        if self.via == BM25_VIA:
+            return "bm25"
         if self.via == MENTION:
             return f"mention:{self.concept_id}"
         via = f"edge_evidence({self.sunk})" if self.sunk else "edge_evidence"
@@ -78,9 +82,16 @@ class Recalled:
     def tier(self) -> int:
         return min(_reason_tier(r) for r in self.reasons) if self.reasons else 3
 
+    @property
+    def source(self) -> str:
+        """来源：ontology（只被本体召回）/ bm25（只被 BM25 兜底召回）/ both。"""
+        has_bm25 = any(r.via == BM25_VIA for r in self.reasons)
+        has_onto = any(r.via != BM25_VIA for r in self.reasons)
+        return "both" if has_bm25 and has_onto else "bm25" if has_bm25 else "ontology"
+
     def to_dict(self, with_text: bool = True) -> dict:
         d = {"chunk_id": self.chunk_id, "parent_id": self.parent_id, "path": self.path,
-             "chunk_type": self.chunk_type, "anchors": self.anchors, "tier": self.tier,
+             "chunk_type": self.chunk_type, "anchors": self.anchors, "tier": self.tier, "source": self.source,
              "reasons": [r.to_dict() for r in self.reasons]}
         if with_text:
             d["text"] = self.text
@@ -103,7 +114,7 @@ class RecallResult:
 
 
 def _reason_tier(r: Reason) -> int:
-    if r.via == MENTION:
+    if r.via in (MENTION, BM25_VIA):
         return 3
     if r.evidence in ("verified", "nearby", "composite"):
         return 0 if r.source_tier == "expert" else 1
@@ -267,6 +278,24 @@ class Recaller:
             item = acc[c.chunk_id] = Recalled(c.chunk_id, c.parent_id, c.path, c.text, c.chunk_type, c.anchors)
         if reason not in item.reasons:
             item.reasons.append(reason)
+
+    def merge_extra(self, rr: RecallResult, hits: list[tuple[Chunk, float]]) -> dict:
+        """把 BM25 兜底命中并入本体召回结果（去重、标来源、按 tier 与文档顺序重排），返回写进 trace 的统计。"""
+        by_id = {it.chunk_id: it for it in rr.items}
+        stats: dict = {"topk": len(hits), "added": 0, "overlap": 0, "hits": []}
+        for c, score in hits:
+            item = by_id.get(c.chunk_id)
+            both = item is not None
+            if item is None:
+                item = by_id[c.chunk_id] = Recalled(c.chunk_id, c.parent_id, c.path, c.text, c.chunk_type, c.anchors)
+                rr.items.append(item)
+            item.reasons.append(Reason(concept_id="", via=BM25_VIA, anchor=c.anchors[0] if c.anchors else "",
+                                       score=round(score, 3)))
+            stats["overlap" if both else "added"] += 1
+            stats["hits"].append({"chunk_id": c.chunk_id, "score": round(score, 3), "also_ontology": both})
+        order = {c.chunk_id: i for i, c in enumerate(self.locator.chunks)}
+        rr.items.sort(key=lambda r: (r.tier, order.get(r.chunk_id, 0)))
+        return stats
 
     # ---- 入口 ----
     def recall(self, selected: list[tuple[str, str]], strategy: str = DEFAULT_STRATEGY) -> RecallResult:

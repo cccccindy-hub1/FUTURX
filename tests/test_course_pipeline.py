@@ -91,6 +91,8 @@ def ctx(tmp_path, monkeypatch):
     # 夹具段落都很短，默认阈值下 M1 会把 P0005/P0006/P0008 合并成一个子块；调小阈值让每段独立成块
     # 既有测试脚本化多轮选词；快速路径另有专门测试（tests/test_router.py），这里默认关闭
     monkeypatch.setattr(config, "COURSE_SELECT_FAST_PATH", False)
+    # 既有测试验证本体召回本身；BM25 兜底召回另有专门测试（tests/test_router.py），这里默认关闭
+    monkeypatch.setattr(config, "COURSE_BM25_TOPK", 0)
     monkeypatch.setattr(chunker, "CHILD_MIN", 10)
     monkeypatch.setattr(chunker, "CHILD_MAX", 30)
     cx = tmp_path / "c.xlsx"

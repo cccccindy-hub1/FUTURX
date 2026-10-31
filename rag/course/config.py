@@ -51,10 +51,13 @@ SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))          
 COURSE_ANSWER_MAX_CHUNKS = int(os.environ.get("COURSE_ANSWER_MAX_CHUNKS", "15"))
 # 各步骤的思考模式（胜算云 reasoning 参数）：disabled / low / medium / high；留空则不发送，用模型默认
 COURSE_REASONING = {
-    "select": os.environ.get("COURSE_SELECT_REASONING", "").strip(),
+    "select": os.environ.get("COURSE_SELECT_REASONING", "disabled").strip(),
     "filter": os.environ.get("COURSE_FILTER_REASONING", "disabled").strip(),
     "answer": os.environ.get("COURSE_ANSWER_REASONING", "low").strip(),
 }
 # HTTP 接口（rag.course.api）单个问题的字符上限，防止超长输入放大 LLM 费用
 COURSE_QUESTION_MAX_CHARS = int(os.environ.get("COURSE_QUESTION_MAX_CHARS", "500"))
 
+
+# 兜底召回：用问题对教材子块做 BM25（jieba），取 top-k 与本体召回合并去重后再进入筛选；0 = 关闭（见 rag.course.fallback）
+COURSE_BM25_TOPK = int(os.environ.get("COURSE_BM25_TOPK", "8"))
