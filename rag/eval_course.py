@@ -92,7 +92,7 @@ def main() -> None:
         if stopped:
             break
     from .course import config as cc
-    res = {"fast_path": cc.COURSE_SELECT_FAST_PATH, "max_steps": cc.COURSE_AGENT_MAX_STEPS,
+    res = {"select_reasoning_config": cc.COURSE_REASONING["select"], "fast_path": cc.COURSE_SELECT_FAST_PATH, "max_steps": cc.COURSE_AGENT_MAX_STEPS,
            "model": config.ROUTER_MODEL, "started_bj": datetime.now(BJ).isoformat(timespec="seconds"),
            "total_calls": shared["calls"], "cap": a.max_calls, "stopped": stopped, "rows": rows}
     Path(a.out).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")

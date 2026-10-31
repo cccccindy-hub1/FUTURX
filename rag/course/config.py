@@ -40,7 +40,7 @@ COURSE_SELECT_MODEL = os.environ.get("COURSE_SELECT_MODEL") or COURSE_LLM_MODEL
 COURSE_FILTER_MODEL = os.environ.get("COURSE_FILTER_MODEL") or COURSE_LLM_MODEL
 COURSE_ANSWER_MODEL = os.environ.get("COURSE_ANSWER_MODEL") or COURSE_LLM_MODEL
 COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：prompt 约定 JSON + 本地解析
-COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "4"))      # Step 1 最多 LLM 调用次数（含到上限后强制 finish 的那一次，即 4 = 最多 4 次选词调用）
+COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "7"))      # Step 1 最多 LLM 调用次数（含到上限后强制 finish 的那一次，即 4 = 最多 4 次选词调用）
 # Step 1 快速路径（实验开关，默认关闭）：问题里只命中唯一、无歧义的概念别名时，不调用 LLM 直接选中，
 # 并补入最多 COURSE_FAST_RELATED_MAX 个一跳关联概念（见 agent_select.fast_select）；0 = 不补关联概念
 COURSE_SELECT_FAST_PATH = _env_bool("COURSE_SELECT_FAST_PATH", False)

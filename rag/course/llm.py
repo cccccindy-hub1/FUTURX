@@ -187,6 +187,11 @@ class TracingLLM:
     def __init__(self, inner: LLMClient, trace: Trace):
         self.inner, self.trace = inner, trace
 
+    def reasoning_for(self, step: str) -> str | None:
+        """透传内层客户端的思考模式配置（内层没有则为 None），供选词轮次记录使用。"""
+        fn = getattr(self.inner, "reasoning_for", None)
+        return fn(step) if fn else None
+
     def chat(self, step: str, messages: list[dict], *, model: str,
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
         t0 = time.perf_counter()

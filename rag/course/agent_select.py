@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import config, prompts
-from .llm import LLMClient, LLMError, parse_json_object
+from .llm import LLMClient, LLMError, parse_json_object, reasoning_param
 from .aliases import norm, split_name
 from .vocab_tools import VocabIndex
 
@@ -147,9 +147,19 @@ def _related_one_hop(cid: str, index: VocabIndex, limit: int) -> list[Selection]
     return [Selection(c, f"与「{name}」在本体中一跳相连（快速路径补入）", "related_concept") for c in ranked]
 
 
-def _log_round(result: SelectResult, res) -> None:
+def _log_round(result: SelectResult, res, llm=None) -> None:
+    """记录一次选词调用：耗时、token、思考情况。reasoning_sent 是实际发给服务端的 reasoning 参数
+    （None = 没有发送该参数，由服务端按模型默认处理）；reasoning_tokens / reasoning_chars 来自响应。"""
+    fn = getattr(llm, "reasoning_for", None)
+    mode = fn("select") if fn else None
+    try:
+        sent = reasoning_param(mode) if mode is not None else None
+    except ValueError:
+        sent = None
     result.rounds.append({"round": len(result.rounds) + 1, "latency_s": round(res.latency_s, 3),
                           "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
+                          "reasoning_tokens": res.reasoning_tokens, "reasoning_chars": res.reasoning_chars,
+                          "reasoning_mode": mode, "reasoning_sent": sent,
                           "tools": [c.name for c in res.tool_calls]})
 
 
@@ -223,7 +233,7 @@ def _loop_native(messages, index, llm, model, max_steps, result: SelectResult) -
     pending: list[tuple[int, str, dict]] = []     # 上一轮工具结果在 messages 里的位置，下一轮开始前压缩
     while True:
         res = llm.chat("select", messages, model=model, tools=FINISH_ONLY if result.truncated else prompts.TOOL_SPECS)
-        _log_round(result, res)
+        _log_round(result, res, llm)
         calls = res.tool_calls
         if not calls:                    # LLM 没调工具也没 finish：以当前选择结束，记录回复便于排查
             result.end_reason, result.final_text = "no_tool_call", (res.content or "")[:300]
@@ -258,7 +268,7 @@ def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> 
     pending: list[tuple[int, str, dict]] = []
     while True:
         res = llm.chat("select", messages, model=model)
-        _log_round(result, res)
+        _log_round(result, res, llm)
         try:
             obj = parse_json_object(res.content)
             name, args = obj.get("tool"), obj.get("args") or {}

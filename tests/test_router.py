@@ -438,11 +438,13 @@ def test_select_logs_each_round_latency_and_tokens(ctx):
     assert r.to_dict()["rounds"] == r.rounds and r.to_dict()["fast_path"] == ""
 
 
-def test_default_max_steps_is_four():
+def test_default_max_steps_is_seven_and_select_reasoning_default_unchanged():
     import os
     from rag.course import config as cc
     if "COURSE_AGENT_MAX_STEPS" not in os.environ:
-        assert cc.COURSE_AGENT_MAX_STEPS == 4
+        assert cc.COURSE_AGENT_MAX_STEPS == 7                      # 6 次探索 + 1 次强制 finish
+    if "COURSE_SELECT_REASONING" not in os.environ:
+        assert cc.COURSE_REASONING["select"] == ""                 # 默认值本次不改：不发送 reasoning 参数
 
 
 # ---------------------------------------------------------------- 快速路径关联概念 / 默认关闭 / 压缩 / 上限 / 本体为空
@@ -519,3 +521,41 @@ def test_answer_omits_ontology_section_when_no_relations(ctx):
     llm2 = ScriptedLLM([LLMResult(content="回答[S1]")])
     answer.answer_question("q", kept, rel, llm2)
     assert "【本体结构信息，非教材原文】" in llm2.calls[0]["messages"][1]["content"]
+
+
+# ---------------------------------------------------------------- 选词轮次记录 reasoning
+
+class _ReasoningLLM:
+    """带 reasoning_for 的脚本化客户端：返回带 reasoning_tokens / reasoning_chars 的结果。"""
+    def __init__(self, script, mode):
+        self.script, self.mode = list(script), mode
+
+    def reasoning_for(self, step):
+        return self.mode
+
+    def chat(self, step, messages, *, model, tools=None, json_mode=False):
+        r = self.script.pop(0)
+        r.reasoning_tokens, r.reasoning_chars, r.latency_s = 321, 654, 1.5
+        return r
+
+
+@pytest.mark.parametrize("mode,sent", [("", None), ("disabled", {"type": "disabled"}),
+                                        ("low", {"type": "enabled", "effort": "low"})])
+def test_select_rounds_record_reasoning_tokens_chars_and_sent_mode(ctx, mode, sent):
+    from rag.course import agent_select
+    from rag.course.llm import Trace, TracingLLM
+    from test_course_pipeline import finish_native, tc
+    inner = _ReasoningLLM([tc("search_vocab", query="数据要素"), finish_native(("C01-0001", "question_concept"))], mode)
+    r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, TracingLLM(inner, Trace()),
+                                     native_tools=True, fast_path=False)
+    x = r.rounds[0]
+    assert (x["reasoning_tokens"], x["reasoning_chars"], x["reasoning_mode"], x["reasoning_sent"]) == (321, 654, mode, sent)
+    assert x["latency_s"] == 1.5 and r.to_dict()["rounds"][1]["reasoning_tokens"] == 321
+
+
+def test_select_rounds_without_reasoning_for_records_none(ctx):
+    from rag.course import agent_select
+    from test_course_pipeline import ScriptedLLM, finish_native
+    r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, ScriptedLLM([finish_native(("C01-0001", "question_concept"))]),
+                                     native_tools=True, fast_path=False)
+    assert r.rounds[0]["reasoning_mode"] is None and r.rounds[0]["reasoning_sent"] is None
