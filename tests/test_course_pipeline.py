@@ -266,11 +266,11 @@ def test_select_native_loop_validates_and_drops_invalid(ctx):
 
 def test_select_step_limit_truncates(ctx):
     llm_ = ScriptedLLM([tc("search_vocab", query="数据要素")] * 5)
-    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=2, native_tools=True)
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=3, native_tools=True)
     assert r.steps == 2 and r.truncated and not r.finished and r.selected == [] and r.end_reason == "truncated"
-    assert len(llm_.calls) == 3          # 第 3 次调用只提供 finish，LLM 仍不 finish → 结束
+    assert len(llm_.calls) == 3          # 上限 3 = 最多 3 次调用；第 3 次只提供 finish，LLM 仍不 finish → 结束
     assert [t["function"]["name"] for t in llm_.calls[2]["tools"]] == ["finish"]
-    assert "已用完 2 轮工具调用" in llm_.calls[2]["messages"][-1]["content"]
+    assert "最后一次回复机会（共 3 次）" in llm_.calls[2]["messages"][-1]["content"]
 
 
 def _multi(*calls) -> LLMResult:
@@ -283,8 +283,8 @@ def test_select_counts_rounds_not_parallel_tool_calls_and_forced_finish_keeps_se
         _multi(("get_concept", {"concept_id": "C01-0001"}), ("get_concept", {"concept_id": "C01-0002"}),
                ("get_neighbors", {"concept_id": "C01-0001"})),
         finish_native(("C01-0001", "question_concept"))])
-    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=2, native_tools=True)
-    assert r.steps == 2 and len(r.tool_log) == 5                     # 5 个工具调用、2 轮
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=3, native_tools=True)
+    assert r.steps == 2 and len(r.tool_log) == 5                     # 5 个工具调用、2 轮（第 3 次调用是强制 finish）
     assert r.truncated and r.finished and r.end_reason == "finish"
     assert [s.concept_id for s in r.selected] == ["C01-0001"]
     tool_msgs = [m for m in llm_.calls[2]["messages"] if m["role"] == "tool"]
@@ -302,9 +302,9 @@ def test_select_json_path_forced_finish(ctx):
     llm_ = ScriptedLLM([jtxt({"tool": "search_vocab", "args": {"query": "数据要素"}}),
                         jtxt({"tool": "finish", "args": {"selected": [
                             {"concept_id": "C01-0001", "reason": "r", "role": "question_concept"}]}})])
-    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=1, native_tools=False)
+    r = agent_select.select_concepts("q", [], ctx.index, llm_, max_steps=2, native_tools=False)
     assert r.truncated and r.end_reason == "finish" and [s.concept_id for s in r.selected] == ["C01-0001"]
-    assert "已用完 1 轮工具调用" in llm_.calls[1]["messages"][-1]["content"]
+    assert "最后一次回复机会（共 2 次）" in llm_.calls[1]["messages"][-1]["content"]
 
 
 def test_select_active_concepts_rendered_in_prompt(ctx):
@@ -563,7 +563,7 @@ def test_dry_run_report_compares_strategies(ctx):
     rep = recall.dry_run_report(ctx.recaller, sel, max_chars=60, max_steps=6)
     a, b = rep["strategies"]["A"], rep["strategies"]["B"]
     assert a["chunks"] >= b["chunks"] and a["batches"] >= 1
-    assert a["est_llm_calls"]["total_max"] == 6 + 1 + a["batches"] + 1 and a["est_llm_calls"]["step4"] == 1
+    assert a["est_llm_calls"]["total_max"] == 6 + a["batches"] + 1 and a["est_llm_calls"]["step4"] == 1
 
 
 # ---------------------------------------------------------------- Step 3：筛选
@@ -882,7 +882,7 @@ def test_every_prompt_template_formats_without_error():
 
 def test_prompt_contents_follow_review():
     sel = prompts.SELECT_SYSTEM.format(max_steps=6, active_concepts="（无）")
-    assert "6 轮" in sel and "换说法" in sel and "泛词不要选" in sel
+    assert "最多有 6 次回复机会" in sel and "换说法" in sel and "泛词不要选" in sel
     assert "召回原因" not in prompts.FILTER_ITEM and "{reasons}" not in prompts.FILTER_ITEM
     assert "chunk_id" not in prompts.FILTER_SYSTEM and "chunk_id" not in prompts.ANSWER_SYSTEM
     assert "[S#]" in prompts.ANSWER_SYSTEM and "较低的一档" in prompts.FILTER_SYSTEM and "拿不准时判 true" not in prompts.FILTER_SYSTEM

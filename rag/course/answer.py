@@ -33,8 +33,6 @@ class AnswerResult:
 
 
 def render_relations(relations: list[dict]) -> str:
-    if not relations:
-        return "（无）"
     return "\n".join(prompts.ANSWER_RELATION.format(
         subject=r["subject"], subject_id=r["subject_id"], predicate=r.get("predicate_label") or r["predicate_id"],
         object=r["object"], object_id=r["object_id"], view=r["view"]) for r in relations)
@@ -86,8 +84,8 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
         prompts.ANSWER_PASSAGE.format(ref=ref, path=" › ".join(k.path), text=k.text)
         for (ref, _cid), k in zip(refs.items(), kept)) or "（无）"
     messages = [{"role": "system", "content": prompts.ANSWER_SYSTEM},
-                {"role": "user", "content": prompts.ANSWER_USER.format(
-                    question=question, passages=passages, ontology=render_relations(relations))}]
+                {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
+                 + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")}]
     res = llm.chat("answer", messages, model=model)
     text, valid, invalid, onto = sanitize_citations(res.content, refs)
     return AnswerResult(text=text.strip(), citations=valid, invalid_citations=invalid, uses_ontology=onto,

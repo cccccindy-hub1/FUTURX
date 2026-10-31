@@ -320,8 +320,8 @@ def dry_run_report(recaller: Recaller, selected: list[tuple[str, str]], *,
             "batches": len(batches), "by_tier": dict(sorted(by_tier.items())),
             "excluded": len(res.excluded), "sunk": len(res.sunk),
             "zero_mention_selected": len(res.zero_mention), "zero_mention_ids": res.zero_mention,
-            "est_llm_calls": {"step1_max": max_steps + 1, "step3": len(batches), "step4": 1,
-                              "total_max": max_steps + 1 + len(batches) + 1},
+            "est_llm_calls": {"step1_max": max_steps, "step3": len(batches), "step4": 1,
+                              "total_max": max_steps + len(batches) + 1},
         }
     return out
 

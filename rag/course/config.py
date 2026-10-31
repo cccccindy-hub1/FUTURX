@@ -40,9 +40,11 @@ COURSE_SELECT_MODEL = os.environ.get("COURSE_SELECT_MODEL") or COURSE_LLM_MODEL
 COURSE_FILTER_MODEL = os.environ.get("COURSE_FILTER_MODEL") or COURSE_LLM_MODEL
 COURSE_ANSWER_MODEL = os.environ.get("COURSE_ANSWER_MODEL") or COURSE_LLM_MODEL
 COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：prompt 约定 JSON + 本地解析
-COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "4"))      # Step 1 最多工具调用轮数
-# Step 1 快速路径：问题里只命中唯一、无歧义的概念别名时，不调用 LLM 直接选中（保守版，见 agent_select.fast_select）
-COURSE_SELECT_FAST_PATH = _env_bool("COURSE_SELECT_FAST_PATH", True)
+COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "4"))      # Step 1 最多 LLM 调用次数（含到上限后强制 finish 的那一次，即 4 = 最多 4 次选词调用）
+# Step 1 快速路径（实验开关，默认关闭）：问题里只命中唯一、无歧义的概念别名时，不调用 LLM 直接选中，
+# 并补入最多 COURSE_FAST_RELATED_MAX 个一跳关联概念（见 agent_select.fast_select）；0 = 不补关联概念
+COURSE_SELECT_FAST_PATH = _env_bool("COURSE_SELECT_FAST_PATH", False)
+COURSE_FAST_RELATED_MAX = int(os.environ.get("COURSE_FAST_RELATED_MAX", "5"))
 COURSE_RECALL_MAX_CHARS = int(os.environ.get("COURSE_RECALL_MAX_CHARS", "12000"))  # Step 3 单批子块正文字符上限
 SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))           # 标题行证据下沉的覆盖率阈值
 # Step 4 最多使用的子块数：先取筛选为 direct 的，再取 background，超出部分记入 trace

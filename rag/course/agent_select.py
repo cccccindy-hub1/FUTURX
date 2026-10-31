@@ -3,8 +3,10 @@
 两条路径（COURSE_LLM_NATIVE_TOOLS 切换）：
 - 原生：tools=TOOL_SPECS，读 tool_calls；
 - 回退：prompt 约定每轮回复一个 {"tool","args"} JSON，本地解析；解析失败带错误重试 1 次，仍失败则以当前选择结束。
-最多 max_steps 轮工具调用（一轮 = 一次 LLM 回复，其中可并行多个工具调用）；达到上限后追加一条提示，
-再给一次只能 finish 的机会（truncated=True）；这一轮仍不 finish 才以当前选择结束（end_reason=truncated）。
+max_steps = 选词 LLM 调用次数上限（一次调用 = 一轮，其中可并行多个工具调用），含最后强制 finish 的那一次：
+前 max_steps-1 次可以探索，用完后追加提示并只提供 finish 工具（truncated=True）；这一次仍不 finish 才以当前选择结束
+（end_reason=truncated）。max_steps<=1 时第一次调用就是只能 finish 的强制提交。
+较早轮次的工具返回会被压缩成只剩概念 ID 与名称，避免每轮输入 token 持续增长。
 校验：finish 里的 concept_id 必须存在、未被排除、未被 blocked，否则丢弃并记录到 dropped。
 """
 from __future__ import annotations
@@ -106,6 +108,45 @@ def _finish(args: dict, index: VocabIndex, result: SelectResult) -> None:
     result.finished, result.end_reason = True, "finish"
 
 
+def compress_tool_output(name: str, out: dict) -> dict:
+    """较早轮次的工具返回压缩：只保留候选概念的 ID 与名称（错误信息原样保留）。"""
+    if "error" in out:
+        return out
+    if name == "search_vocab":
+        return {"results": [{"concept_id": h["concept_id"], "name": h["name"]} for h in out.get("results", [])]}
+    if name == "get_concept":
+        return {"concept_id": out.get("concept_id"), "name": out.get("name")}
+    if name == "get_neighbors":
+        seen: dict[str, str] = {}
+        for n in out.get("neighbors", []):
+            seen.setdefault(n["concept_id"], n["name"])
+        return {"total": out.get("total"), "truncated": out.get("truncated"),
+                "neighbors": [{"concept_id": c, "name": nm} for c, nm in seen.items()]}
+    return out
+
+
+def _compress_pending(messages: list[dict], pending: list[tuple[int, str, dict]]) -> None:
+    for idx, name, out in pending:
+        m = messages[idx]
+        packed = json.dumps(compress_tool_output(name, out), ensure_ascii=False)
+        m["content"] = packed if m["role"] == "tool" else "工具结果（已压缩，仅 ID 与名称）：" + packed
+    pending.clear()
+
+
+def _related_one_hop(cid: str, index: VocabIndex, limit: int) -> list[Selection]:
+    """cid 的一跳邻居（本体 onto1/onto2 任一视角、任一方向），按连边数多、同章优先、ID 排序取前 limit 个。"""
+    if limit <= 0:
+        return []
+    base_ch = index.concepts[cid].chapter
+    edges: dict[str, int] = {}
+    for n in index.get_neighbors(cid, "both"):
+        if n.concept_id != cid and index.reject_reason(n.concept_id) is None:
+            edges[n.concept_id] = edges.get(n.concept_id, 0) + 1
+    ranked = sorted(edges, key=lambda c: (-edges[c], index.concepts[c].chapter != base_ch, c))[:limit]
+    name = index.concepts[cid].name
+    return [Selection(c, f"与「{name}」在本体中一跳相连（快速路径补入）", "related_concept") for c in ranked]
+
+
 def _log_round(result: SelectResult, res) -> None:
     result.rounds.append({"round": len(result.rounds) + 1, "latency_s": round(res.latency_s, 3),
                           "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
@@ -125,7 +166,8 @@ def fast_select(question: str, index: VocabIndex) -> SelectResult | None:
     1. 去掉被更长命中别名包含的别名后，恰好剩 1 个别名；
     2. 该别名只对应 1 个概念（无同形多概念）；
     3. 该概念可选，且没有同名的跨章概念（_name_groups 中仅它一个）。
-    只选 question_concept，不补关联概念——这是快速路径对覆盖面的主要代价。
+    命中后选 1 个 question_concept，再补入至多 COURSE_FAST_RELATED_MAX 个一跳关联概念（related_concept），
+    以缓解只选单概念导致的覆盖面下降；关联概念只按本体连边排序，没有 LLM 判断相关性，可能夹带弱相关概念。
     """
     q = question.strip()
     if len(q) > FAST_MAX_QUESTION_CHARS or any(c in q for c in _MULTI_CUES):
@@ -146,6 +188,7 @@ def fast_select(question: str, index: VocabIndex) -> SelectResult | None:
         return None
     r = SelectResult(finished=True, end_reason="fast_path", fast_path=top[0].surface)
     r.selected.append(Selection(cid, f"问题直接命中唯一概念别名「{top[0].surface}」", "question_concept"))
+    r.selected.extend(_related_one_hop(cid, index, config.COURSE_FAST_RELATED_MAX))
     return r
 
 
@@ -168,12 +211,16 @@ def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMC
     messages: list[dict] = [{"role": "system", "content": system},
                             {"role": "user", "content": prompts.SELECT_USER.format(question=question)}]
     result = SelectResult()
+    if max_steps <= 1:                   # 只有一次调用机会：直接要求 finish
+        result.truncated = True
+        messages[-1]["content"] += "\n" + prompts.SELECT_FORCE_FINISH.format(max_steps=max_steps)
     loop = _loop_native if native else _loop_json
     loop(messages, index, llm, model, max_steps, result)
     return result
 
 
 def _loop_native(messages, index, llm, model, max_steps, result: SelectResult) -> None:
+    pending: list[tuple[int, str, dict]] = []     # 上一轮工具结果在 messages 里的位置，下一轮开始前压缩
     while True:
         res = llm.chat("select", messages, model=model, tools=FINISH_ONLY if result.truncated else prompts.TOOL_SPECS)
         _log_round(result, res)
@@ -195,17 +242,20 @@ def _loop_native(messages, index, llm, model, max_steps, result: SelectResult) -
             result.end_reason = "truncated"
             return
         result.steps += 1
+        _compress_pending(messages, pending)
         for c in calls:
             out = run_tool(index, c.name, c.args)
             result.tool_log.append({"tool": c.name, "args": c.args, "ok": "error" not in out})
             messages.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(out, ensure_ascii=False)})
-        if result.steps >= max_steps:
+            pending.append((len(messages) - 1, c.name, out))
+        if result.steps >= max_steps - 1:      # 探索次数用完，下一次只能 finish
             result.truncated = True
             messages.append({"role": "user", "content": prompts.SELECT_FORCE_FINISH.format(max_steps=max_steps)})
 
 
 def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> None:
     retried = False
+    pending: list[tuple[int, str, dict]] = []
     while True:
         res = llm.chat("select", messages, model=model)
         _log_round(result, res)
@@ -232,10 +282,12 @@ def _loop_json(messages, index, llm, model, max_steps, result: SelectResult) -> 
             result.end_reason = "truncated"
             return
         result.steps += 1
+        _compress_pending(messages, pending)
         out = run_tool(index, name, args)
         result.tool_log.append({"tool": name, "args": args, "ok": "error" not in out})
         tail = ""
-        if result.steps >= max_steps:
+        if result.steps >= max_steps - 1:      # 探索次数用完，下一次只能 finish
             result.truncated = True
             tail = "\n" + prompts.SELECT_FORCE_FINISH.format(max_steps=max_steps)
         messages.append({"role": "user", "content": "工具结果：" + json.dumps(out, ensure_ascii=False) + tail})
+        pending.append((len(messages) - 1, name, out))

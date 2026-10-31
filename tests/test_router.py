@@ -403,7 +403,10 @@ def test_fast_path_unique_alias_skips_llm(ctx, monkeypatch):
             raise AssertionError("快速路径不应调用 LLM")
     r = agent_select.select_concepts("数据要素的定义是什么", [], ctx.index, NoLLM(), native_tools=True)
     assert r.fast_path and r.end_reason == "fast_path" and r.rounds == []
-    assert [(s.concept_id, s.role) for s in r.selected] == [("C01-0001", "question_concept")]
+    assert (r.selected[0].concept_id, r.selected[0].role) == ("C01-0001", "question_concept")
+    rel = [s for s in r.selected[1:]]
+    assert rel and all(s.role == "related_concept" and s.concept_id != "C01-0001" for s in rel)
+    assert len(rel) <= cc.COURSE_FAST_RELATED_MAX and len({s.concept_id for s in r.selected}) == len(r.selected)
 
 
 @pytest.mark.parametrize("q", ["数据要素和数据权属有什么区别", "什么是数据要素以及它的特征、分类、价值、来源、治理和流通的全部内容"])
@@ -440,3 +443,79 @@ def test_default_max_steps_is_four():
     from rag.course import config as cc
     if "COURSE_AGENT_MAX_STEPS" not in os.environ:
         assert cc.COURSE_AGENT_MAX_STEPS == 4
+
+
+# ---------------------------------------------------------------- 快速路径关联概念 / 默认关闭 / 压缩 / 上限 / 本体为空
+
+def test_fast_path_default_off_and_related_limit(ctx, monkeypatch):
+    from rag.course import agent_select, config as cc
+    import os
+    if "COURSE_SELECT_FAST_PATH" not in os.environ:
+        assert cc.COURSE_SELECT_FAST_PATH is False
+    monkeypatch.setattr(cc, "COURSE_FAST_RELATED_MAX", 0)
+    r = agent_select.fast_select("数据要素的定义是什么", ctx.index)
+    assert [s.concept_id for s in r.selected] == ["C01-0001"]
+    monkeypatch.setattr(cc, "COURSE_FAST_RELATED_MAX", 1)
+    assert len(agent_select.fast_select("数据要素的定义是什么", ctx.index).selected) <= 2
+
+
+def test_compress_tool_output_keeps_only_id_and_name():
+    from rag.course.agent_select import compress_tool_output as c
+    big = {"results": [{"concept_id": "C1", "name": "甲", "chapter": 1, "snippet": "很长的释义", "via": "bm25", "score": 1}]}
+    assert c("search_vocab", big) == {"results": [{"concept_id": "C1", "name": "甲"}]}
+    assert c("get_concept", {"concept_id": "C1", "name": "甲", "context": "长", "aliases": ["a"]}) == {"concept_id": "C1", "name": "甲"}
+    nb = {"total": 2, "truncated": False, "neighbors": [{"concept_id": "C2", "name": "乙", "predicate_id": "p", "view": "onto1"},
+                                                          {"concept_id": "C2", "name": "乙", "predicate_id": "q", "view": "onto2"}]}
+    assert c("get_neighbors", nb)["neighbors"] == [{"concept_id": "C2", "name": "乙"}]
+    assert c("search_vocab", {"error": "x"}) == {"error": "x"}
+
+
+def test_older_tool_results_compressed_latest_kept_full(ctx):
+    from rag.course import agent_select
+    from test_course_pipeline import ScriptedLLM, finish_native, tc
+    llm_ = ScriptedLLM([tc("search_vocab", query="数据要素"), tc("get_concept", concept_id="C01-0001"),
+                        finish_native(("C01-0001", "question_concept"))])
+    agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, llm_, max_steps=4, native_tools=True, fast_path=False)
+    tools2 = [m for m in llm_.calls[1]["messages"] if m["role"] == "tool"]
+    assert "snippet" in tools2[0]["content"]                       # 刚返回的结果完整保留
+    tools3 = [m for m in llm_.calls[2]["messages"] if m["role"] == "tool"]
+    assert "snippet" not in tools3[0]["content"] and "C01-0001" in tools3[0]["content"]   # 早先的已压缩，仍有 ID 与名称
+    assert "same_name_ids" in tools3[1]["content"]                 # 第 3 次调用时 get_concept 是最新一轮结果，保持完整
+
+
+def test_max_steps_four_means_at_most_four_select_calls(ctx):
+    from rag.course import agent_select, prompts
+    from test_course_pipeline import ScriptedLLM, tc
+    llm_ = ScriptedLLM([tc("search_vocab", query="数据要素")] * 10)
+    r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, llm_, max_steps=4, native_tools=True, fast_path=False)
+    assert len(llm_.calls) == 4 and r.truncated and r.end_reason == "truncated" and len(r.rounds) == 4
+    assert [t["function"]["name"] for t in llm_.calls[3]["tools"]] == ["finish"]
+    assert len(llm_.calls[0]["tools"]) > 1                         # 前几次调用提供全部工具
+    # 上限 1：唯一一次调用就是强制 finish
+    llm1 = ScriptedLLM([tc("search_vocab", query="x")])
+    r1 = agent_select.select_concepts("q", [], ctx.index, llm1, max_steps=1, native_tools=True, fast_path=False)
+    assert len(llm1.calls) == 1 and [t["function"]["name"] for t in llm1.calls[0]["tools"]] == ["finish"]
+
+
+def test_forced_finish_on_last_call_is_accepted(ctx):
+    from rag.course import agent_select
+    from test_course_pipeline import ScriptedLLM, finish_native, tc
+    llm_ = ScriptedLLM([tc("search_vocab", query="a"), tc("search_vocab", query="b"), tc("search_vocab", query="c"),
+                        finish_native(("C01-0001", "question_concept"))])
+    r = agent_select.select_concepts("请讲讲数据要素和权属", [], ctx.index, llm_, max_steps=4, native_tools=True, fast_path=False)
+    assert len(llm_.calls) == 4 and r.finished and [s.concept_id for s in r.selected] == ["C01-0001"]
+
+
+def test_answer_omits_ontology_section_when_no_relations(ctx):
+    from rag.course import answer
+    from test_course_pipeline import ScriptedLLM, _items
+    kept = _items(ctx, "P0005")[:1]
+    llm_ = ScriptedLLM([LLMResult(content="回答[S1]")])
+    answer.answer_question("q", kept, [], llm_)
+    sysm, user = (m["content"] for m in llm_.calls[0]["messages"])
+    assert "本体" not in user and "（无）" not in user and "【教材原文】" in user
+    assert "不要说明本体材料缺失或未提供" in sysm
+    rel = ctx.index.relations_among(["C01-0001", "C01-0003"])
+    llm2 = ScriptedLLM([LLMResult(content="回答[S1]")])
+    answer.answer_question("q", kept, rel, llm2)
+    assert "【本体结构信息，非教材原文】" in llm2.calls[0]["messages"][1]["content"]
