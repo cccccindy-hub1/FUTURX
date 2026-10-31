@@ -1,0 +1,213 @@
+{
+ "select_reasoning_config": "",
+ "fast_path": false,
+ "max_steps": 7,
+ "model": "deepseek/deepseek-v4-pro",
+ "started_bj": "2026-10-31T23:55:17+08:00",
+ "total_calls": 10,
+ "cap": 10,
+ "stopped": "",
+ "rows": [
+  {
+   "id": "r13",
+   "question": "数据资产入表的基本思路是什么？",
+   "error": "",
+   "route": "course",
+   "status": "ok",
+   "answer": "数据资产入表的基本思路可归纳为：在数据资产化过程中，先通过数据资产登记与估值完成权属明确和价值量化，再依据财政部《企业数据资源相关会计处理暂行规定》，将符合确认条件的数据资产按无形资产或存货等科目纳入企业财务报表，实现从表外资源向表内资产的转化，使其成为可计量、可核算、可管理的正式财富形态。\n\n具体要点如下：\n\n1. **以登记和估值为前置基础**  \n   数据资产登记明确数据“三权分置”下的权利归属与边界，数据资产估值对数据资产价值进行量化，二者是数据资产化的前提与核心环节；数据资产入表是资产化成果在会计制度层面的正式确认，是资产化从企业内部管理走向外部合规披露的关键一步[de:0906:ch03.1.2.3.i2:000:028949a1]。数据资产化需通过确权登记、价值计量等流程，将数据资源转化为可控制、能带来经济利益的数据资产[de:0906:ch03.1.2.3.i1:000:89337f12]，且资产化通过确权、估值、入表等制度安排使数据获得可计量、可交易的属性[de:0906:ch03.4:001:d32bd26f]。本体中记录为数据资产化包含数据资产登记、数据资产估值与数据资产入表等步骤[本体]。\n\n2. **依据会计规定进行表内确认与计量**  \n   数据资产入表须依据财政部《企业数据资源相关会计处理暂行规定》，满足条件的数据资产可按无形资产或存货等科目进行表内确认与计量[de:0906:ch03.1.2.3.i2:001:be356630]。本体中记录为数据资产入表受该规定规制[本体]。\n\n3. **以表内转化为核心目标**  \n   数据资产入表的核心意义在于实现数据资产从表外资源向表内资产的转化，使其成为企业可计量、可核算、可管理的正式财富形态，是数据资产化的制度保障[de:0906:ch03.1.2.3.i2:001:be356630]。同时，数据资本化以数据资产已完成入表为前提，只有在权属和价值得到会计制度正式确认的基础上，后续金融运作才具备合规条件[de:0906:ch03.1.2.4.i1:000:60a0eb0f]。",
+   "citations": [
+    "de:0906:ch03.1.2.3.i2:000:028949a1",
+    "de:0906:ch03.1.2.3.i1:000:89337f12",
+    "de:0906:ch03.4:001:d32bd26f",
+    "de:0906:ch03.1.2.3.i2:001:be356630",
+    "de:0906:ch03.1.2.4.i1:000:60a0eb0f"
+   ],
+   "citation_paths": [
+    [
+     "第三章 数据价值",
+     "第一节 数据价值的形成",
+     "二、数据价值的形成",
+     "（三）数据资产化",
+     "2.数据资产化的主要环节"
+    ],
+    [
+     "第三章 数据价值",
+     "第一节 数据价值的形成",
+     "二、数据价值的形成",
+     "（三）数据资产化",
+     "1.数据资产化的内涵"
+    ],
+    [
+     "第三章 数据价值",
+     "小结"
+    ],
+    [
+     "第三章 数据价值",
+     "第一节 数据价值的形成",
+     "二、数据价值的形成",
+     "（三）数据资产化",
+     "2.数据资产化的主要环节"
+    ],
+    [
+     "第三章 数据价值",
+     "第一节 数据价值的形成",
+     "二、数据价值的形成",
+     "（四）数据资本化",
+     "1.数据资本化的内涵"
+    ]
+   ],
+   "fallback": null,
+   "selected_concepts": [
+    {
+     "concept_id": "C03-0071",
+     "reason": "问题直接询问数据资产入表的基本思路，该概念是问题核心。",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0072",
+     "reason": "财政部《企业数据资源相关会计处理暂行规定》是数据资产入表的制度依据，理解入表思路所需。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0065",
+     "reason": "数据资产化是数据资产入表的上位过程概念，有助于理解入表在资产化中的地位。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0069",
+     "reason": "数据资产登记是数据资产化的前提环节，与入表思路密切相关。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0070",
+     "reason": "数据资产估值是资产化核心环节，入表需要以计量和估值作为支撑。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0077",
+     "reason": "数据资本化是入表之后的进阶环节，有助于理解入表在整个价值实现链条中的位置。",
+     "role": "related_concept"
+    }
+   ],
+   "steps": [
+    "select",
+    "select",
+    "select",
+    "select",
+    "select",
+    "select",
+    "select",
+    "filter",
+    "answer"
+   ],
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 3.499,
+     "prompt_tokens": 995,
+     "completion_tokens": 120,
+     "reasoning_tokens": 38,
+     "reasoning_chars": 182,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 3.858,
+     "prompt_tokens": 5958,
+     "completion_tokens": 120,
+     "reasoning_tokens": 32,
+     "reasoning_chars": 122,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "get_concept",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 5.501,
+     "prompt_tokens": 2842,
+     "completion_tokens": 254,
+     "reasoning_tokens": 129,
+     "reasoning_chars": 390,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 5.311,
+     "prompt_tokens": 3075,
+     "completion_tokens": 228,
+     "reasoning_tokens": 140,
+     "reasoning_chars": 462,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "get_neighbors",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 5,
+     "latency_s": 4.91,
+     "prompt_tokens": 3090,
+     "completion_tokens": 131,
+     "reasoning_tokens": 6,
+     "reasoning_chars": 21,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "get_neighbors",
+      "get_neighbors",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 6,
+     "latency_s": 5.754,
+     "prompt_tokens": 4212,
+     "completion_tokens": 131,
+     "reasoning_tokens": 6,
+     "reasoning_chars": 21,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 7,
+     "latency_s": 5.486,
+     "prompt_tokens": 3688,
+     "completion_tokens": 314,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "",
+     "reasoning_sent": null,
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "fast_path": "",
+   "s_placeholder_in_answer": false,
+   "llm_calls": 10,
+   "prompt_tokens": 27798,
+   "completion_tokens": 3881,
+   "elapsed_s": 77.93
+  }
+ ]
+}
