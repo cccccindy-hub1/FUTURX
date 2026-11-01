@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,9 +17,12 @@ from .. import config as rc
 from ..eval_router import BJ, in_window
 from . import config
 from .eval_full_report import summarize
-from .llm import LLMNotConfigured, OpenAICompatClient
+from .llm import LLMError, LLMNotConfigured, OpenAICompatClient
 from .pipeline import CourseContext, ask, result_to_json
 from .recall_eval import GOLD, key_chunks
+
+
+MAX_LLM_FAIL_STREAK = 2
 
 
 class CapReached(RuntimeError):
@@ -65,8 +69,11 @@ def run_one(ctx, llm, g: dict) -> dict:
         _ = src
     except CapReached as e:
         row["error"] = f"CapReached:{e}"
-    except Exception as e:  # noqa: BLE001 - 只记类型名
+    except Exception as e:  # noqa: BLE001 - 只记类型名，不记消息（消息可能含请求细节）
         row["error"] = type(e).__name__
+        if isinstance(e, LLMError):
+            m = re.match(r"\[[^\]]*\] LLM 调用失败：(\w+)", str(e))
+            row["error_cause"] = m.group(1) if m else "unknown"
     row["elapsed_s"] = round(time.perf_counter() - t0, 2)
     return row
 
@@ -90,17 +97,22 @@ def main() -> None:
     for g in gold:                                      # 关键句 -> 子块
         for m in g["must_recall"]:
             m["chunks"] = key_chunks(ctx, m["key"])
-    rows, stopped = [], ""
+    started = datetime.now(BJ).isoformat(timespec="seconds")      # 开始时间在循环前记录（此前误在结束后取）
+    rows, stopped, llm_fail_streak = [], "", 0
     for g in gold:
         row = run_one(ctx, capped, g)
         rows.append(row)
         if row["error"].startswith("CapReached"):
             stopped = row["error"]
             break
+        llm_fail_streak = llm_fail_streak + 1 if row["error"] == "LLMError" else 0
+        if llm_fail_streak >= MAX_LLM_FAIL_STREAK:                # 连续失败多半是超时/断网/睡眠，继续跑只会白耗调用
+            stopped = f"LLMError x{llm_fail_streak} in a row"
+            break
     out = {"config": {"select_reasoning": config.COURSE_REASONING["select"], "max_steps": config.COURSE_AGENT_MAX_STEPS,
                       "fast_path": config.COURSE_SELECT_FAST_PATH, "bm25_topk": config.COURSE_BM25_TOPK,
                       "model": config.COURSE_LLM_MODEL},
-           "started_bj": datetime.now(BJ).isoformat(timespec="seconds"), "total_calls": shared["calls"],
+           "started_bj": started, "finished_bj": datetime.now(BJ).isoformat(timespec="seconds"), "total_calls": shared["calls"],
            "cap": a.max_calls, "stopped": stopped, "rows": rows}
     out["summary"] = summarize(rows, gold)
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")

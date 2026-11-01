@@ -682,3 +682,63 @@ def test_eval_full_capped_llm_stops_before_calling(monkeypatch):
     with pytest.raises(ef.CapReached):
         c.chat("a", [], model="m")
     assert len(inner.calls) == 1
+
+
+# ---------------------------------------------------------------- 完整评测：连续失败即停 / 开始时间 / 窗口
+
+def _run_full(monkeypatch, tmp_path, errors):
+    """用假的 run_one 驱动 main()：errors 为每题的 error 值列表。"""
+    import sys
+    from datetime import datetime
+    from rag.course import eval_full as ef
+    seq = iter(errors)
+    monkeypatch.setattr(ef, "in_window", lambda now: True)
+    monkeypatch.setattr(ef, "OpenAICompatClient", lambda: type("C", (), {"_client": type("X", (), {"with_options": lambda s, **k: s})()})())
+    monkeypatch.setattr(ef, "CourseContext", type("CC", (), {"load": staticmethod(lambda: type("K", (), {"chunkset": type("S", (), {"chunks": []})()})())}))
+    monkeypatch.setattr(ef, "key_chunks", lambda ctx, key: [])
+    monkeypatch.setattr(ef, "run_one", lambda ctx, llm, g: {"id": g["id"], "question": "", "error": next(seq), "elapsed_s": 0})
+    monkeypatch.setattr(ef, "summarize", lambda rows, gold: {})
+    out = tmp_path / "o.json"
+    monkeypatch.setattr(sys, "argv", ["x", "--out", str(out)])
+    ef.main()
+    return json.load(open(out, encoding="utf-8"))
+
+
+def test_full_eval_stops_after_two_consecutive_llm_errors(monkeypatch, tmp_path):
+    d = _run_full(monkeypatch, tmp_path, ["", "LLMError", "LLMError"] + [""] * 20)
+    assert [r["error"] for r in d["rows"]] == ["", "LLMError", "LLMError"] and "LLMError x2" in d["stopped"]
+
+
+def test_full_eval_non_consecutive_llm_errors_do_not_stop(monkeypatch, tmp_path):
+    d = _run_full(monkeypatch, tmp_path, ["LLMError", "", "LLMError", "", "LLMError"] + [""] * 20)
+    assert len(d["rows"]) == 10 and d["stopped"] == ""
+
+
+def test_full_eval_records_start_before_finish(monkeypatch, tmp_path):
+    d = _run_full(monkeypatch, tmp_path, [""] * 10)
+    assert d["started_bj"] <= d["finished_bj"] and "started_bj" in d
+
+
+def test_capped_llm_checks_window_before_every_call(monkeypatch):
+    from rag.course import eval_full as ef
+    state = {"ok": True}
+    monkeypatch.setattr(ef, "in_window", lambda now: state["ok"])
+    inner = RouterLLM({"route": "course"})
+    c = ef.CappedLLM(inner, {"calls": 0, "cap": 99})
+    c.chat("a", [], model="m")
+    state["ok"] = False                                                    # 进入高峰：下一次调用必须被挡住，且不触达内层
+    with pytest.raises(ef.CapReached, match="off-peak"):
+        c.chat("a", [], model="m")
+    assert len(inner.calls) == 1
+
+
+def test_llm_error_cause_extracted_without_message(monkeypatch):
+    from rag.course import eval_full as ef
+    from rag.course.llm import LLMError
+
+    class Boom:
+        def chat(self, *a, **k):
+            raise LLMError(f"[select] LLM 调用失败：APITimeoutError: Request timed out. {SECRET}")
+    monkeypatch.setattr(ef, "ask", lambda *a, **k: Boom().chat())
+    row = ef.run_one(None, None, {"id": "r1", "question": "q"})
+    assert row["error"] == "LLMError" and row["error_cause"] == "APITimeoutError" and SECRET not in json.dumps(row)

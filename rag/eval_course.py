@@ -64,6 +64,7 @@ def main() -> None:
     svc = UnifiedService(router_client=CountingLLM(rclient, shared), course_ctx=ctx, course_llm=CountingLLM(cllm, shared))
     qs = [q for q in json.load(open(EVAL_PATH, encoding="utf-8")) if q["expected_route"] == "course"]
     qs = [q for q in qs if q["id"] in a.ids.split(",")] if a.ids else qs[: a.n]
+    started = datetime.now(BJ).isoformat(timespec="seconds")      # 开始时间在循环前记录
     rows, stopped = [], ""
     for q in qs:
         shared.update(q_calls=0, q_in=0, q_out=0)
@@ -93,7 +94,7 @@ def main() -> None:
             break
     from .course import config as cc
     res = {"select_reasoning_config": cc.COURSE_REASONING["select"], "fast_path": cc.COURSE_SELECT_FAST_PATH, "max_steps": cc.COURSE_AGENT_MAX_STEPS,
-           "model": config.ROUTER_MODEL, "started_bj": datetime.now(BJ).isoformat(timespec="seconds"),
+           "model": config.ROUTER_MODEL, "started_bj": started, "finished_bj": datetime.now(BJ).isoformat(timespec="seconds"),
            "total_calls": shared["calls"], "cap": a.max_calls, "stopped": stopped, "rows": rows}
     Path(a.out).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"done: calls={shared['calls']}/{a.max_calls} rows={len(rows)} stopped={stopped!r}")
