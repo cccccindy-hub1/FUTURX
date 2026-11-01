@@ -95,3 +95,6 @@ MAX_SOURCE_SHARE = float(os.environ.get("MAX_SOURCE_SHARE", "0.06"))
 PROBE_SIZE = int(os.environ.get("PROBE_SIZE", "60"))
 
 SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}
+
+# Active HTTP requests per process, including streaming responses.
+MAX_CONCURRENT_REQUESTS = int(os.environ.get("RAG_MAX_CONCURRENT_REQUESTS", "10"))

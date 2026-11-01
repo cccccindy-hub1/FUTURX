@@ -1,31 +1,29 @@
-"""响应速度测试：初始化服务 -> 随机抽取 20 条 prompt -> 逐条计时 -> 汇总均值。
+"""Compare sequential and concurrent real HTTP requests on the same 20 questions.
 
-指标说明（单位：秒）：
-- server_init_time  : 服务初始化耗时（加载 SentenceTransformer + Chroma + OpenAI 客户端）
-- rag_time          : 检索耗时（embedding + 向量检索 + 上下文/prompt 组装）
-- transmission_time : 首字节传输耗时（发起 LLM 请求到收到首个 token；含网络往返 + 上游 prefill）
-- llm_generation    : 流式生成耗时（首个 token -> 最后一个 token）
-- total_time        : 单条端到端耗时（= rag_time + transmission_time + llm_generation）
-
-报告：<项目根>/speed_test_report.txt
-      逐条追加写入（中断后已测数据仍保留），全部测完后把均值汇总置顶重写。
-
-运行方式（任选）：
-    python tests/test_speed.py
-    python -m tests.test_speed
-    RUN_SPEED_TEST=1 pytest tests/test_speed.py -s
-
-注意：本测试会加载真实模型并访问真实 LLM，请勿纳入日常离线 CI。
+Run: python tests/test_speed.py
+Overrides: SPEED_N_PROMPTS=20 SPEED_CONCURRENCY=10 SPEED_SEED=42
+Reports: speed_test_report.txt (full replies), speed_test_report.json (aggregates).
+Loads one temporary loopback server; excludes startup and retrieval warm-up from
+both phases. Sequential runs first, so upstream caching/load can affect comparison.
+This calls the real LLM: 20 questions x 2 phases = 40 requests by default.
 """
 from __future__ import annotations
 
+import json
+import math
 import os
 import random
+import socket
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
+from statistics import mean, median
 
-# 允许直接 python tests/test_speed.py 运行：把项目根目录加入 sys.path
 _SYS_PATH_ROOT = Path(__file__).resolve().parents[1]
 if str(_SYS_PATH_ROOT) not in sys.path:
     sys.path.insert(0, str(_SYS_PATH_ROOT))
@@ -33,162 +31,200 @@ if str(_SYS_PATH_ROOT) not in sys.path:
 import pytest
 
 from rag.benchmark import build_items, load_raw
-from rag.config import BENCHMARK_SEED, ROOT
-from rag.query import RAGService
+from rag.config import BENCHMARK_SEED, LLM_TIMEOUT, MAX_CONCURRENT_REQUESTS, ROOT
 
-SPEED_N_PROMPTS = int(os.environ.get("SPEED_N_PROMPTS", "20"))
-SPEED_SEED = int(os.environ.get("SPEED_SEED", str(BENCHMARK_SEED)))
-SPEED_REPORT_PATH = Path(os.environ.get("SPEED_REPORT_PATH", ROOT / "speed_test_report.txt"))
-
-_COLS = ("rag", "transmission", "generation", "total")
-_HEADER_LINE = f"{'#':>3} {'问题':<42} {'rag':>7} {'传输':>7} {'生成':>7} {'总耗时':>7}"
+SPEED_N_PROMPTS = int(os.environ.get('SPEED_N_PROMPTS', '20'))
+SPEED_CONCURRENCY = int(os.environ.get('SPEED_CONCURRENCY', '10'))
+SPEED_SEED = int(os.environ.get('SPEED_SEED', str(BENCHMARK_SEED)))
+SPEED_REPORT_PATH = Path(os.environ.get('SPEED_REPORT_PATH', ROOT / 'speed_test_report.txt'))
 
 
 def _pick_prompts(n: int, seed: int) -> list:
-    """从 data_benchmark 清洗后的样本中随机抽取 n 条。"""
     items = build_items(load_raw())
-    if not items:
-        return []
-    rng = random.Random(seed)
-    return rng.sample(items, min(n, len(items)))
+    return random.Random(seed).sample(items, min(n, len(items)))
 
 
-def _clip(text: str, width: int = 40) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= width else text[: width - 1] + "…"
+@contextmanager
+def _benchmark_server(items):
+    import uvicorn
+    from rag.serve import build_app
+
+    started = time.perf_counter()
+    app = build_app()
+    init_seconds = time.perf_counter() - started
+    warm_started = time.perf_counter()
+    app.state.service.retrieve_result(items[0].question)
+    warm_seconds = time.perf_counter() - warm_started
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_level='warning', access_log=False))
+    thread = threading.Thread(target=server.run, kwargs={'sockets': [listener]}, daemon=True)
+    try:
+        thread.start()
+        deadline = time.monotonic() + 30
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() >= deadline:
+                raise RuntimeError('Temporary HTTP server did not start')
+            time.sleep(0.05)
+        print(f'SERVER_READY init={init_seconds:.3f}s warmup={warm_seconds:.3f}s limit={MAX_CONCURRENT_REQUESTS}', flush=True)
+        yield f'http://127.0.0.1:{port}', init_seconds, warm_seconds
+    finally:
+        server.should_exit = True
+        thread.join(timeout=15)
+        if thread.is_alive():
+            server.force_exit = True
+            thread.join(timeout=5)
+        listener.close()
+        if thread.is_alive():
+            raise RuntimeError('Temporary HTTP server did not stop')
+        print('SERVER_STOPPED', flush=True)
 
 
-def _f(v):
-    return f"{v:7.3f}" if v is not None else f"{'-':>7}"
+def _http_request(base_url: str, index: int, item) -> dict:
+    row = {'index': index, 'question': item.question, 'answer': '', 'error': None,
+           'status': None, 'total': None}
+    started = time.perf_counter()
+    row['started_at'] = started
+    try:
+        body = json.dumps({'question': item.question}, ensure_ascii=False).encode('utf-8')
+        request = urllib.request.Request(base_url + '/ask', data=body,
+                                         headers={'Content-Type': 'application/json'}, method='POST')
+        # This is loopback traffic; do not route it through environment proxies.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=max(180, LLM_TIMEOUT * 3)) as response:
+            row['status'] = response.status
+            result = json.loads(response.read())
+        answer = result.get('answer')
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError('Response has no nonempty answer')
+        row['answer'] = answer
+    except urllib.error.HTTPError as error:
+        row['status'] = error.code
+        row['error'] = f'HTTPError: {error.code} {error.reason}'
+    except Exception as error:
+        row['error'] = f'{type(error).__name__}: {error}'
+    finally:
+        row['ended_at'] = time.perf_counter()
+        row['total'] = row['ended_at'] - started
+    return row
 
 
-def _render_row(i: int, q: str, r: dict) -> str:
-    return (
-        f"{i:>3} {_clip(q):<42} {_f(r['rag'])} {_f(r['transmission'])} "
-        f"{_f(r['generation'])} {_f(r['total'])}"
-        f"\n    Answer (full):\n{r['answer']}"
-    )
+def _summarize(rows: list[dict], wall_seconds: float, workers: int) -> dict:
+    successful = [row for row in rows if row['error'] is None]
+    latencies = sorted(row['total'] for row in successful)
+    events = [(row['started_at'], 1) for row in rows] + [(row['ended_at'], -1) for row in rows]
+    active = peak = 0
+    for _, change in sorted(events):
+        active += change
+        peak = max(peak, active)
+    return {
+        'workers': workers, 'requests': len(rows), 'successful': len(successful),
+        'errors': len(rows) - len(successful), 'wall_seconds': wall_seconds,
+        'requests_per_second': len(successful) / wall_seconds if wall_seconds > 0 else 0,
+        'mean_latency_seconds': mean(latencies) if latencies else None,
+        'median_latency_seconds': median(latencies) if latencies else None,
+        'p95_latency_seconds': latencies[math.ceil(0.95 * len(latencies)) - 1] if latencies else None,
+        'min_latency_seconds': min(latencies) if latencies else None,
+        'max_latency_seconds': max(latencies) if latencies else None,
+        'peak_client_in_flight': peak,
+        'answer_characters': sum(len(row['answer']) for row in successful),
+    }
 
 
-def _summarize(rows: list[dict]) -> dict:
-    summary: dict = {}
-    for key in _COLS:
-        vals = [r[key] for r in rows if r.get(key) is not None]
-        summary[key] = (sum(vals) / len(vals)) if vals else None
-    return summary
+def _run_phase(base_url: str, items: list, workers: int, label: str, report) -> dict:
+    print(f'PHASE_START {label} workers={workers} questions={len(items)}', flush=True)
+    report.write(f'\n=== {label}: workers={workers} ===\n')
+    report.flush()
+    rows = []
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = [pool.submit(_http_request, base_url, i, item) for i, item in enumerate(items, 1)]
+        for future in as_completed(pending):
+            row = future.result()
+            rows.append(row)
+            rendered = (f"[{label}] #{row['index']} HTTP={row['status']} total={row['total']:.3f}s\n"
+                        f"Question (full):\n{row['question']}\nAnswer (full):\n{row['answer']}\n")
+            if row['error']:
+                rendered += f"[ERROR] {row['error']}\n"
+            report.write(rendered + '\n')
+            report.flush()
+            print(rendered, flush=True)
+            print(f'PROGRESS {label} {len(rows)}/{len(items)}', flush=True)
+    # End at the final HTTP completion, excluding report printing after it.
+    wall_seconds = max(row['ended_at'] for row in rows) - started
+    result = _summarize(rows, wall_seconds, workers)
+    report.write('PHASE_SUMMARY ' + json.dumps({'phase': label, **result}) + '\n')
+    report.flush()
+    print('PHASE_DONE ' + json.dumps({'phase': label, **result}), flush=True)
+    return result
 
 
-def run_speed_test(
-    n: int = SPEED_N_PROMPTS,
-    seed: int = SPEED_SEED,
-    report_path: Path = SPEED_REPORT_PATH,
-) -> dict:
-    # 1) 服务初始化（服务启动开销）
-    t0 = time.perf_counter()
-    svc = RAGService()
-    server_init_time = time.perf_counter() - t0
+def _comparison(sequential: dict, concurrent: dict) -> dict:
+    comparable = (sequential['errors'] == concurrent['errors'] == 0
+                  and sequential['requests'] == concurrent['requests']
+                  and sequential['requests'] > 0)
+    speedup = sequential['wall_seconds'] / concurrent['wall_seconds'] if comparable else None
+    return {
+        'comparable': comparable, 'batch_speedup': speedup,
+        'batch_time_reduction_percent': (1 - concurrent['wall_seconds'] / sequential['wall_seconds']) * 100 if comparable else None,
+        'throughput_increase_percent': (concurrent['requests_per_second'] / sequential['requests_per_second'] - 1) * 100 if comparable else None,
+    }
 
+
+def run_speed_test(n: int = SPEED_N_PROMPTS, seed: int = SPEED_SEED,
+                   report_path: Path = SPEED_REPORT_PATH,
+                   concurrency: int = SPEED_CONCURRENCY) -> dict:
+    if n < 1 or concurrency < 1:
+        raise ValueError('Question count and concurrency must be positive')
+    if concurrency > MAX_CONCURRENT_REQUESTS:
+        raise ValueError('SPEED_CONCURRENCY exceeds RAG_MAX_CONCURRENT_REQUESTS')
     items = _pick_prompts(n, seed)
+    if not items:
+        raise ValueError('No benchmark questions available')
     report_path = Path(report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    rows: list[dict] = []
-
-    # 2) 逐条测试，边测边写入报告（中断后已测数据仍保留）
-    with open(report_path, "w", encoding="utf-8") as fh:
-        fh.write("FUTURX RAG 响应速度测试\n")
-        fh.write(f"生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        fh.write(f"样本数：{len(items)} | 随机种子：{seed}\n")
-        fh.write(f"服务初始化耗时：{server_init_time:.3f}s\n")
-        fh.write("=" * 100 + "\n\n")
-        fh.write("（逐条统计，测试进行中……）\n")
-        fh.write(_HEADER_LINE + "\n")
-        fh.flush()
-
-        for i, item in enumerate(items, 1):
-            row: dict = {
-                "question": item.question,
-                "rag": None,
-                "transmission": None,
-                "generation": None,
-                "total": None,
-                "error": None,
-                "answer": "",
-            }
-            try:
-                t = time.perf_counter()
-                answer, _, _ = svc.answer(item.question)
-                total = time.perf_counter() - t
-                timing = getattr(svc, "timing", {}) or {}
-                row["rag"] = timing.get("retrieval")
-                row["transmission"] = timing.get("llm_ttft")
-                row["generation"] = timing.get("llm_generation")
-                row["total"] = total
-                row["answer"] = answer or ""
-            except Exception as e:  # 单条失败不影响整体
-                row["error"] = f"{type(e).__name__}: {e}"
-
-            rows.append(row)
-            rendered = _render_row(i, item.question, row)
-            fh.write(rendered + "\n")
-            print(rendered, flush=True)
-            if row["error"]:
-                fh.write(f"    [错误] {row['error']}\n")
-                print(f"    [错误] {row['error']}", flush=True)
-            fh.flush()
-
-    # 3) 计算均值
-    summary = _summarize(rows)
-
-    # 4) 重写报告：把均值汇总置顶
-    labels = {
-        "rag": "RAG 检索耗时均值",
-        "transmission": "传输（首字节）耗时均值",
-        "generation": "流式生成耗时均值",
-        "total": "端到端总耗时均值",
-    }
-    lines = [
-        "FUTURX RAG 响应速度测试报告",
-        f"生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"样本数：{len(rows)} | 随机种子：{seed}",
-        "=" * 100,
-        "",
-        "【均值汇总】（单位：秒）",
-        f"  服务初始化时间 (server_init_time) : {server_init_time:.3f}",
-    ]
-    for key in _COLS:
-        v = summary[key]
-        lines.append(f"  {labels[key]:<28} : {v:.3f}" if v is not None else f"  {labels[key]:<28} : -")
-    lines += ["", "=" * 100, "", "【逐条统计】（单位：秒）", _HEADER_LINE]
-
-    with open(report_path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
-        for i, r in enumerate(rows, 1):
-            fh.write(_render_row(i, r["question"], r) + "\n")
-            if r["error"]:
-                fh.write(f"    [错误] {r['error']}\n")
-
-    result = {"server_init_time": server_init_time, "n": len(rows), **summary}
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S%z')
+    with _benchmark_server(items) as (base_url, init, warmup):
+        with report_path.open('w', encoding='utf-8') as report:
+            report.write(f'FUTURX sequential vs concurrent HTTP benchmark\nStarted: {started_at}\n'
+                         f'Questions per phase: {len(items)} | seed: {seed} | concurrent workers: {concurrency}\n'
+                         f'Server initialization: {init:.3f}s | retrieval warm-up: {warmup:.3f}s\n'
+                         'Startup/warm-up excluded. Same questions in both phases; sequential first.\n'
+                         'Latency starts when a worker sends a request; excludes time queued in the client pool.\n'
+                         'No client retries. Full responses below are in completion order; # preserves question identity.\n')
+            report.flush()
+            sequential = _run_phase(base_url, items, 1, 'sequential', report)
+            concurrent = _run_phase(base_url, items, concurrency, 'concurrent', report)
+            result = {'n': len(items), 'seed': seed, 'server_init_time': init,
+                      'retrieval_warmup_seconds': warmup, 'started_at': started_at,
+                      'sequential': sequential, 'concurrent': concurrent,
+                      **_comparison(sequential, concurrent)}
+    # Keep a prompt-free machine-readable summary for monitoring/comparison.
+    report_path.with_suffix('.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+    details = report_path.read_text(encoding='utf-8')
+    temporary = report_path.with_name(report_path.name + '.tmp')
+    temporary.write_text('AGGREGATE SUMMARY\n' + json.dumps(result, indent=2)
+                         + '\n\n' + details, encoding='utf-8')
+    temporary.replace(report_path)
+    print('COMPARISON ' + json.dumps(result), flush=True)
     return result
 
 
 def main() -> None:
     result = run_speed_test()
-    print("=" * 60)
-    print("服务初始化时间：%.3f s" % result["server_init_time"])
-    for key in _COLS:
-        v = result[key]
-        print(f"{key:<14}: {v:.3f} s" if v is not None else f"{key:<14}: -")
-    print(f"报告已写入：{SPEED_REPORT_PATH}")
+    print(f'Report: {SPEED_REPORT_PATH}', flush=True)
+    if not result['comparable']:
+        raise SystemExit(1)
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_SPEED_TEST") != "1",
-    reason="会加载真实模型并访问真实 LLM，设置 RUN_SPEED_TEST=1 才会运行",
-)
+@pytest.mark.skipif(os.environ.get('RUN_SPEED_TEST') != '1',
+                    reason='Loads real models and calls the real LLM; requires RUN_SPEED_TEST=1')
 def test_speed():
     result = run_speed_test()
-    assert result["n"] > 0
+    assert result['n'] > 0
+    assert result['comparable']
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import time
+from threading import RLock, local
 
 from openai import OpenAI
 
@@ -61,6 +62,9 @@ class RAGService:
         use_hyde: bool = HYDE_ENABLED,
         expand_context: bool = CONTEXT_EXPAND_ENABLED,
     ):
+        self._request_state = local()
+        self._retrieval_lock = RLock()
+
         import chromadb
         from sentence_transformers import SentenceTransformer
 
@@ -91,6 +95,15 @@ class RAGService:
         if rerank:
             self.retriever.attach_reranker(Reranker(RERANK_MODEL))
 
+    @property
+    def timing(self) -> dict:
+        """Timing belongs to the calling thread, including CLI/benchmark callers."""
+        return getattr(self._request_state, "timing", {})
+
+    @timing.setter
+    def timing(self, value: dict) -> None:
+        self._request_state.timing = value
+
     def _embed(self, text: str) -> list[float]:
         return self.model.encode(text, normalize_embeddings=True).tolist()
 
@@ -120,15 +133,20 @@ class RAGService:
 
     def retrieve_result(self, query: str, top_k: int = TOP_K):
         """返回 RetrievalResult（含 debug 信息），供 answer 与评估使用。"""
-        result = self.retriever.search(
-            self._retrieval_query(query),
-            top_k=top_k,
-            fetch_k=max(self.fetch_k, top_k),
-            where=self.where,
-            collection_name=COLLECTION_NAME,
-        )
-        if self.expand_context:
-            self._expand(result)
+        # Optional upstream query rewriting can overlap with other requests.
+        retrieval_query = self._retrieval_query(query)
+        # Protect shared embedding/reranking models and lazily loaded indexes.
+        # Release before LLM generation so answers can run in parallel.
+        with self._retrieval_lock:
+            result = self.retriever.search(
+                retrieval_query,
+                top_k=top_k,
+                fetch_k=max(self.fetch_k, top_k),
+                where=self.where,
+                collection_name=COLLECTION_NAME,
+            )
+            if self.expand_context:
+                self._expand(result)
         return result
 
     def _expand(self, result) -> None:

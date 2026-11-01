@@ -10,7 +10,7 @@ import json
 
 from pydantic import BaseModel
 
-from .config import TOP_K
+from .config import MAX_CONCURRENT_REQUESTS, TOP_K
 from .query import RAGService
 
 
@@ -69,10 +69,12 @@ def build_app(**service_kwargs):
     from fastapi.staticfiles import StaticFiles
 
     from .api import router as openai_router
+    from .concurrency import RequestConcurrencyMiddleware
 
     svc = RAGService(**service_kwargs)
     app = FastAPI(title="FUTURX RAG 查询服务")
     app.state.service = svc
+    app.add_middleware(RequestConcurrencyMiddleware, max_requests=MAX_CONCURRENT_REQUESTS)
     web_dir = Path(__file__).resolve().parent / "web"
 
     @app.get("/health")
