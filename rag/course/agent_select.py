@@ -47,6 +47,9 @@ class SelectResult:
     tool_log: list[dict] = field(default_factory=list)
     # 结束原因：finish / truncated / no_tool_call（LLM 只回了文字）/ parse_failed（JSON 路径重试后仍无法解析）
     end_reason: str = ""
+    candidates: list[dict] = field(default_factory=list)   # single 模式：候选清单（ID、名称、章、来源、得分）
+    fallback: str = ""             # single 模式：parse_failed / empty_selection / no_candidates，空表示正常
+    reason: str = ""               # single 模式：模型给的一句话理由
     fast_path: str = ""            # 非空表示走了快速路径（值为命中的别名），此时 0 次 LLM 调用
     rounds: list[dict] = field(default_factory=list)   # 每轮 LLM 调用的耗时与 token
     final_text: str = ""           # end_reason 为 no_tool_call / parse_failed 时 LLM 回复的前 300 字，便于排查
@@ -54,7 +57,8 @@ class SelectResult:
     def to_dict(self) -> dict:
         return {"selected": [s.to_dict() for s in self.selected], "dropped": self.dropped, "steps": self.steps,
                 "truncated": self.truncated, "finished": self.finished, "parse_failures": self.parse_failures,
-                "tool_log": self.tool_log, "fast_path": self.fast_path, "rounds": self.rounds, "end_reason": self.end_reason, "final_text": self.final_text}
+                "tool_log": self.tool_log, "fast_path": self.fast_path, "rounds": self.rounds, "candidates": self.candidates,
+                "fallback": self.fallback, "reason": self.reason, "end_reason": self.end_reason, "final_text": self.final_text}
 
 
 def run_tool(index: VocabIndex, name: str, args: dict) -> dict:
@@ -205,6 +209,9 @@ def fast_select(question: str, index: VocabIndex) -> SelectResult | None:
 def select_concepts(question: str, active_concepts, index: VocabIndex, llm: LLMClient, *,
                     max_steps: int | None = None, model: str | None = None,
                     native_tools: bool | None = None, fast_path: bool | None = None) -> SelectResult:
+    if config.COURSE_SELECT_MODE != "agent":              # 默认 single：本地候选 + 一次 LLM 调用（见 single_select）
+        from .single_select import select_single
+        return select_single(question, index, llm, model=model)
     max_steps = config.COURSE_AGENT_MAX_STEPS if max_steps is None else max_steps
     model = model or config.COURSE_SELECT_MODEL
     native = config.COURSE_LLM_NATIVE_TOOLS if native_tools is None else native_tools

@@ -17,6 +17,10 @@ _BRACKET_MAP = str.maketrans({"［": "[", "］": "]", "【": "[", "】": "]", "�
 _CITE_RE = re.compile(r"\[([^\[\]\n]{1,120})\]")
 _REF_RE = re.compile(r"^[Ss](\d+)$")
 ONTOLOGY_TAG = "本体"
+# 防御性写作的免责短语：命中只记进 trace 的 warnings，不自动删改正文
+DISCLAIMER_PHRASES = ("这部分不是教材原文", "不是教材原文", "非教材原文", "只是本体中记录", "本体中仅记录", "不能作为教材",
+                      "不能作为教材原文证据", "不能作为……依据", "不能作为依据", "本体关系材料中未提供", "材料未提供",
+                      "材料中未提供", "材料不足以", "教材并没有列出", "不属于教材原文", "属于本体推导关系")
 INSUFFICIENT_PHRASE = "教材材料不足以回答"
 
 
@@ -28,10 +32,17 @@ class AnswerResult:
     uses_ontology: bool = False
     insufficient: bool = False
     refs: dict[str, str] = field(default_factory=dict)        # S# -> chunk_id（本次提供给 LLM 的全部材料）
+    warnings: list[str] = field(default_factory=list)         # 命中的免责短语（不改正文）
 
     def to_dict(self) -> dict:
         return {"text": self.text, "citations": self.citations, "invalid_citations": self.invalid_citations,
-                "uses_ontology": self.uses_ontology, "insufficient": self.insufficient, "refs": self.refs}
+                "uses_ontology": self.uses_ontology, "insufficient": self.insufficient, "refs": self.refs,
+                "warnings": self.warnings}
+
+
+def disclaimer_warnings(text: str) -> list[str]:
+    """回答里出现的免责短语（去重、按出现顺序）。仅用于告警，不修改正文。"""
+    return [p for p in dict.fromkeys(DISCLAIMER_PHRASES) if p in (text or "")]
 
 
 def render_relations(relations: list[dict]) -> str:
@@ -92,4 +103,4 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
     res = llm.chat("answer", messages, model=model)
     text, valid, invalid, onto = sanitize_citations(res.content, refs)
     return AnswerResult(text=text.strip(), citations=valid, invalid_citations=invalid, uses_ontology=onto,
-                        insufficient=INSUFFICIENT_PHRASE in text, refs=refs)
+                        insufficient=INSUFFICIENT_PHRASE in text, refs=refs, warnings=disclaimer_warnings(text))

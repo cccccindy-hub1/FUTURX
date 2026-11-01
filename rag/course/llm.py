@@ -175,6 +175,14 @@ class Trace:
         out = {k: sum(c.get(k, 0) for c in self.calls) for k in keys}
         out["latency_s"] = round(out["latency_s"], 3)
         out["calls"] = len(self.calls)
+        steps: dict[str, dict] = {}
+        for c in self.calls:
+            st = steps.setdefault(c["step"], {"calls": 0, "latency_s": 0.0, "prompt_tokens": 0, "completion_tokens": 0})
+            st["calls"] += 1
+            st["latency_s"] = round(st["latency_s"] + c.get("latency_s", 0), 3)
+            st["prompt_tokens"] += c.get("prompt_tokens", 0)
+            st["completion_tokens"] += c.get("completion_tokens", 0)
+        out["by_step"] = steps
         return out
 
     def to_dict(self) -> dict:

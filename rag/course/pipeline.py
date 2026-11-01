@@ -20,7 +20,7 @@ from .evidence import AnchorIndex
 from .fallback import ChunkBM25
 from .llm import LLMClient, Trace, TracingLLM
 from .ontology import ConceptTable, OntologyPaths, Record, load_concepts, load_records
-from .passage_filter import filter_passages, pick_for_answer
+from .passage_filter import cap_for_filter, filter_passages, pick_for_answer
 from .recall import DEFAULT_STRATEGY, Recaller, batch_by_budget, dry_run_report
 from .textbook import Textbook, parse_docx
 from .vocab_tools import VocabIndex
@@ -122,9 +122,15 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
                                     else "选中概念没有召回到任何教材子块")
         return res
 
-    # Step 3
+    # Step 3：所有召回块一次调用送筛选（single 模式）；超上限先截断，不再分批
+    if config.COURSE_SELECT_MODE != "agent":
+        to_filter, cap_stats = cap_for_filter(rr.items)
+        batches = [to_filter] if to_filter else []
+    else:
+        cap_stats = None
     fr = filter_passages(question, batches, traced)
     trace.stages["filter"] = {k: v for k, v in fr.to_dict().items() if k != "verdicts"}
+    trace.stages["filter"]["cap"] = cap_stats
     res["filtered"] = [v.to_dict() for v in fr.verdicts]
     kept, capped = pick_for_answer(rr.items, fr)
     if not kept:
@@ -137,7 +143,7 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     trace.stages["answer"] = {"kept": len(kept), "kept_grades": {g: sum(fr.grade_of(k.chunk_id) == g for k in kept)
                                                                  for g in ("direct", "background")},
                               "capped": capped, "relations": len(relations),
-                              "invalid_citations": ar.invalid_citations}
+                              "invalid_citations": ar.invalid_citations, "warnings": ar.warnings}
     res["answer"] = ar.to_dict()
     res["citations"] = [{"chunk_id": c, "path": next(k.path for k in kept if k.chunk_id == c)} for c in ar.citations]
     return res

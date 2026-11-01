@@ -151,3 +151,27 @@ def pick_for_answer(items: list[Recalled], fr: FilterResult, max_chunks: int | N
     grade = {v.chunk_id: v.grade for v in fr.verdicts}
     ranked = [i for g in (DIRECT, BACKGROUND) for i in items if grade.get(i.chunk_id) == g]
     return ranked[:max_chunks], [i.chunk_id for i in ranked[max_chunks:]]
+
+
+def cap_for_filter(items: list[Recalled], max_chunks: int | None = None) -> tuple[list[Recalled], dict]:
+    """筛选一次调用的输入上限。超出时：先保留本体有证据的块（tier 0–2，保持召回顺序），再按 BM25 得分取前若干块；
+    丢弃的块数与来源写入返回的统计（供 trace）。未超上限时原样返回。"""
+    max_chunks = config.COURSE_FILTER_MAX_CHUNKS if max_chunks is None else max_chunks
+    stats = {"limit": max_chunks, "total": len(items), "kept": len(items), "dropped": 0, "dropped_by_source": {}}
+    if len(items) <= max_chunks:
+        return items, stats
+    evidence = [i for i in items if i.tier <= 2]
+    rest = [i for i in items if i.tier > 2]
+
+    def bm25_score(i: Recalled) -> float:
+        return max((r.score or 0.0 for r in i.reasons if r.via == "bm25"), default=0.0)
+
+    rest_sorted = sorted(rest, key=lambda i: (-bm25_score(i), items.index(i)))      # BM25 分高者先；无 BM25 分的（mention）垫后
+    keep_ids = {i.chunk_id for i in evidence[:max_chunks]}
+    keep_ids |= {i.chunk_id for i in rest_sorted[: max(max_chunks - len(keep_ids), 0)]}
+    kept = [i for i in items if i.chunk_id in keep_ids]                              # 保持原召回顺序
+    drop = [i for i in items if i.chunk_id not in keep_ids]
+    for i in drop:
+        stats["dropped_by_source"][i.source] = stats["dropped_by_source"].get(i.source, 0) + 1
+    stats.update(kept=len(kept), dropped=len(drop), dropped_ids=[i.chunk_id for i in drop])
+    return kept, stats

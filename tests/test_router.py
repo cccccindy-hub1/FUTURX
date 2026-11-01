@@ -520,11 +520,11 @@ def test_answer_omits_ontology_section_when_no_relations(ctx):
     answer.answer_question("q", kept, [], llm_)
     sysm, user = (m["content"] for m in llm_.calls[0]["messages"])
     assert "本体" not in user and "（无）" not in user and "【教材原文】" in user
-    assert "不要说明本体材料缺失或未提供" in sysm
+    assert "本体" in sysm and "若提供了【本体结构信息】" in sysm                  # 本体段为空时用户消息里不出现，系统提示只做条件说明
     rel = ctx.index.relations_among(["C01-0001", "C01-0003"])
     llm2 = ScriptedLLM([LLMResult(content="回答[S1]")])
     answer.answer_question("q", kept, rel, llm2)
-    assert "【本体结构信息，非教材原文】" in llm2.calls[0]["messages"][1]["content"]
+    assert "【本体结构信息】" in llm2.calls[0]["messages"][1]["content"]
 
 
 # ---------------------------------------------------------------- 选词轮次记录 reasoning

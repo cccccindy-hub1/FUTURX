@@ -91,6 +91,8 @@ def ctx(tmp_path, monkeypatch):
     # 夹具段落都很短，默认阈值下 M1 会把 P0005/P0006/P0008 合并成一个子块；调小阈值让每段独立成块
     # 既有测试脚本化多轮选词；快速路径另有专门测试（tests/test_router.py），这里默认关闭
     monkeypatch.setattr(config, "COURSE_SELECT_FAST_PATH", False)
+    # 既有测试验证旧的多轮 agent 选词 + 分批筛选；single 模式另有专门测试（tests/test_single_mode.py）
+    monkeypatch.setattr(config, "COURSE_SELECT_MODE", "agent")
     # 既有测试验证本体召回本身；BM25 兜底召回另有专门测试（tests/test_router.py），这里默认关闭
     monkeypatch.setattr(config, "COURSE_BM25_TOPK", 0)
     monkeypatch.setattr(chunker, "CHILD_MIN", 10)
@@ -659,8 +661,9 @@ def test_answer_prompt_separates_textbook_from_ontology(ctx):
     llm_ = ScriptedLLM([LLMResult(content="材料不足。教材材料不足以回答")])
     ar = answer.answer_question("q", kept, rel, llm_)
     sysm, user = (m["content"] for m in llm_.calls[0]["messages"])
-    assert "非教材原文" in sysm and "【教材原文】" in user and "【本体结构信息，非教材原文】" in user
-    assert user.index("【教材原文】") < user.index("[S1]") < user.index("【本体结构信息，非教材原文】")
+    # 新提示词不再要求声明来源性质（师兄反馈：防御性写作）：系统提示里没有「非教材原文」，本体段仍与教材段分开
+    assert "非教材原文" not in sysm and "【教材原文】" in user and "【本体结构信息】" in user
+    assert user.index("【教材原文】") < user.index("[S1]") < user.index("【本体结构信息】")
     assert "—dependsOn→" in user
     assert ar.insufficient
 
@@ -869,10 +872,11 @@ def test_every_prompt_template_formats_without_error():
     """所有字符串模板都过一遍 str.format：JSON 示例的花括号没双写时会在这里报错。"""
     values = dict(max_steps=6, active_concepts="（无）", question="q", items="x", error="e", ref="S1",
                   path="a › b", text="t", passages="p", ontology="o", subject="甲", subject_id="C01-0001",
-                  predicate="p", object="乙", object_id="C01-0002", view="onto2")
+                  predicate="p", object="乙", object_id="C01-0002", view="onto2", candidates="C01-0001｜甲｜第1章｜定义")
     names = [n for n, v in vars(prompts).items() if n.isupper() and isinstance(v, str)]
     assert {"SELECT_SYSTEM", "SELECT_JSON_PROTOCOL", "SELECT_USER", "FILTER_SYSTEM", "FILTER_JSON_FALLBACK",
             "RETRY_JSON", "FILTER_USER", "FILTER_ITEM", "ANSWER_SYSTEM", "ANSWER_USER", "ANSWER_PASSAGE",
+            "SINGLE_SELECT_SYSTEM", "SINGLE_SELECT_USER",
             "ANSWER_RELATION"} <= set(names)
     for n in names:
         getattr(prompts, n).format(**values)               # 任何一个模板花括号写错都会在这里抛 KeyError / ValueError
