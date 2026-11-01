@@ -153,25 +153,46 @@ def pick_for_answer(items: list[Recalled], fr: FilterResult, max_chunks: int | N
     return ranked[:max_chunks], [i.chunk_id for i in ranked[max_chunks:]]
 
 
-def cap_for_filter(items: list[Recalled], max_chunks: int | None = None) -> tuple[list[Recalled], dict]:
-    """筛选一次调用的输入上限。超出时：先保留本体有证据的块（tier 0–2，保持召回顺序），再按 BM25 得分取前若干块；
-    丢弃的块数与来源写入返回的统计（供 trace）。未超上限时原样返回。"""
+def cap_for_filter(items: list[Recalled], max_chunks: int | None = None, question: str = "",
+                   concept_names: list[str] | None = None) -> tuple[list[Recalled], dict]:
+    """筛选一次调用的输入上限；超出时按「与问题 / 已选概念的匹配程度」排序取前 max_chunks 块，不再按召回顺序截断。
+
+    排序键（从高到低）：
+      1. 命中档：有本体边证据（tier 0–2）> 仅 BM25/mention；这一档只是第一排序键，不再保证全部保留；
+      2. 相关分 = 块文本与问题的字符 bigram 重合率 + 与已选概念名的重合率（本体块内部也据此区分）+ 该块的 BM25 分（若有）归一化；
+      3. 并列时保持原召回顺序（稳定）。
+    kept 返回时保持原召回顺序。丢弃块数、来源、被丢块中最高相关分写入统计，便于排查误丢。"""
     max_chunks = config.COURSE_FILTER_MAX_CHUNKS if max_chunks is None else max_chunks
-    stats = {"limit": max_chunks, "total": len(items), "kept": len(items), "dropped": 0, "dropped_by_source": {}}
+    stats = {"limit": max_chunks, "total": len(items), "kept": len(items), "dropped": 0, "dropped_by_source": {},
+             "ranking": "relevance"}
     if len(items) <= max_chunks:
         return items, stats
-    evidence = [i for i in items if i.tier <= 2]
-    rest = [i for i in items if i.tier > 2]
+    order = {i.chunk_id: n for n, i in enumerate(items)}
+    q_grams = _grams(question)
+    name_grams = [_grams(n) for n in (concept_names or []) if n]
+    bm = {i.chunk_id: max((r.score or 0.0 for r in i.reasons if r.via == "bm25"), default=0.0) for i in items}
+    bm_max = max(bm.values()) or 1.0
 
-    def bm25_score(i: Recalled) -> float:
-        return max((r.score or 0.0 for r in i.reasons if r.via == "bm25"), default=0.0)
+    def score(i: Recalled) -> float:
+        g = _grams(" ".join(i.path[-2:]) + i.text)
+        overlap_q = len(g & q_grams) / (len(q_grams) or 1)
+        overlap_n = max((len(g & ng) / (len(ng) or 1) for ng in name_grams), default=0.0)
+        return overlap_q + 0.5 * overlap_n + 0.5 * bm[i.chunk_id] / bm_max
 
-    rest_sorted = sorted(rest, key=lambda i: (-bm25_score(i), items.index(i)))      # BM25 分高者先；无 BM25 分的（mention）垫后
-    keep_ids = {i.chunk_id for i in evidence[:max_chunks]}
-    keep_ids |= {i.chunk_id for i in rest_sorted[: max(max_chunks - len(keep_ids), 0)]}
-    kept = [i for i in items if i.chunk_id in keep_ids]                              # 保持原召回顺序
+    scored = {i.chunk_id: score(i) for i in items}
+    ranked = sorted(items, key=lambda i: (i.tier > 2, -scored[i.chunk_id], order[i.chunk_id]))
+    keep_ids = {i.chunk_id for i in ranked[:max_chunks]}
+    kept = [i for i in items if i.chunk_id in keep_ids]
     drop = [i for i in items if i.chunk_id not in keep_ids]
     for i in drop:
         stats["dropped_by_source"][i.source] = stats["dropped_by_source"].get(i.source, 0) + 1
-    stats.update(kept=len(kept), dropped=len(drop), dropped_ids=[i.chunk_id for i in drop])
+    stats.update(kept=len(kept), dropped=len(drop), dropped_ids=[i.chunk_id for i in drop],
+                 dropped_max_score=round(max((scored[i.chunk_id] for i in drop), default=0.0), 3),
+                 kept_min_score=round(min((scored[i.chunk_id] for i in kept), default=0.0), 3))
     return kept, stats
+
+
+def _grams(text: str) -> set[str]:
+    """字符 bigram 集合（去掉标点空白）；中文问句与教材块的粗粒度重合度，不依赖分词器。"""
+    t = "".join(ch for ch in (text or "") if ch.isalnum())
+    return {t[k:k + 2] for k in range(len(t) - 1)} if len(t) > 1 else set(t)

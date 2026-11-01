@@ -1,0 +1,620 @@
+{
+ "rows": [
+  {
+   "id": "r11",
+   "old": {
+    "concepts": 25,
+    "recalled": 200,
+    "kept": 40,
+    "dropped": 160
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 6,
+    "recalled": 69,
+    "kept": 40,
+    "dropped": 29
+   },
+   "missing_old_picks": [
+    "C01-0024"
+   ],
+   "expanded": [
+    {
+     "candidate": "C01-0001",
+     "name": "数据要素",
+     "to": [
+      "C01-0001",
+      "C02-0183"
+     ],
+     "dropped": [
+      "C04-0220",
+      "C05-0059",
+      "C06-0039",
+      "C08-0069",
+      "C10-0011"
+     ]
+    },
+    {
+     "candidate": "C01-0028",
+     "name": "数据资源",
+     "to": [
+      "C01-0028",
+      "C08-0076"
+     ],
+     "dropped": [
+      "C02-0182",
+      "C03-0063",
+      "C04-0014",
+      "C05-0049",
+      "C06-0051",
+      "C07-0027",
+      "C10-0346"
+     ]
+    },
+    {
+     "candidate": "C01-0027",
+     "name": "数据资产",
+     "to": [
+      "C01-0027",
+      "C03-0021"
+     ],
+     "dropped": [
+      "C04-0001",
+      "C05-0051",
+      "C07-0086",
+      "C10-0144"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据要素是指根据特定生产需求",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "数据要素则是数据成为生产要素后",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r12",
+   "old": {
+    "concepts": 17,
+    "recalled": 17,
+    "kept": 17,
+    "dropped": 0
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 11,
+    "recalled": 16,
+    "kept": 16,
+    "dropped": 0
+   },
+   "missing_old_picks": [],
+   "expanded": [
+    {
+     "candidate": "C04-0042",
+     "name": "数据产权结构性分置",
+     "to": [
+      "C04-0042",
+      "C06-0167"
+     ],
+     "dropped": []
+    },
+    {
+     "candidate": "C10-0082",
+     "name": "数据资源持有权",
+     "to": [
+      "C10-0082",
+      "C02-0188"
+     ],
+     "dropped": [
+      "C04-0044",
+      "C05-0030"
+     ]
+    },
+    {
+     "candidate": "C10-0079",
+     "name": "数据加工使用权",
+     "to": [
+      "C10-0079",
+      "C04-0043"
+     ],
+     "dropped": [
+      "C02-0189",
+      "C05-0031"
+     ]
+    },
+    {
+     "candidate": "C10-0078",
+     "name": "数据产品经营权",
+     "to": [
+      "C10-0078",
+      "C02-0194"
+     ],
+     "dropped": [
+      "C04-0041",
+      "C05-0033"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "而非传统意义上的所有权",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "从“所有权思维”到“权能分割思维”的转变",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "数据资源持有权、数据加工使用权和数据产品经营权三类权利",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r13",
+   "old": {
+    "concepts": 10,
+    "recalled": 63,
+    "kept": 40,
+    "dropped": 23
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 5,
+    "recalled": 12,
+    "kept": 12,
+    "dropped": 0
+   },
+   "missing_old_picks": [
+    "C04-0012"
+   ],
+   "expanded": [
+    {
+     "candidate": "C03-0072",
+     "name": "财政部《企业数据资源相关会计处理暂行规定》",
+     "to": [
+      "C03-0072",
+      "C04-0079"
+     ],
+     "dropped": []
+    },
+    {
+     "candidate": "C01-0027",
+     "name": "数据资产",
+     "to": [
+      "C01-0027",
+      "C10-0144"
+     ],
+     "dropped": [
+      "C03-0021",
+      "C04-0001",
+      "C05-0051",
+      "C07-0086"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据资产入表是将符合确认条件的数据资产纳入企业财务报表体系",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "入表驱动型路径以组织数据资源会计处理为抓手",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": false
+    },
+    {
+     "key": "管理筑基型路径强调在尚未具备大规模运营",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": false
+    }
+   ]
+  },
+  {
+   "id": "r14",
+   "old": {
+    "concepts": 13,
+    "recalled": 100,
+    "kept": 40,
+    "dropped": 60
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 7,
+    "recalled": 88,
+    "kept": 40,
+    "dropped": 48
+   },
+   "missing_old_picks": [],
+   "expanded": [
+    {
+     "candidate": "C05-0044",
+     "name": "数据要素市场",
+     "to": [
+      "C05-0044",
+      "C06-0036"
+     ],
+     "dropped": [
+      "C09-0223"
+     ]
+    },
+    {
+     "candidate": "C06-0001",
+     "name": "数据市场",
+     "to": [
+      "C06-0001",
+      "C07-0024"
+     ],
+     "dropped": []
+    },
+    {
+     "candidate": "C01-0001",
+     "name": "数据要素",
+     "to": [
+      "C01-0001",
+      "C06-0039"
+     ],
+     "dropped": [
+      "C02-0183",
+      "C04-0220",
+      "C05-0059",
+      "C08-0069",
+      "C10-0011"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据市场，简单而言就是以数据产品为交易标的的制度场域",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "交易撮合机制是连接供需双方的桥梁和纽带",
+     "recalled": true,
+     "in_top_kept": false,
+     "old_recalled": true,
+     "old_in_filter": false
+    },
+    {
+     "key": "价格发现机制解决数据定价的问题",
+     "recalled": true,
+     "in_top_kept": false,
+     "old_recalled": true,
+     "old_in_filter": false
+    }
+   ]
+  },
+  {
+   "id": "r15",
+   "old": {
+    "concepts": 8,
+    "recalled": 20,
+    "kept": 20,
+    "dropped": 0
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 8,
+    "recalled": 20,
+    "kept": 20,
+    "dropped": 0
+   },
+   "missing_old_picks": [],
+   "expanded": [],
+   "gold": [
+    {
+     "key": "当前学界关于数据是否应当确权存在根本性分歧",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "数据非权利客体论认为",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "数据产权难以实现论认为",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r16",
+   "old": {
+    "concepts": 10,
+    "recalled": 106,
+    "kept": 40,
+    "dropped": 66
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 2,
+    "recalled": 100,
+    "kept": 40,
+    "dropped": 60
+   },
+   "missing_old_picks": [
+    "C03-0022",
+    "C03-0030",
+    "C03-0017",
+    "C03-0018",
+    "C03-0019"
+   ],
+   "expanded": [
+    {
+     "candidate": "C03-0001",
+     "name": "数据价值",
+     "to": [
+      "C03-0001",
+      "C04-0069"
+     ],
+     "dropped": [
+      "C05-0043"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据资源化是数据要素价值实现的基础环节",
+     "recalled": false,
+     "in_top_kept": false,
+     "old_recalled": false,
+     "old_in_filter": false
+    },
+    {
+     "key": "数据要素化是数据价值形成的核心环节",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "涉及资源化、要素化、资产化与资本化四个环节",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r17",
+   "old": {
+    "concepts": 9,
+    "recalled": 69,
+    "kept": 40,
+    "dropped": 29
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 8,
+    "recalled": 68,
+    "kept": 40,
+    "dropped": 28
+   },
+   "missing_old_picks": [],
+   "expanded": [
+    {
+     "candidate": "C04-0092",
+     "name": "数据交易平台",
+     "to": [
+      "C04-0092",
+      "C07-0022"
+     ],
+     "dropped": [
+      "C05-0274"
+     ]
+    },
+    {
+     "candidate": "C06-0056",
+     "name": "数据交易所",
+     "to": [
+      "C06-0056",
+      "C07-0048"
+     ],
+     "dropped": []
+    },
+    {
+     "candidate": "C06-0001",
+     "name": "数据市场",
+     "to": [
+      "C06-0001",
+      "C07-0024"
+     ],
+     "dropped": []
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据交易所是场内市场的典型组织形式",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "数据交易平台运营方的核心功能不是",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r18",
+   "old": {
+    "concepts": 13,
+    "recalled": 58,
+    "kept": 40,
+    "dropped": 18
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 5,
+    "recalled": 45,
+    "kept": 40,
+    "dropped": 5
+   },
+   "missing_old_picks": [],
+   "expanded": [
+    {
+     "candidate": "C01-0037",
+     "name": "非竞争性",
+     "to": [
+      "C01-0037",
+      "C03-0184"
+     ],
+     "dropped": [
+      "C05-0291",
+      "C06-0029",
+      "C07-0097"
+     ]
+    },
+    {
+     "candidate": "C01-0001",
+     "name": "数据要素",
+     "to": [
+      "C01-0001",
+      "C04-0220"
+     ],
+     "dropped": [
+      "C02-0183",
+      "C05-0059",
+      "C06-0039",
+      "C08-0069",
+      "C10-0011"
+     ]
+    }
+   ],
+   "gold": [
+    {
+     "key": "竞争性是指一方的使用会减少另一方可用性的程度",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r19",
+   "old": {
+    "concepts": 7,
+    "recalled": 12,
+    "kept": 12,
+    "dropped": 0
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 7,
+    "recalled": 12,
+    "kept": 12,
+    "dropped": 0
+   },
+   "missing_old_picks": [],
+   "expanded": [],
+   "gold": [
+    {
+     "key": "成本加成定价是以数据产品形成过程中的实际投入为基础",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    },
+    {
+     "key": "成本加成定价 | 在数据采集、加工、存储、安全和合规成本基础上加合理收益",
+     "recalled": false,
+     "in_top_kept": false,
+     "old_recalled": false,
+     "old_in_filter": false
+    },
+    {
+     "key": "市场比较定价是",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  },
+  {
+   "id": "r20",
+   "old": {
+    "concepts": 6,
+    "recalled": 102,
+    "kept": 40,
+    "dropped": 62
+   },
+   "new": {
+    "candidates": 30,
+    "concepts": 3,
+    "recalled": 102,
+    "kept": 40,
+    "dropped": 62
+   },
+   "missing_old_picks": [
+    "C10-0010",
+    "C10-0021",
+    "C10-0034"
+   ],
+   "expanded": [
+    {
+     "candidate": "C06-0009",
+     "name": "数据治理",
+     "to": [
+      "C06-0009",
+      "C10-0001"
+     ],
+     "dropped": []
+    }
+   ],
+   "gold": [
+    {
+     "key": "数据治理不同于数据管理或数据安全防护",
+     "recalled": true,
+     "in_top_kept": true,
+     "old_recalled": true,
+     "old_in_filter": true
+    }
+   ]
+  }
+ ]
+}

@@ -124,7 +124,8 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
 
     # Step 3：所有召回块一次调用送筛选（single 模式）；超上限先截断，不再分批
     if config.COURSE_SELECT_MODE != "agent":
-        to_filter, cap_stats = cap_for_filter(rr.items)
+        to_filter, cap_stats = cap_for_filter(rr.items, question=question,
+                                              concept_names=[ctx.index.concepts[x.concept_id].name for x in sr.selected])
         batches = [to_filter] if to_filter else []
     else:
         cap_stats = None
