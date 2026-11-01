@@ -182,6 +182,7 @@ function autoGrow() {
   input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 }
 
+/* 流式回答：先出气泡，边收边渲染，末尾补来源卡片。 */
 async function send() {
   const q = input.value.trim();
   if (!q) return;
@@ -190,29 +191,124 @@ async function send() {
   input.value = '';
   autoGrow();
 
+  const t0 = performance.now();
   const pending = document.createElement('div');
   pending.className = 'bubble assistant pending';
-  pending.textContent = '正在检索并生成回答';
+  const elapsed = document.createElement('span');
+  elapsed.className = 'pending-elapsed';
+  pending.append('正在检索', elapsed);
   addMessage('assistant', pending);
+  const timer = setInterval(() => {
+    elapsed.textContent = ' ' + ((performance.now() - t0) / 1000).toFixed(1) + 's';
+  }, 100);
+
+  const body = document.createElement('div');
+  body.className = 'assistant-body';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble assistant markdown';
+  let sources = [];
+  let contexts = [];
+  let text = '';
+  let frame = null;
+
+  const paint = () => {
+    frame = null;
+    bubble.innerHTML = renderMarkdown(text);
+    scrollBottom();
+  };
+
+  const flush = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(paint);
+  };
+
+  const finish = () => {
+    clearInterval(timer);
+    if (frame) cancelAnimationFrame(frame);
+    paint();
+    if (sources.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'sources';
+      const title = document.createElement('div');
+      title.className = 'sources-title';
+      title.textContent = `参考来源（${sources.length}）`;
+      wrap.appendChild(title);
+      sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, contexts && contexts[i])));
+      body.appendChild(wrap);
+    }
+    scrollBottom();
+  };
 
   const topk = parseInt(topkSel.value, 10) || 4;
   try {
-    const r = await fetch('/ask', {
+    const r = await fetch('/ask/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, top_k: topk }),
     });
-    let data = null;
-    try { data = await r.json(); } catch { /* 非 JSON 响应 */ }
-    pending.closest('.msg').remove();
     if (!r.ok) {
-      const msg = (data && data.detail && data.detail.error && data.detail.error.message)
-        || (data && data.detail) || ('HTTP ' + r.status);
+      let data = null;
+      try { data = await r.json(); } catch { /* 非 JSON 响应 */ }
+      clearInterval(timer);
+      pending.closest('.msg').remove();
+      const msg = (data && data.detail) || ('HTTP ' + r.status);
       showError('请求失败：' + (typeof msg === 'string' ? msg : JSON.stringify(msg)));
       return;
     }
-    addAssistant(data.answer, data.sources, data.contexts);
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let started = false;
+
+    const onEvent = (payload) => {
+      if (payload.type === 'sources') {
+        sources = payload.sources || [];
+        contexts = payload.contexts || [];
+        if (!started) {
+          started = true;
+          pending.closest('.msg').remove();
+          clearInterval(timer);
+          body.appendChild(bubble);
+          addMessage('assistant', body);
+        }
+      } else if (payload.type === 'delta') {
+        if (!started) {
+          started = true;
+          pending.closest('.msg').remove();
+          clearInterval(timer);
+          body.appendChild(bubble);
+          addMessage('assistant', body);
+        }
+        text += payload.text || '';
+        flush();
+      } else if (payload.type === 'error') {
+        text += `\n\n（${payload.message}）`;
+        flush();
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!raw.startsWith('data: ')) continue;
+        try { onEvent(JSON.parse(raw.slice(6))); } catch { /* 跳过坏帧 */ }
+      }
+    }
+
+    if (!started) {
+      pending.closest('.msg').remove();
+      showError('请求失败：服务未返回内容');
+      return;
+    }
+    finish();
   } catch (e) {
+    clearInterval(timer);
     pending.closest('.msg').remove();
     showError('请求失败：' + e);
   }

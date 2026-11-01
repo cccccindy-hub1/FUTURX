@@ -1,0 +1,15 @@
+{
+    "files.exclude": {},
+    "files.watcherExclude": {
+        "**/rag/chroma_db/**": true,
+        "**/rag/cache/**": true,
+        "**/__pycache__/**": true,
+        "**/.pytest_cache/**": true
+    },
+    "search.exclude": {
+        "**/rag/chroma_db/**": true,
+        "**/rag/cache/**": true,
+        "**/__pycache__/**": true,
+        "**/.pytest_cache/**": true
+    }
+}

@@ -77,11 +77,20 @@ class AdaptiveRAG:
             messages[-1]["content"] += extra
         if not self.svc.llm:
             return None, sources, docs
-        from .config import LLM_MODEL
         t0 = time.perf_counter()
-        resp = self.svc.llm.chat.completions.create(model=LLM_MODEL, messages=messages, temperature=0.2)
+        resp = self.svc.llm.chat.completions.create(**self._answer_kwargs(messages))
         tm["generate_s"] += time.perf_counter() - t0
         return resp.choices[0].message.content, sources, docs
+
+    def _answer_kwargs(self, messages: list[dict]) -> dict:
+        """作答请求参数与 RAGService 一致（同一模型、温度、思考开关 LLM_REASONING_EFFORT），只是不流式。"""
+        build = getattr(self.svc, "_llm_kwargs", None)
+        if build is None:   # 测试替身等没有 _llm_kwargs 的服务
+            from .config import LLM_MODEL
+            return {"model": LLM_MODEL, "messages": messages, "temperature": 0.2}
+        kwargs = dict(build(messages))
+        kwargs.pop("stream", None)
+        return kwargs
 
     # ---------------------------------------------------------------- 入口
 
@@ -136,7 +145,8 @@ class AdaptiveRAG:
             resp = self.svc.llm.chat.completions.create(
                 model=config.REWRITE_MODEL,
                 messages=[{"role": "system", "content": _DECOMPOSE_SYSTEM.format(n=self.max_subs)},
-                          {"role": "user", "content": question}], temperature=0.0)
+                          {"role": "user", "content": question}], temperature=0.0,
+                **({"reasoning_effort": config.LLM_REASONING_EFFORT} if config.LLM_REASONING_EFFORT else {}))
             return parse_json_object(resp.choices[0].message.content or "")
         try:
             subs = self._aux(call, tm).get("sub_questions", [])

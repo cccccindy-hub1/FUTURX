@@ -41,3 +41,7 @@ docker-compose.yml
 .dockerignore
 rag/chroma_db.orig/
 
+
+speed_test_report.txt
+speed_test_report.json
+speed_test_report.txt.tmp

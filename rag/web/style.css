@@ -140,6 +140,11 @@ body {
   content: "…";
   animation: dots 1.2s steps(4, end) infinite;
 }
+.pending-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: .65;
+  font-size: 12px;
+}
 @keyframes dots {
   0% { content: ""; }
   25% { content: "."; }
