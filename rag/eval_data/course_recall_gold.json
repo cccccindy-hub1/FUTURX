@@ -172,13 +172,22 @@
   "question": "数据交易所和数据交易平台的区别？",
   "must_recall": [
    {
+    "key": "数据交易所是场内市场的典型组织形式"
+   },
+   {
+    "key": "数据交易平台运营方的核心功能不是"
+   }
+  ],
+  "ontology_selection_v1": null,
+  "revised_note": "看过回答后修订：关键句改为回答实际引用的块（依据 docs/course_recall_gold_review.md，经用户确认）。注意：因在看到回答之后选取，命中率偏乐观，不能作无偏估计。",
+  "must_recall_before_revision": [
+   {
     "key": "数据交易所与场外市场是数据交易的两种基本组织形态"
    },
    {
     "key": "场内交易是指在数据交易所"
    }
-  ],
-  "ontology_selection_v1": null
+  ]
  },
  {
   "id": "r18",
@@ -195,25 +204,43 @@
   "question": "数据定价有哪些常见方法？",
   "must_recall": [
    {
+    "key": "成本加成定价是以数据产品形成过程中的实际投入为基础"
+   },
+   {
+    "key": "成本加成定价 | 在数据采集、加工、存储、安全和合规成本基础上加合理收益"
+   },
+   {
+    "key": "市场比较定价是"
+   }
+  ],
+  "ontology_selection_v1": null,
+  "revised_note": "看过回答后修订：关键句改为回答实际引用的块（依据 docs/course_recall_gold_review.md，经用户确认）。注意：因在看到回答之后选取，命中率偏乐观，不能作无偏估计。",
+  "must_recall_before_revision": [
+   {
     "key": "价格发现机制解决数据定价的问题"
    },
    {
     "key": "公开可信的交易案例仍然有限"
    }
-  ],
-  "ontology_selection_v1": null
+  ]
  },
  {
   "id": "r20",
   "question": "数据治理与数据管理的关系是什么？",
   "must_recall": [
    {
+    "key": "数据治理不同于数据管理或数据安全防护"
+   }
+  ],
+  "ontology_selection_v1": null,
+  "revised_note": "看过回答后修订：关键句改为回答实际引用的块（依据 docs/course_recall_gold_review.md，经用户确认）。注意：因在看到回答之后选取，命中率偏乐观，不能作无偏估计。",
+  "must_recall_before_revision": [
+   {
     "key": "数据治理的概念在理论研究和机构实践两个层面尚未形成完全统一的共识"
    },
    {
     "key": "数据资产管理目标决定了数据资产化的方向"
    }
-  ],
-  "ontology_selection_v1": null
+  ]
  }
 ]

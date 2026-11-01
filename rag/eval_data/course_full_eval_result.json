@@ -4142,5 +4142,347 @@
     "fallback": null
    }
   ]
+ },
+ "summary_recomputed_with_revised_gold": {
+  "hit_rate": {
+   "r11-r13": {
+    "ontology_only": "6/8",
+    "ontology_plus_bm25": "8/8",
+    "ontology_only_rate": 0.75,
+    "ontology_plus_bm25_rate": 1.0
+   },
+   "r14-r20": {
+    "ontology_only": "16/16",
+    "ontology_plus_bm25": "16/16",
+    "ontology_only_rate": 1.0,
+    "ontology_plus_bm25_rate": 1.0
+   },
+   "all": {
+    "ontology_only": "22/24",
+    "ontology_plus_bm25": "24/24",
+    "ontology_only_rate": 0.917,
+    "ontology_plus_bm25_rate": 1.0
+   }
+  },
+  "bm25_only_chunk_grades": {
+   "direct": 9,
+   "background": 15,
+   "irrelevant": 14,
+   "ungraded": 0
+  },
+  "bm25_only_chunks_cited_in_answers": 11,
+  "per_question": [
+   {
+    "id": "r11",
+    "hits": [
+     {
+      "key": "数据要素是指根据特定生产需求",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据要素则是数据成为生产要素后",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 47,
+    "sources": {
+     "ontology": 39,
+     "both": 6,
+     "bm25": 2
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 0,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r12",
+    "hits": [
+     {
+      "key": "而非传统意义上的所有权",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "从“所有权思维”到“权能分割思维”的转变",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据资源持有权、数据加工使用权和数据产品经营权三类权利",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 15,
+    "sources": {
+     "ontology": 7,
+     "both": 2,
+     "bm25": 6
+    },
+    "bm25_only_grades": {
+     "direct": 2,
+     "background": 3,
+     "irrelevant": 1
+    },
+    "citations": 9,
+    "bm25_only_cited": 3,
+    "fallback": null
+   },
+   {
+    "id": "r13",
+    "hits": [
+     {
+      "key": "数据资产入表是将符合确认条件的数据资产纳入企业财务报表体系",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "入表驱动型路径以组织数据资源会计处理为抓手",
+      "ontology_only": false,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "管理筑基型路径强调在尚未具备大规模运营",
+      "ontology_only": false,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 13,
+    "sources": {
+     "ontology": 5,
+     "both": 0,
+     "bm25": 8
+    },
+    "bm25_only_grades": {
+     "direct": 5,
+     "background": 3,
+     "irrelevant": 0
+    },
+    "citations": 6,
+    "bm25_only_cited": 5,
+    "fallback": null
+   },
+   {
+    "id": "r14",
+    "hits": [
+     {
+      "key": "数据市场，简单而言就是以数据产品为交易标的的制度场域",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "交易撮合机制是连接供需双方的桥梁和纽带",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "价格发现机制解决数据定价的问题",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 50,
+    "sources": {
+     "ontology": 42,
+     "both": 2,
+     "bm25": 6
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 0,
+     "irrelevant": 6
+    },
+    "citations": 4,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r15",
+    "hits": [
+     {
+      "key": "当前学界关于数据是否应当确权存在根本性分歧",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据非权利客体论认为",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据产权难以实现论认为",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 5,
+     "bm25": 3
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 2
+    },
+    "citations": 10,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r16",
+    "hits": [
+     {
+      "key": "数据资源化是数据要素价值实现的基础环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据要素化是数据价值形成的核心环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "涉及资源化、要素化、资产化与资本化四个环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 4,
+     "bm25": 4
+    },
+    "bm25_only_grades": {
+     "direct": 2,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 2,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r17",
+    "hits": [
+     {
+      "key": "数据交易所是场内市场的典型组织形式",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据交易平台运营方的核心功能不是",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 5,
+     "bm25": 3
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 3,
+     "irrelevant": 0
+    },
+    "citations": 6,
+    "bm25_only_cited": 1,
+    "fallback": null
+   },
+   {
+    "id": "r18",
+    "hits": [
+     {
+      "key": "竞争性是指一方的使用会减少另一方可用性的程度",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 13,
+    "sources": {
+     "ontology": 5,
+     "both": 4,
+     "bm25": 4
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 2,
+     "irrelevant": 2
+    },
+    "citations": 3,
+    "bm25_only_cited": 2,
+    "fallback": null
+   },
+   {
+    "id": "r19",
+    "hits": [
+     {
+      "key": "成本加成定价是以数据产品形成过程中的实际投入为基础",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "成本加成定价 | 在数据采集、加工、存储、安全和合规成本基础上加合理收益",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "市场比较定价是",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 14,
+    "sources": {
+     "ontology": 6,
+     "both": 8,
+     "bm25": 0
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 0,
+     "irrelevant": 0
+    },
+    "citations": 10,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r20",
+    "hits": [
+     {
+      "key": "数据治理不同于数据管理或数据安全防护",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 98,
+    "sources": {
+     "ontology": 90,
+     "both": 6,
+     "bm25": 2
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 1,
+    "bm25_only_cited": 0,
+    "fallback": null
+   }
+  ],
+  "_note": "按修订后的 gold 离线重算（未调用模型）。r17/r19/r20 的关键句是看过回答后改的，命中率偏乐观；r11–r13 的标注同样含选择偏差；本次运行的 BM25 top-k 为 8（此后默认已改为 6）。"
  }
 }
