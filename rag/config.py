@@ -68,6 +68,13 @@ QUERY_REWRITE_ENABLED = os.environ.get("QUERY_REWRITE_ENABLED", "false").lower()
 HYDE_ENABLED = os.environ.get("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
 REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "") or LLM_MODEL  # 改写/HyDE 用的小模型，默认同 LLM_MODEL
 
+# ---- Contextual Retrieval（建库时 LLM 为每个 chunk 生成上下文，拼进向量化与 BM25 文本；默认关闭）----
+# 开启后每个新 chunk 一次 LLM 调用（结果缓存在 CACHE_DIR/contextual_cache.json），见 rag/contextual.py
+CONTEXTUAL_ENABLED = os.environ.get("CONTEXTUAL_ENABLED", "false").lower() in ("1", "true", "yes")
+CONTEXTUAL_MODEL = os.environ.get("CONTEXTUAL_MODEL", "") or REWRITE_MODEL
+CONTEXTUAL_DOC_MAX_CHARS = int(os.environ.get("CONTEXTUAL_DOC_MAX_CHARS", "6000"))  # 送给 LLM 的文档窗口上限
+CONTEXTUAL_WORKERS = int(os.environ.get("CONTEXTUAL_WORKERS", "4"))                 # 并发调用数
+
 # ---- data_benchmark 评测（默认从 <项目根>/data_benchmark 读取）----
 BENCHMARK_DIR = Path(os.environ.get("BENCHMARK_DIR", ROOT / "data_benchmark"))
 BENCHMARK_SEED = int(os.environ.get("BENCHMARK_SEED", "42"))
