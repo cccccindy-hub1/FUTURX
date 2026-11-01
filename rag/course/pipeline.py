@@ -1,0 +1,140 @@
+"""四步管线：选词（LLM）→ 召回（确定性）→ 筛选（LLM）→ 作答（LLM），返回结构化结果。
+
+返回 {question, selected_concepts, recalled, filtered, answer, citations, fallback, trace}。
+回退（只返回 insufficient_evidence，不编造；HybridRetriever 兜底留接口，尚未实现）：
+- no_valid_concepts：Step 1 无有效概念；
+- no_recall：选中概念召回不到任何子块；
+- all_filtered_out：Step 3 全部判为无用。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from . import config
+from .agent_select import SelectResult, select_concepts
+from .aliases import AliasTable, build_alias_table
+from .answer import answer_question
+from .chunker import ChunkSet, chunk_textbook
+from .evidence import AnchorIndex
+from .llm import LLMClient, Trace, TracingLLM
+from .ontology import ConceptTable, OntologyPaths, Record, load_concepts, load_records
+from .passage_filter import filter_passages, pick_for_answer
+from .recall import DEFAULT_STRATEGY, Recaller, batch_by_budget, dry_run_report
+from .textbook import Textbook, parse_docx
+from .vocab_tools import VocabIndex
+
+FALLBACK_NEXT = "hybrid_retriever(stub)"
+
+
+@dataclass
+class CourseContext:
+    concepts: ConceptTable
+    records: list[Record]
+    book: Textbook
+    chunkset: ChunkSet
+    aliases: AliasTable
+    index: VocabIndex
+    anchors: AnchorIndex
+    recaller: Recaller
+
+    @classmethod
+    def build(cls, concepts: ConceptTable, records: list[Record], book: Textbook,
+              chunkset: ChunkSet | None = None, *, use_jieba: bool | None = None) -> "CourseContext":
+        chunkset = chunkset or chunk_textbook(book)
+        aliases = build_alias_table(concepts.concepts)
+        anchors = AnchorIndex(book)
+        return cls(concepts, records, book, chunkset, aliases,
+                   VocabIndex(concepts, aliases, records, use_jieba=use_jieba), anchors,
+                   Recaller(records, chunkset, anchors, aliases, concepts))
+
+    @classmethod
+    def load(cls, root: Path | None = None, textbook: Path | None = None) -> "CourseContext":
+        paths = OntologyPaths(Path(root) if root else config.COURSE_ONTO_ROOT)
+        concepts = load_concepts(paths.concept_xlsx)
+        records = [r for v in ("onto1", "onto2") for r in load_records(paths.onto_dir(v), v)]
+        tb = textbook or paths.find_textbook() or config.COURSE_TEXTBOOK
+        if not Path(tb).is_file():
+            raise FileNotFoundError(f"教材文件不存在：{tb}（用 --textbook 或 COURSE_TEXTBOOK 指定）")
+        return cls.build(concepts, records, parse_docx(tb))
+
+
+def _fallback(reason: str, detail: str) -> dict:
+    return {"status": "insufficient_evidence", "reason": reason, "detail": detail, "next": FALLBACK_NEXT}
+
+
+def _empty_result(question: str, trace: Trace) -> dict:
+    return {"question": question, "selected_concepts": [], "recalled": [], "filtered": [], "answer": None,
+            "citations": [], "fallback": None, "trace": trace}
+
+
+def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, active_concepts=(),
+        strategy: str = DEFAULT_STRATEGY, dry_run: bool = False, select: list[tuple[str, str]] | None = None,
+        max_chars: int | None = None) -> dict:
+    """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。"""
+    max_chars = max_chars or config.COURSE_RECALL_MAX_CHARS
+    trace = Trace()
+    res = _empty_result(question, trace)
+
+    if dry_run:
+        sel = [(c, r) for c, r in (select or []) if ctx.index.reject_reason(c) is None]
+        res["selected_concepts"] = [{"concept_id": c, "role": r} for c, r in sel]
+        res["dry_run"] = dry_run_report(ctx.recaller, sel, max_chars=max_chars,
+                                        max_steps=config.COURSE_AGENT_MAX_STEPS)
+        trace.stages["recall"] = {"dry_run": True}
+        res["trace"] = trace
+        return res
+
+    if llm is None:
+        raise ValueError("非 dry-run 需要提供 llm")
+    traced = TracingLLM(llm, trace)
+
+    # Step 1
+    sr: SelectResult = select_concepts(question, active_concepts, ctx.index, traced)
+    trace.stages["select"] = {k: v for k, v in sr.to_dict().items() if k != "selected"}
+    res["selected_concepts"] = [s.to_dict() for s in sr.selected]
+    if not sr.selected:
+        res["fallback"] = _fallback("no_valid_concepts", "Step 1 没有选出任何有效概念")
+        return res
+
+    # Step 2
+    rr = ctx.recaller.recall([(s.concept_id, s.role) for s in sr.selected], strategy)
+    batches = batch_by_budget(rr.items, max_chars)
+    trace.stages["recall"] = {
+        "strategy": strategy, "chunks": len(rr.items), "batches": [
+            {"index": i, "size": len(b), "chars": sum(len(x.text) for x in b),
+             "tier_min": b[0].tier, "tier_max": b[-1].tier} for i, b in enumerate(batches)],
+        "excluded": rr.excluded, "sunk": rr.sunk, "zero_mention": rr.zero_mention,
+        "ontology_only": rr.ontology_only}
+    res["recalled"] = [i.to_dict(with_text=False) for i in rr.items]
+    if not rr.items:
+        res["fallback"] = _fallback("no_recall", "选中概念没有召回到任何教材子块")
+        return res
+
+    # Step 3
+    fr = filter_passages(question, batches, traced)
+    trace.stages["filter"] = {k: v for k, v in fr.to_dict().items() if k != "verdicts"}
+    res["filtered"] = [v.to_dict() for v in fr.verdicts]
+    kept, capped = pick_for_answer(rr.items, fr)
+    if not kept:
+        res["fallback"] = _fallback("all_filtered_out", "召回的子块被全部判为无助于回答")
+        return res
+
+    # Step 4
+    relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
+    ar = answer_question(question, kept, relations, traced)
+    trace.stages["answer"] = {"kept": len(kept), "kept_grades": {g: sum(fr.grade_of(k.chunk_id) == g for k in kept)
+                                                                 for g in ("direct", "background")},
+                              "capped": capped, "relations": len(relations),
+                              "invalid_citations": ar.invalid_citations}
+    res["answer"] = ar.to_dict()
+    res["citations"] = [{"chunk_id": c, "path": next(k.path for k in kept if k.chunk_id == c)} for c in ar.citations]
+    return res
+
+
+def result_to_json(result: dict) -> dict:
+    """可序列化版本（Trace 转 dict）。"""
+    out = dict(result)
+    t = out.get("trace")
+    out["trace"] = t.to_dict() if isinstance(t, Trace) else t
+    return out
