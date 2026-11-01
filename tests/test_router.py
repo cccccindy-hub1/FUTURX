@@ -625,11 +625,11 @@ def test_pipeline_trace_marks_sources_and_allows_empty_selection(ctx, monkeypatc
     assert r["fallback"]["reason"] == "no_valid_concepts"                  # 关闭兜底时行为不变
 
 
-def test_bm25_topk_zero_disables_and_default_is_eight():
+def test_bm25_topk_zero_disables_and_default_is_six():
     import os
     from rag.course import config as cc
     if "COURSE_BM25_TOPK" not in os.environ:
-        assert cc.COURSE_BM25_TOPK == 8
+        assert cc.COURSE_BM25_TOPK == 6
 
 
 def test_recall_eval_runs_offline_and_counts_hits(ctx):
@@ -742,3 +742,19 @@ def test_llm_error_cause_extracted_without_message(monkeypatch):
     monkeypatch.setattr(ef, "ask", lambda *a, **k: Boom().chat())
     row = ef.run_one(None, None, {"id": "r1", "question": "q"})
     assert row["error"] == "LLMError" and row["error_cause"] == "APITimeoutError" and SECRET not in json.dumps(row)
+
+
+# ---------------------------------------------------------------- 全角括号引用
+
+@pytest.mark.parametrize("raw", ["见［S1］。", "见【S1】。", "见〔S1〕。", "见[S1]。"])
+def test_sanitize_normalizes_fullwidth_brackets(raw):
+    from rag.course.answer import sanitize_citations
+    text, valid, invalid, _ = sanitize_citations(raw, {"S1": "de:x"})
+    assert text == "见[de:x]。" and valid == ["de:x"] and invalid == []
+
+
+def test_sanitize_fullwidth_invalid_placeholder_and_ontology_tags():
+    from rag.course.answer import sanitize_citations
+    text, valid, invalid, onto = sanitize_citations("甲［S9］乙【S#】丙【本体】丁［de:fake］", {"S1": "de:x"})
+    assert "S9" not in text and "S#" not in text and "de:fake" not in text and valid == []
+    assert set(invalid) == {"S9", "de:fake"} and onto and "[本体]" in text

@@ -1,0 +1,4146 @@
+{
+ "config": {
+  "select_reasoning": "disabled",
+  "max_steps": 7,
+  "fast_path": false,
+  "bm25_topk": 8,
+  "model": "deepseek/deepseek-v4-pro"
+ },
+ "started_bj": "2026-11-01T19:43:55+08:00",
+ "finished_bj": "2026-11-01T19:56:08+08:00",
+ "total_calls": 74,
+ "cap": 100,
+ "stopped": "",
+ "rows": [
+  {
+   "id": "r11",
+   "question": "什么是数据要素？",
+   "error": "",
+   "fallback": null,
+   "answer": "教材原文证据表明，数据要素是指根据特定生产需求，经过汇聚、整理、加工等环节形成的，能够投入到生产经营活动中、参与价值创造的数据资源及其衍生形态［S3］。它是数字经济时代的新型生产要素，是推动高质量发展的关键引擎［S3］。2024年国家数据局将其定义为“投入到生产经营活动、参与价值创造的数据资源”；中国信息通信研究院进一步界定为“参与社会生产经营活动、为使用者或所有者带来经济效益、以电子方式记录的数据资源”［S2］。\n\n从形成过程看，数据要素来源于原始数据，但经过了汇聚、整理、加工等处理环节［S3］［S8］。它与一般数据的核心区别在于：数据是原始的、分散的信息记录；数据要素是经过汇聚、整理、加工，能够投入生产经营活动、参与价值创造的数据资源［S8］。从制度地位看，2019年数据被首次在中央层面明确为生产要素，2020年与土地、劳动力、资本、技术并列为五大生产要素［S1］［S5］。\n\n本体推导关系：所给本体结构信息仅记录“数据要素的概念界定—包含部分→数据要素的内涵”［本体］。按这一本体关系，“数据要素的内涵”是“数据要素的概念界定”的组成部分，但其本身不额外提供教材原文之外的定义内容。",
+   "citations": [],
+   "selected_concepts": [
+    {
+     "concept_id": "C01-0001",
+     "reason": "问题直接询问数据要素的定义，这是第1章的核心概念",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C01-0010",
+     "reason": "直接界定数据要素是什么，是回答定义的核心段落",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C01-0016",
+     "reason": "阐述数据要素的内涵，帮助理解其本质",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 3.322,
+     "prompt_tokens": 912,
+     "completion_tokens": 46,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 3.359,
+     "prompt_tokens": 3360,
+     "completion_tokens": 88,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 2.765,
+     "prompt_tokens": 1848,
+     "completion_tokens": 105,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 6.827,
+     "prompt_tokens": 4824,
+     "completion_tokens": 286,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 6,
+   "prompt_tokens": 22282,
+   "completion_tokens": 3688,
+   "reasoning_tokens": 992,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch01.1.1.1.i1:000:f95e4db5",
+     "source": "both",
+     "grade": "direct",
+     "path": "一、数据要素的内涵 › （一）数据要素的概念演进 › 1.要素、生产要素与数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.1.1.i2:000:101d6a6e",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据要素的内涵 › （一）数据要素的概念演进 › 2.多维视角下的数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.1.1.i2:001:a9381835",
+     "source": "both",
+     "grade": "direct",
+     "path": "一、数据要素的内涵 › （一）数据要素的概念演进 › 2.多维视角下的数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.1.2.i2:000:12acf863",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据要素的内涵 › （二）相近概念辨析 › 2.数据资源、数据资产与数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2:000:05d98644",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第一节 数据要素的概念界定 › 二、数据要素的特征"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1:000:3dff9e4a",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据要素的概念界定 › 二、数据要素的特征 › （一）自然属性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i1:000:17742179",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （一）自然属性 › 1.虚拟性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2:000:43b34fbe",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据要素的概念界定 › 二、数据要素的特征 › （二）社会属性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.1:000:c2347d24",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据要素的概念界定 › 三、数据要素的类型 › （一）按生产者来源分类"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.2:000:380c424a",
+     "source": "both",
+     "grade": "background",
+     "path": "第一节 数据要素的概念界定 › 三、数据要素的类型 › （二）按劳动过程分类"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.2.i1:000:6020ca28",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （二）按劳动过程分类 › 1.采集型数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.2.i2:000:c0b8e33e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （二）按劳动过程分类 › 2.加工型数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.2.i3:000:9e3fb91d",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （二）按劳动过程分类 › 3.经营型数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.3:000:cbd78cb0",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据要素的概念界定 › 三、数据要素的类型 › （三）按权益配置方式分类"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.3.3:000:2801e958",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据要素的演进历程 › 三、政策制度对数据要素地位的确认 › （三）制度确立阶段"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.2.1:000:3c9ca02d",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据要素的定位与作用 › 二、对新质生产力的驱动 › （一）数据要素驱动新旧生产力更替"
+    },
+    {
+     "chunk_id": "de:0906:ch01.4:000:bea34ad9",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一章 数据要素 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch01:000:83de4114",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一章 数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.1.2.i1:000:89e15c4b",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据要素的内涵 › （二）相近概念辨析 › 1.数据与数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i4:000:8ea6cc60",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （一）自然属性 › 4.非静态性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2.i1:000:f010c395",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （二）社会属性 › 1.价值不确定性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2.i2:000:8cc91f1b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （二）社会属性 › 2.外部性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.1.i2:000:acb00ce9",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （一）按生产者来源分类 › 2.企业数据"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.3.i1:000:9bc76a2e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （三）按权益配置方式分类 › 1.专有数据"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.3.i3:000:bbd7f007",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据要素的类型 › （三）按权益配置方式分类 › 3.开放数据"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2:000:74673cde",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第二节 数据要素的演进历程"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.1.3:000:7601c6cc",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据要素的演进历程 › 一、经济学关于生产要素的理论发展 › （三）数字经济时代：数据成为第五要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.2:000:f6d607e4",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第二节 数据要素的演进历程 › 二、技术与产业对数据要素价值的释放"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.2.1:000:c2945451",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 二、技术与产业对数据要素价值的释放 › （一）信息资源阶段（20世纪90年代—2010年左右）"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.2.3:000:19a4427f",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 二、技术与产业对数据要素价值的释放 › （三）要素化与流通阶段（2019年至今）"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.3.1:000:b788c60d",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 三、政策制度对数据要素地位的确认 › （一）政策探索阶段"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.3.2:000:3941a6cc",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 三、政策制度对数据要素地位的确认 › （二）政策深化阶段"
+    },
+    {
+     "chunk_id": "de:0906:ch01.4:001:7948cf2c",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一章 数据要素 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch01.4:002:33da941f",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch02.1.1.2:000:00361656",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第一节 数据权属的制度功能 › 一、经济功能：提升数据要素市场效率 › （二）促进数据要素流通"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.3:000:f43e31c3",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （三）技术依赖性与权属稳定的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.3:000:1394af6b",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第二章 数据权属 › 第三节 数据权属的界定问题 › 三、数据权利的多主体性与动态性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i2:000:d7807936",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （一）自然属性 › 2.非消耗性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i3:000:448c9f7a",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （一）自然属性 › 3.非竞争性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2.i3:000:59d435d0",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （二）社会属性 › 3.产权模糊性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.1.3:002:5eba3abe",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 一、经济学关于生产要素的理论发展 › （三）数字经济时代：数据成为第五要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.1.1:000:6e5dbe50",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据要素的定位与作用 › 一、与传统生产要素的协同关系 › （一）依附倍增关系"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.1.2:000:c2f8729c",
+     "source": "both",
+     "grade": "background",
+     "path": "第三节 数据要素的定位与作用 › 一、与传统生产要素的协同关系 › （二）集约替代关系"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.1.3:000:dc6f3ae7",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第三节 数据要素的定位与作用 › 一、与传统生产要素的协同关系 › （三）桥梁纽带关系"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.2:000:1e4cce66",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第三节 数据要素的定位与作用 › 二、对新质生产力的驱动"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.2.2:000:65eeedaf",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据要素的定位与作用 › 二、对新质生产力的驱动 › （二）数据要素赋能生产力三要素"
+    },
+    {
+     "chunk_id": "de:0906:ch08.4:000:defe7350",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第八章 数据安全 › 小结"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 47,
+    "bm25": {
+     "topk": 8,
+     "added": 2,
+     "overlap": 6,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch01.1.3.2:000:380c424a",
+       "score": 2.485,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.1.1.i1:000:f95e4db5",
+       "score": 2.478,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch08.4:000:defe7350",
+       "score": 2.38,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch01.3.1.3:000:dc6f3ae7",
+       "score": 2.378,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch01.3.1.2:000:c2f8729c",
+       "score": 2.376,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.1.1.i2:001:a9381835",
+       "score": 2.369,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.2.3.3:000:2801e958",
+       "score": 2.368,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01:000:83de4114",
+       "score": 2.36,
+       "also_ontology": true
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 39,
+     "bm25": 2,
+     "both": 6
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 61.83
+  },
+  {
+   "id": "r12",
+   "question": "数据产权和数据所有权有什么不同？",
+   "error": "",
+   "fallback": null,
+   "answer": "根据教材原文，数据产权与数据所有权的主要不同体现在以下几个方面：\n\n- **理论逻辑不同**：数据产权方案遵循“权能分割思维”，不再纠缠“数据归谁所有”的本体论问题，而是聚焦“数据上的哪些权能可以分离、如何分离、分离后如何流转”的功能性问题；传统所有权思维则建立在“一物一权”的排他性逻辑之上，而这种逻辑因数据可无限复制、多主体同时使用等特性而难以适用于数据领域 [de:0906:ch02.4.2.1.i1:000:50d20d17]。\n\n- **制度内容不同**：中国“三权分置”的数据产权方案将数据产权分解为数据资源持有权、数据加工使用权、数据产品经营权三项功能性权利，强调数据从资源到要素再到产品的价值实现逻辑，而非单一的排他性所有权 [de:0906:ch02.5:003:6e60eb35][de:0906:ch04.1.1.3:003:f835ecec]。其中，数据资源持有权“是对数据资源合法占有、控制、保管和日常管理的资格，而非传统意义上的所有权” [de:0906:ch02.4.2.2.i1:000:c7ea0487]。\n\n- **权利属性不同**：数据产权更强调权责分置和场景化配置，而不是简单套用传统所有权逻辑；数据持有者与控制者的根本功能“并非确立对数据的排他性所有权，而是对合法获取的数据资源行使控制、管理、授权和配置的实际职能” [de:0906:ch10.1.3.1.i2:000:4bc34a0d]。传统所有权则以“排他性占有”为核心，而数据不具备这一前提，数据的非排他性使得“传统所有权的独占支配逻辑在数据领域难以适用” [de:0906:ch02.3.2.1:000:bce910da]。\n\n- **价值实现方式不同**：传统商品价值的实现依赖于所有权转移，而“数据价值的实现则不依赖所有权的排他性转移，同一份数据可被多个主体同时使用而互不干扰” [de:0906:ch03.1.1.3.i3:000:b83c4065]。\n\n- **制度目标不同**：数据产权方案“重点在于淡化对绝对所有权的争论，转而围绕不同利用场景配置不同权能”，以降低数据流通的制度摩擦，使数据能够在不同主体之间有序流转 [de:0906:ch04.1.1.3:003:f835ecec][de:0906:ch10.1.3.1.i2:000:4bc34a0d]；而数据所有权更强调归属确定和排他支配，这恰是数据领域难以实现的 [de:0906:ch02.3.2.1:000:bce910da][de:0906:ch01.1.2.2.i3:000:59d435d0][de:0906:ch02.3.2.3:000:f43e31c3]。",
+   "citations": [
+    "de:0906:ch02.4.2.1.i1:000:50d20d17",
+    "de:0906:ch02.5:003:6e60eb35",
+    "de:0906:ch04.1.1.3:003:f835ecec",
+    "de:0906:ch02.4.2.2.i1:000:c7ea0487",
+    "de:0906:ch10.1.3.1.i2:000:4bc34a0d",
+    "de:0906:ch02.3.2.1:000:bce910da",
+    "de:0906:ch03.1.1.3.i3:000:b83c4065",
+    "de:0906:ch01.1.2.2.i3:000:59d435d0",
+    "de:0906:ch02.3.2.3:000:f43e31c3"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C02-0177",
+     "reason": "数据所有权对应的传统所有权概念，是区分数据产权与数据所有权的核心对照点",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0176",
+     "reason": "阐述从所有权思维到权能分割思维的转变，直接解释数据产权为何不同于传统所有权",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C04-0042",
+     "reason": "数据产权结构性分置是数据产权制度的核心内容，体现数据产权与所有权的本质区别",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0188",
+     "reason": "数据资源持有权是数据产权分置下的具体权能，用于说明数据产权不以所有权为前提",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C02-0178",
+     "reason": "权利束思维是理解数据产权替代所有权逻辑的理论基础",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 3.023,
+     "prompt_tokens": 915,
+     "completion_tokens": 79,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 7.356,
+     "prompt_tokens": 5885,
+     "completion_tokens": 232,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 5.267,
+     "prompt_tokens": 3145,
+     "completion_tokens": 126,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 6.919,
+     "prompt_tokens": 2960,
+     "completion_tokens": 414,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 6,
+   "prompt_tokens": 18914,
+   "completion_tokens": 2783,
+   "reasoning_tokens": 719,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch02.5:003:6e60eb35",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二章 数据权属 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.2.1.i1:000:50d20d17",
+     "source": "both",
+     "grade": "direct",
+     "path": "二、数据权属配置的中国方案 › （一）理论基础与制度逻辑 › 1.从“所有权思维”到“权能分割思维”"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.2.2.i1:000:c7ea0487",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据权属配置的中国方案 › （二）“三权分置”的权利结构 › 1.数据资源持有权"
+    },
+    {
+     "chunk_id": "de:0906:ch04.1.1.3:003:f835ecec",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一节 数据资产化的管理基础与发展趋势 › 一、数据资产化的管理基础 › （三）数据资产的管理对象"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2.i3:000:59d435d0",
+     "source": "bm25",
+     "grade": "background",
+     "path": "二、数据要素的特征 › （二）社会属性 › 3.产权模糊性"
+    },
+    {
+     "chunk_id": "de:0906:ch02.2.1.1:000:ddfeca5c",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据权益的类型与保障 › 一、数据权益的分类 › （一）人格性权益"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.1:000:bce910da",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （一）非排他性与独占支配的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.3:000:f43e31c3",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （三）技术依赖性与权属稳定的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.3.2:000:11c451bb",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据权属的界定问题 › 三、数据权利的多主体性与动态性 › （二）数据全生命周期的权属演变"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.1.1.i1:000:7f75d58b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、欧美数据权属配置模式 › （一）欧盟模式：以统一立法和人格权保护为核心的制度路径 › 1.GDPR确立个人人格权保护体系"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.1.3.i3:000:b83c4065",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "一、数据价值的内涵 › （三）数据价值与传统商品价值的区别 › 3.价值实现与度量方式不同"
+    },
+    {
+     "chunk_id": "de:0906:ch03.2.1.3.i1:000:7e11bf83",
+     "source": "bm25",
+     "grade": "background",
+     "path": "一、数据流通交易 › （三）流通交易的安全保障 › 1.确权与授权机制"
+    },
+    {
+     "chunk_id": "de:0906:ch05.2.1:000:6163b013",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第五章 数据产品 › 数据产品的类型 › 一、按来源属性划分"
+    },
+    {
+     "chunk_id": "de:0906:ch08.2.3.2:000:73af6d64",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第二节 数据安全风险与保护困境 › 三、数据要素安全流通的困境 › （二）控制权弱化"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i2:000:4bc34a0d",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 2.数据持有者与控制者"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 15,
+    "bm25": {
+     "topk": 8,
+     "added": 6,
+     "overlap": 2,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch02.4.2.1.i1:000:50d20d17",
+       "score": 12.096,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch04.1.1.3:003:f835ecec",
+       "score": 10.164,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch10.1.3.1.i2:000:4bc34a0d",
+       "score": 10.105,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.1.1.3.i3:000:b83c4065",
+       "score": 9.336,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch08.2.3.2:000:73af6d64",
+       "score": 6.785,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch05.2.1:000:6163b013",
+       "score": 6.654,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.2.1.3.i1:000:7e11bf83",
+       "score": 6.453,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.2.2.i3:000:59d435d0",
+       "score": 5.578,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 7,
+     "bm25": 6,
+     "both": 2
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 58.26
+  },
+  {
+   "id": "r13",
+   "question": "数据资产入表的基本思路是什么？",
+   "error": "",
+   "fallback": null,
+   "answer": "数据资产入表的基本思路可以概括为：以“符合确认条件”为前提，通过会计确认与计量将数据资源纳入财务报表，并借入表要求倒逼组织完善数据资产管理体系，而不是把入表当作数据资产化的终点或全部。\n\n具体包括：\n\n1. **制度依据与确认科目**  \n   数据资产入表是依据财政部《企业数据资源相关会计处理暂行规定》，将符合条件的数据资产按无形资产或存货等科目进行表内确认与计量的过程。[de:0906:ch03.1.2.3.i2:001:be356630]  \n   从用途看，内部使用、预计长期带来经济利益的数据资源可确认为无形资产；日常活动中持有以备出售的数据产品可确认为存货。[de:0906:ch04.2.2.3:000:b0d5c891]\n\n2. **确认前提**  \n   入表并非把所有数据都列为资产，要求数据资源能够由组织合法拥有或控制、预期能够带来经济利益、成本或价值能够可靠计量。[de:0906:ch04.1.2.3:001:64d7c604][de:0906:ch04.2.2.3:000:b0d5c891]  \n   具体还要证明数据来源合法、受自身控制、能够带来经济利益、相关成本或价值能够可靠计量。[de:0906:ch04.2.2.3:001:9133ee39]\n\n3. **实施路径：入表驱动型六步骤**  \n   入表驱动型路径以组织数据资源会计处理为抓手，推动数据资产管理体系建设，核心目标是使数据价值从“隐性”走向“显性”。[de:0906:ch04.3.3:000:24f4dc38]  \n   通常包括六个步骤：  \n   （1）数据资源盘点；  \n   （2）权属与合规审查；  \n   （3）资产识别；  \n   （4）成本归集；  \n   （5）价值评估与会计判断；  \n   （6）持续披露与后续管理。[de:0906:ch04.3.3:000:24f4dc38]\n\n4. **倒逼管理体系建设**  \n   入表本身不是数据资产化的终点，而是倒逼组织建立数据目录、成本归集、质量治理和价值评估体系的重要抓手。[de:0906:ch04.1.2.3:001:64d7c604]  \n   为入表，组织需要完善数据盘点、合规审查、成本归集、价值评估和信息披露。[de:0906:ch04.2.2.3:001:9133ee39]  \n   通过入表准备，组织还需要建立项目台账、数据目录、成本归集和绩效评价，使数据从费用消耗转化为资产管理对象。[de:0906:ch04.3.3:001:8aea7e9e]\n\n5. **防止偏差**  \n   入表驱动需要防止三方面偏差：  \n   （1）不能把入表等同于资产化的全部；  \n   （2）不能为了入表而虚增价值；  \n   （3）不能忽视后续管理，入表后仍需持续评估数据减值或失效风险。[de:0906:ch04.3.3:001:8aea7e9e]  \n   同时要防止夸大数据价值、重复确认和以概念炒作替代真实使用。[de:0906:ch04.2.2.3:001:9133ee39]\n\n本体结构信息中记录为：数据资产入表是数据资产化的包含步骤或类型，并受财政部《企业数据资源相关会计处理暂行规定》规制 [本体]。这与教材原文关于数据资产入表作为数据资产化制度保障、依据会计规定进行确认的定位相一致。",
+   "citations": [
+    "de:0906:ch03.1.2.3.i2:001:be356630",
+    "de:0906:ch04.2.2.3:000:b0d5c891",
+    "de:0906:ch04.1.2.3:001:64d7c604",
+    "de:0906:ch04.2.2.3:001:9133ee39",
+    "de:0906:ch04.3.3:000:24f4dc38",
+    "de:0906:ch04.3.3:001:8aea7e9e"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C03-0071",
+     "reason": "问题直接询问的核心概念，数据资产入表本身",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0066",
+     "reason": "直接概括入表基本思路：核心环节是资产登记与估值，入表是资产化成果在会计制度层面的正式确认",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0069",
+     "reason": "入表的前置核心环节，构成基本思路的一部分",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0070",
+     "reason": "入表的前置核心环节，构成基本思路的一部分",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0072",
+     "reason": "数据资产入表的会计制度依据，理解入表思路的制度背景",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C03-0065",
+     "reason": "入表所属的上位过程，理解入表在资产化链条中的定位",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 6,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.635,
+     "prompt_tokens": 916,
+     "completion_tokens": 81,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 4.884,
+     "prompt_tokens": 5872,
+     "completion_tokens": 116,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 4.3,
+     "prompt_tokens": 2779,
+     "completion_tokens": 174,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_neighbors",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 5.118,
+     "prompt_tokens": 3737,
+     "completion_tokens": 165,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 5,
+     "latency_s": 4.319,
+     "prompt_tokens": 3319,
+     "completion_tokens": 114,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept"
+     ]
+    },
+    {
+     "round": 6,
+     "latency_s": 7.971,
+     "prompt_tokens": 3396,
+     "completion_tokens": 483,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 8,
+   "prompt_tokens": 26119,
+   "completion_tokens": 4676,
+   "reasoning_tokens": 2386,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch03.1.2.3:000:62bd0d2e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据价值的形成 › 二、数据价值的形成 › （三）数据资产化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i1:000:89337f12",
+     "source": "ontology",
+     "grade": "background",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 1.数据资产化的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i2:000:028949a1",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 2.数据资产化的主要环节"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i2:001:be356630",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 2.数据资产化的主要环节"
+    },
+    {
+     "chunk_id": "de:0906:ch03.4:001:d32bd26f",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三章 数据价值 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch04.1.2.3:001:64d7c604",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第一节 数据资产化的管理基础与发展趋势 › 二、数据资产化的发展趋势 › （三）价值体系的构建"
+    },
+    {
+     "chunk_id": "de:0906:ch04.2.2.3:000:b0d5c891",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第二节 数据资产化的管理活动框架 › 二、数据运营管理 › （三）数据产品入表"
+    },
+    {
+     "chunk_id": "de:0906:ch04.2.2.3:001:9133ee39",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第二节 数据资产化的管理活动框架 › 二、数据运营管理 › （三）数据产品入表"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3:000:a6f6825f",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3.3:000:24f4dc38",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径 › 三、入表驱动型路径"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3.3:001:8aea7e9e",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径 › 三、入表驱动型路径"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3.4:000:84491bad",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径 › 四、管理筑基型路径"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3.4:003:e21d4e96",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径 › 四、管理筑基型路径"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 13,
+    "bm25": {
+     "topk": 8,
+     "added": 8,
+     "overlap": 0,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch04.3.3:001:8aea7e9e",
+       "score": 10.184,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.2.2.3:001:9133ee39",
+       "score": 9.795,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.3.3:000:24f4dc38",
+       "score": 9.62,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.3.4:003:e21d4e96",
+       "score": 8.507,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.3:000:a6f6825f",
+       "score": 8.5,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.3.4:000:84491bad",
+       "score": 8.429,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.2.2.3:000:b0d5c891",
+       "score": 8.316,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.1.2.3:001:64d7c604",
+       "score": 8.282,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 5,
+     "bm25": 8,
+     "both": 0
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 84.95
+  },
+  {
+   "id": "r14",
+   "question": "数据要素市场有哪些构成部分？",
+   "error": "",
+   "fallback": null,
+   "answer": "教材材料不足以直接回答“数据要素市场有哪些构成部分”。现有教材内容主要从两个层面提供了相关背景：\n\n- 数据市场作为一个整体，其参与单元包括供需主体、服务机构、监管主体，并融合制度体系与技术体系 [de:0906:ch06.1.1.1:000:5bb3d981]；运行主体包括数据供给方、数据需求方、数据商与第三方服务机构、数据交易平台运营方和监管机构 [de:0906:ch06.4:000:e31aa581]。\n- 数据要素市场是数据市场按交易标的划分出的一种类型，与数据产品市场并列；数据要素市场以数据资源为交易标的，交易对象通常是原始数据或经过初步清洗、标注但仍保持较高原始度的数据集合 [de:0906:ch06.1.1.3:000:347d69ef][de:0906:ch06.1.2.1:000:265e399e]。\n\n但是，教材并没有列出“数据要素市场”这一类型内部的构成部分（例如它是否进一步细分为不同子市场、是否拥有独立于数据市场的参与主体结构）。因此，不能把数据市场整体的构成（如参与主体、流通方式、组织形态等）直接等同于数据要素市场的构成。\n\n本体结构信息中记录为：数据要素市场是数据市场的类型之一；数据市场涉及数据供给方、数据需求方、数据商、数据交易所、第三方服务机构等主体 [本体]。但这只是本体推导关系，不能作为教材原文证据，也未给出数据要素市场自身的构成部分。\n\n综上，依据现有材料，无法给出“数据要素市场有哪些构成部分”的确定答案。若需要回答该问题，教材还需补充数据要素市场内部的具体构成要素或细分维度。",
+   "citations": [
+    "de:0906:ch06.1.1.1:000:5bb3d981",
+    "de:0906:ch06.4:000:e31aa581",
+    "de:0906:ch06.1.1.3:000:347d69ef",
+    "de:0906:ch06.1.2.1:000:265e399e"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C06-0036",
+     "reason": "问题直接询问数据要素市场的构成部分，该概念是第6章数据市场主题下的核心领域概念，释义明确其为数据市场中交易原始/粗加工数据资源的部分。",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C06-0001",
+     "reason": "数据要素市场是数据市场的一种类型，理解其构成需依托数据市场的整体框架。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0063",
+     "reason": "数据供给方是数据要素市场的主体构成部分之一。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0071",
+     "reason": "数据需求方是数据要素市场的主体构成部分之一。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0079",
+     "reason": "数据商是数据要素市场的中介/服务主体构成部分。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0056",
+     "reason": "数据交易所是数据要素市场的交易场所/平台构成部分。",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0084",
+     "reason": "第三方服务机构是数据要素市场的服务支撑构成部分。",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 7,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.555,
+     "prompt_tokens": 915,
+     "completion_tokens": 80,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 4.7,
+     "prompt_tokens": 5759,
+     "completion_tokens": 214,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 2.813,
+     "prompt_tokens": 3012,
+     "completion_tokens": 94,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 3.073,
+     "prompt_tokens": 3032,
+     "completion_tokens": 140,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 5,
+     "latency_s": 9.982,
+     "prompt_tokens": 6072,
+     "completion_tokens": 572,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 6,
+     "latency_s": 8.256,
+     "prompt_tokens": 5536,
+     "completion_tokens": 269,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 7,
+     "latency_s": 10.735,
+     "prompt_tokens": 5325,
+     "completion_tokens": 337,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 10,
+   "prompt_tokens": 44938,
+   "completion_tokens": 5693,
+   "reasoning_tokens": 1478,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch06.1.1.1:000:5bb3d981",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （一）数据市场的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.2.i1:000:e2fa725a",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据市场的概念与功能定位 › （二）数据市场的功能定位 › 1. 价格发现功能"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.2.i2:000:ab707232",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据市场的概念与功能定位 › （二）数据市场的功能定位 › 2. 交易撮合功能"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.2.i3:000:d7b74146",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据市场的概念与功能定位 › （二）数据市场的功能定位 › 3.资源配置功能"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.2.i4:000:6c07b608",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据市场的概念与功能定位 › （二）数据市场的功能定位 › 4.制度供给功能"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.3:000:347d69ef",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （三）数据市场与产品市场、要素市场的关系"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.2.1:000:265e399e",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 二、数据市场的类型划分 › （一）按交易标的划分：数据要素市场与数据产品市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.2.2:000:0f8156a0",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 二、数据市场的类型划分 › （二）按流通方式划分：交易市场、共享市场、开放市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.2.3:000:be748416",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 二、数据市场的类型划分 › （三）按组织形态划分：场内市场与场外市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.1:000:0a9af3b0",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （一）数据供给方"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.2:000:56fb35aa",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （二）数据需求方"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.3:000:22103dbe",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （三）数据商与第三方服务机构"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.4:000:38752962",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （四）数据交易平台运营方"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.5:000:17dd1cf8",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （五）监管机构"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i1:000:098e15a1",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 1.功能定位"
+    },
+    {
+     "chunk_id": "de:0906:ch06.4:000:e31aa581",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第六章 数据市场 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch06.4:001:072372de",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第六章 数据市场 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1:000:c5a070bd",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第六章 数据市场 › 第一节 数据市场的基本范畴"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.1:001:d1d919ea",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （一）数据市场的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.2.1:000:fae661fe",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 二、市场运行的核心机制 › （一）价格发现机制"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.2.2:000:2f4ef6bf",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 二、市场运行的核心机制 › （二）交易撮合机制"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.2.3:000:0e82c574",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 二、市场运行的核心机制 › （三）信息传递机制"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3:000:382c0ed3",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第六章 数据市场 › 第二节 数据市场的运行机制 › 三、数据交易所与场外市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i2:000:69fe990b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 2.运营模式"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i2:001:4608ae59",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 2.运营模式"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.2:000:b8d74703",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （二）场外市场的运行逻辑与制度空间"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.2:001:9e1258b2",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （二）场外市场的运行逻辑与制度空间"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.2:002:58256cb3",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （二）场外市场的运行逻辑与制度空间"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.1.1:000:09ef9841",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 一、市场准入制度 › （一）供给方准入条件"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.1.1:001:5a9c11a1",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 一、市场准入制度 › （一）供给方准入条件"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.1.1:002:5b1f1fbf",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 一、市场准入制度 › （一）供给方准入条件"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.1.2:000:dcde9264",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 一、市场准入制度 › （二）数据产品的上架标准"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.1.3:000:7b65f3b4",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 一、市场准入制度 › （三）交易主体的资质要求"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.1:001:58eb3f94",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （一）数据产品交易规则"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.2:000:411dac3c",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （二）数据产品质量标准与评估规范"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.2:001:e1c8972f",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （二）数据产品质量标准与评估规范"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.3:000:e3f9d983",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （三）数据产品登记与信息披露制度"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.3:001:02ec9ed5",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （三）数据产品登记与信息披露制度"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.1:000:6aed77b6",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （一）数据产品登记平台"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.2:000:ab40d803",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （二）质量评估与认证体系"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.2:001:827ae8d2",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （二）质量评估与认证体系"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.3:001:bc82bf6a",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （三）信用评价与争议解决机制"
+    },
+    {
+     "chunk_id": "de:0906:ch01.3.1.2:000:c2f8729c",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第三节 数据要素的定位与作用 › 一、与传统生产要素的协同关系 › （二）集约替代关系"
+    },
+    {
+     "chunk_id": "de:0906:ch02.1.1.5.i1:000:d47264b3",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "一、经济功能：提升数据要素市场效率 › （二）保障公共数据的公共利益 › 1.为公共数据分类开放提供边界依据"
+    },
+    {
+     "chunk_id": "de:0906:ch02.1.1.5.i3:000:3317c262",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "一、经济功能：提升数据要素市场效率 › （二）保障公共数据的公共利益 › 3.防止公共数据被不当垄断或私有化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.2.2:000:9101b5e6",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第三章 数据价值 › 第二节 数据价值的释放 › 二、数据开放共享"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.3:001:eb7477b0",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （三）数据市场与产品市场、要素市场的关系"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.3:000:1ac3e777",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （三）信用评价与争议解决机制"
+    },
+    {
+     "chunk_id": "de:0906:ch08.2:000:7c009fe6",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第八章 数据安全 › 第二节 数据安全风险与保护困境"
+    },
+    {
+     "chunk_id": "de:0906:ch09:000:2937f073",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第九章 隐私保护"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 50,
+    "bm25": {
+     "topk": 8,
+     "added": 6,
+     "overlap": 2,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch06.1.1.3:000:347d69ef",
+       "score": 9.004,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.1.1.5.i1:000:d47264b3",
+       "score": 7.494,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch01.3.1.2:000:c2f8729c",
+       "score": 7.178,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch06.1.1.3:001:eb7477b0",
+       "score": 6.942,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch09:000:2937f073",
+       "score": 6.857,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch02.1.1.5.i3:000:3317c262",
+       "score": 6.819,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.2.2:000:9101b5e6",
+       "score": 6.759,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch08.2:000:7c009fe6",
+       "score": 6.362,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 42,
+     "bm25": 6,
+     "both": 2
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 104.95
+  },
+  {
+   "id": "r15",
+   "question": "数据确权为什么难？",
+   "error": "",
+   "fallback": null,
+   "answer": "数据确权之所以困难，教材原文从多个层面给出了原因。\n\n第一，数据的天然权属特征与传统确权逻辑存在根本冲突。教材原文[de:0906:ch02.3.2:000:7e052df6]指出，数据的非竞争性、非消耗性、虚拟性与非静态性等属性，在权属层面表现为非排他性、价值添附性与技术依赖性，这与传统物权强调的独占支配与排他控制存在根本性冲突。具体而言：非排他性使权利人难以阻止他人同时使用已公开或合法获取的数据，传统所有权的排他性占有逻辑在数据领域难以适用[de:0906:ch02.3.2.1:000:bce910da]；价值添附性使原始数据与加工行为的贡献难以拆分，无法按“谁投入劳动谁获得权益”的传统原则清晰分配权益[de:0906:ch02.3.2.2:000:2f0ee756]；技术依赖性使数据的排他性来自技术手段而非法律制度本身，一旦技术被破解或权限被绕过，排他性即告消失，权属稳定受制于不断变化的技术条件[de:0906:ch02.3.2.3:000:f43e31c3]。\n\n第二，数据权利具有多主体性与动态性。教材原文[de:0906:ch02.3.3:000:1394af6b]指出，横向上多个主体对同一份数据同时主张权利，纵向上同一数据的权利状态随生命周期阶段动态演变，两者相互叠加，使权属界定从一次性分配变为全过程治理。例如，在删除阶段，用户撤回同意后，平台是否有义务删除已经用于算法训练的数据痕迹尚无明确答案，法律与技术之间存在明显张力[de:0906:ch02.3.3.2.i5:000:5140e6b5]。\n\n第三，数据要素本身存在产权模糊性。教材原文[de:0906:ch01.1.2.2.i3:000:59d435d0]说明，数据在生成过程中涉及多方主体，产权边界难以依传统物权规则清晰划定；而且数据的价值高度依赖加工过程，可控性高度依赖技术环境，这些特征进一步加剧了产权界定的复杂性[de:0906:ch01.1.2.2.i3:000:59d435d0]。\n\n第四，学界对数据确权存在根本分歧，前提性问题尚未解决。教材原文[de:0906:ch02.3.1:000:f6c6bf30]表明，学界围绕数据是否应当确权形成了否定论与肯定论两大对立阵营，对《数据二十条》的解读也未形成共识，数据是否应当确权仍是推进数据要素市场化配置必须首先回答的前提性问题[de:0906:ch02.3.1:000:f6c6bf30]。其中，数据产权难以实现论提出数据边界模糊、占有关系退却、多主体协商面临巨大交易成本等障碍，使得难以适用实际占有状态下的财产规则保护[de:0906:ch02.3.1.1.i3:000:9a87ccd2]。肯定论者也承认部分大数据应用场景存在这些特征，但认为并非所有场景的共性，这反映出确权所需的制度设计需要应对场景差异[de:0906:ch02.3.1.1.i3:000:9a87ccd2]。\n\n第五，传统所有权思维难以直接适用于数据。教材原文[de:0906:ch02.4.2.1.i1:000:50d20d17]指出，数据可以被无限复制而价值不减损，同一数据上可以同时存在多个主体的权利主张，数据价值随着加工深度和应用场景不断演变，这些特性使得“一物一权”的所有权逻辑难以适用于数据领域，因此需要从“所有权思维”转向“权能分割思维”[de:0906:ch02.4.2.1.i1:000:50d20d17]。\n\n在概念关系上，本体中记录为：数据权属的界定问题包含数据权属的理论争议与数据的权属特征与传统确权逻辑的冲突，且理论争议先于权属特征冲突[onto2]；数据产权难以实现论与数据确权否定论相关，并被数据确权否定论包含部分[onto1][onto2]。这些本体关系有助于理解上述难点在整体框架中的位置，但不能替代教材原文作为证据。",
+   "citations": [
+    "de:0906:ch02.3.2:000:7e052df6",
+    "de:0906:ch02.3.2.1:000:bce910da",
+    "de:0906:ch02.3.2.2:000:2f0ee756",
+    "de:0906:ch02.3.2.3:000:f43e31c3",
+    "de:0906:ch02.3.3:000:1394af6b",
+    "de:0906:ch02.3.3.2.i5:000:5140e6b5",
+    "de:0906:ch01.1.2.2.i3:000:59d435d0",
+    "de:0906:ch02.3.1:000:f6c6bf30",
+    "de:0906:ch02.3.1.1.i3:000:9a87ccd2",
+    "de:0906:ch02.4.2.1.i1:000:50d20d17"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C02-0110",
+     "reason": "直接解释数据确权难的原因：数据权属特征与传统确权逻辑存在冲突",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0105",
+     "reason": "数据产权难以实现论直接回答确权为何困难",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0098",
+     "reason": "数据确权否定论认为数据无法被确权，是确权难的核心论据",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0202",
+     "reason": "数据能否被确权是确权难的前提性问题",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C02-0003",
+     "reason": "多主体性与动态性使数据权属界定困难，是确权难的关键原因",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C01-0049",
+     "reason": "数据产权模糊性导致确权困难",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C02-0096",
+     "reason": "数据权属的理论争议构成确权难的理论背景",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.648,
+     "prompt_tokens": 914,
+     "completion_tokens": 80,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 7.167,
+     "prompt_tokens": 5880,
+     "completion_tokens": 253,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 5.207,
+     "prompt_tokens": 3239,
+     "completion_tokens": 162,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 8.417,
+     "prompt_tokens": 3285,
+     "completion_tokens": 501,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 6,
+   "prompt_tokens": 21275,
+   "completion_tokens": 4428,
+   "reasoning_tokens": 1881,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch01.1.2:000:05d98644",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第一节 数据要素的概念界定 › 二、数据要素的特征"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1.1.i1:000:f39e76f6",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据权属的理论争议 › （一）数据能否被确权 › 1.公共物品论及回应"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1.1.i2:000:c4b54170",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据权属的理论争议 › （一）数据能否被确权 › 2.数据非权利客体论及回应"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1.1.i3:000:9a87ccd2",
+     "source": "both",
+     "grade": "direct",
+     "path": "一、数据权属的理论争议 › （一）数据能否被确权 › 3.数据产权难以实现论及回应"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1.2.i1:000:dae6eae0",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据权属的理论争议 › （二）数据确权的后果 › 1.数据流动阻碍论及回应"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1.2.i2:000:e546497e",
+     "source": "both",
+     "grade": "direct",
+     "path": "一、数据权属的理论争议 › （二）数据确权的后果 › 2.个人信息隐私威胁论及回应"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2.i3:000:59d435d0",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据要素的特征 › （二）社会属性 › 3.产权模糊性"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.1:000:f6c6bf30",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二章 数据权属 › 第三节 数据权属的界定问题 › 一、数据权属的理论争议"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2:000:7e052df6",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二章 数据权属 › 第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.1:000:bce910da",
+     "source": "both",
+     "grade": "direct",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （一）非排他性与独占支配的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.2:000:2f0ee756",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （二）价值添附性与贡献拆分的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2.3:000:f43e31c3",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突 › （三）技术依赖性与权属稳定的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.3:000:1394af6b",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二章 数据权属 › 第三节 数据权属的界定问题 › 三、数据权利的多主体性与动态性"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.3.2.i5:000:5140e6b5",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "三、数据权利的多主体性与动态性 › （二）数据全生命周期的权属演变 › 5.删除阶段"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.1.1.i1:000:7f75d58b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、欧美数据权属配置模式 › （一）欧盟模式：以统一立法和人格权保护为核心的制度路径 › 1.GDPR确立个人人格权保护体系"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.1.1.i2:001:cbd02f9d",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、欧美数据权属配置模式 › （一）欧盟模式：以统一立法和人格权保护为核心的制度路径 › 2.《数据法》强制“数据持有者义务”"
+    },
+    {
+     "chunk_id": "de:0906:ch02.4.2.1.i1:000:50d20d17",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据权属配置的中国方案 › （一）理论基础与制度逻辑 › 1.从“所有权思维”到“权能分割思维”"
+    },
+    {
+     "chunk_id": "de:0906:ch02.5:002:bc9cdbdd",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二章 数据权属 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch02.2.2.1:000:b5ee23f3",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第二节 数据权益的类型与保障 › 二、数据权益的保障 › （一）法律保障"
+    },
+    {
+     "chunk_id": "de:0906:ch04.3.4:003:e21d4e96",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第四章 数据资产 › 第三节 数据资产化的实践路径 › 四、管理筑基型路径"
+    },
+    {
+     "chunk_id": "de:0906:ch05.1.1.2.i2:000:23aaa782",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "一、数据产品的内涵界定 › （二）数据产品与相关概念的辨析 › 2.数据产品与数据资产"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 21,
+    "bm25": {
+     "topk": 8,
+     "added": 3,
+     "overlap": 5,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch02.3.2.1:000:bce910da",
+       "score": 7.574,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.3.1:000:f6c6bf30",
+       "score": 5.419,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch04.3.4:003:e21d4e96",
+       "score": 5.281,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch05.1.1.2.i2:000:23aaa782",
+       "score": 5.184,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch02.3.1.1.i3:000:9a87ccd2",
+       "score": 5.166,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.5:002:bc9cdbdd",
+       "score": 4.985,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.3.1.2.i2:000:e546497e",
+       "score": 4.835,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.2.2.1:000:b5ee23f3",
+       "score": 4.417,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 13,
+     "bm25": 3,
+     "both": 5
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 81.52
+  },
+  {
+   "id": "r16",
+   "question": "数据价值化包括哪些环节？",
+   "error": "",
+   "fallback": null,
+   "answer": "数据价值化包括四个环节：数据资源化、数据要素化、数据资产化与数据资本化。教材原文中指出，“数据价值的形成涵盖资源化、要素化、资产化与资本化四个环节” [de:0906:ch03.4:001:d32bd26f]，并进一步说明这四个环节“资源化是基础环节”“要素化与资产化构成两个相对独立的维度”“资本化则在前述基础上”展开 [de:0906:ch03.4:001:d32bd26f][de:0906:ch03.1.2:000:afdd74b4]。本体结构中记录为：数据价值形成过程包含数据资源化、数据要素化、数据资产化、数据资本化四个阶段 [本体]。",
+   "citations": [
+    "de:0906:ch03.4:001:d32bd26f",
+    "de:0906:ch03.1.2:000:afdd74b4"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C03-0248",
+     "reason": "数据价值形成过程是数据价值化的总括概念，直接对应问题所问的环节链条",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0042",
+     "reason": "数据资源化是数据价值化的第一个环节",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0061",
+     "reason": "数据要素化是数据价值化的核心环节，将数据资产投入生产经营",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0065",
+     "reason": "数据资产化是数据价值化的环节之一，将数据资源转化为可计量的数据资产",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C03-0077",
+     "reason": "数据资本化是数据价值化的环节之一，实现数据价值的金融化增值",
+     "role": "question_concept"
+    }
+   ],
+   "select_calls": 7,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.924,
+     "prompt_tokens": 915,
+     "completion_tokens": 47,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 8.72,
+     "prompt_tokens": 3439,
+     "completion_tokens": 219,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 6.801,
+     "prompt_tokens": 7084,
+     "completion_tokens": 151,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 4.667,
+     "prompt_tokens": 3705,
+     "completion_tokens": 139,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 5,
+     "latency_s": 7.577,
+     "prompt_tokens": 4337,
+     "completion_tokens": 135,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 6,
+     "latency_s": 5.081,
+     "prompt_tokens": 4190,
+     "completion_tokens": 132,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 7,
+     "latency_s": 6.336,
+     "prompt_tokens": 4154,
+     "completion_tokens": 248,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 9,
+   "prompt_tokens": 34765,
+   "completion_tokens": 2146,
+   "reasoning_tokens": 86,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch03.1.2.1:000:5e1016dc",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据价值的形成 › 二、数据价值的形成 › （一）数据资源化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.1.i1:000:45f96fbc",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （一）数据资源化 › 1.数据资源化的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.1.i2:000:f4bbce9d",
+     "source": "both",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （一）数据资源化 › 2.数据资源化的主要流程"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.2:000:a1245018",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据价值的形成 › 二、数据价值的形成 › （二）数据要素化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.2.i1:000:6b0d832a",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （二）数据要素化 › 1.数据要素化的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3:000:62bd0d2e",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据价值的形成 › 二、数据价值的形成 › （三）数据资产化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i1:000:89337f12",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 1.数据资产化的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i2:000:028949a1",
+     "source": "both",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 2.数据资产化的主要环节"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.4:000:39ea397a",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第一节 数据价值的形成 › 二、数据价值的形成 › （四）数据资本化"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.4.i1:000:60a0eb0f",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （四）数据资本化 › 1.数据资本化的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.4.i2:000:9d3cc32d",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （四）数据资本化 › 2.数据资本化的主要形式"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.4.i2:001:deb65afc",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （四）数据资本化 › 2.数据资本化的主要形式"
+    },
+    {
+     "chunk_id": "de:0906:ch03.4:001:d32bd26f",
+     "source": "both",
+     "grade": "direct",
+     "path": "第三章 数据价值 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.1.2.i1:000:89e15c4b",
+     "source": "bm25",
+     "grade": "background",
+     "path": "一、数据要素的内涵 › （二）相近概念辨析 › 1.数据与数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2:000:afdd74b4",
+     "source": "both",
+     "grade": "direct",
+     "path": "第三章 数据价值 › 第一节 数据价值的形成 › 二、数据价值的形成"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.2.3.i2:001:be356630",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "二、数据价值的形成 › （三）数据资产化 › 2.数据资产化的主要环节"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.3.1.i2:000:610d0f97",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据价值的影响因素 › （一）数据质量 › 2.完整性"
+    },
+    {
+     "chunk_id": "de:0906:ch03.1.3.3.i2:000:925bc254",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据价值的影响因素 › （三）数据应用场景 › 2.场景驱动数据的深度加工"
+    },
+    {
+     "chunk_id": "de:0906:ch03.4:004:e49ac099",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第三章 数据价值 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch04.1.1:000:99a163d4",
+     "source": "bm25",
+     "grade": "direct",
+     "path": "第四章 数据资产 › 第一节 数据资产化的管理基础与发展趋势 › 一、数据资产化的管理基础"
+    },
+    {
+     "chunk_id": "de:0906:ch04.1.1.3:004:95f63941",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第一节 数据资产化的管理基础与发展趋势 › 一、数据资产化的管理基础 › （三）数据资产的管理对象"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 21,
+    "bm25": {
+     "topk": 8,
+     "added": 4,
+     "overlap": 4,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch03.1.2.1.i2:000:f4bbce9d",
+       "score": 7.737,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch03.4:001:d32bd26f",
+       "score": 7.497,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.1.2.i1:000:89e15c4b",
+       "score": 7.487,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.4:004:e49ac099",
+       "score": 7.452,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch04.1.1:000:99a163d4",
+       "score": 7.412,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.1.2.3.i2:000:028949a1",
+       "score": 7.047,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch04.1.1.3:004:95f63941",
+       "score": 7.009,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.1.2:000:afdd74b4",
+       "score": 6.814,
+       "also_ontology": true
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 13,
+     "bm25": 4,
+     "both": 4
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 64.2
+  },
+  {
+   "id": "r17",
+   "question": "数据交易所和数据交易平台的区别？",
+   "error": "",
+   "fallback": null,
+   "answer": "教材材料不足以明确说明数据交易所和数据交易平台的区别。教材中有多处将二者并列或混用，而未给出二者在定义、范围或功能上的区分标准。\n\n例如，[de:0906:ch06.1.2.3:000:be748416] 把“规范化数据交易所或数据交易平台”共同作为场内市场的交易场所，并称“数据交易所是场内市场的典型组织形式”；[de:0906:ch06.1.1.1:001:d1d919ea] 在狭义数据市场界定中，将“数据交易所、数据交易平台”并列为专业化、规范化场内交易市场的核心载体；[de:0906:ch06.1.1.1:000:5bb3d981] 也将“数据交易平台、数据中介、数据交易所”等并列为具体交易场所或服务载体；[de:0906:ch05.3.3.2:000:ddbbf7ef] 则表述为“数据交易平台或交易所”。[de:0906:ch06.2.1.4:000:38752962] 提到“数据交易平台运营方”是数据市场的组织者和服务者，“数据交易机构或交易平台承担规则组织功能”，同样未作区分。\n\n教材仅对数据交易所的功能定位作了较具体描述，如 [de:0906:ch06.2.3.1.i1:000:098e15a1] 概括为建立交易规则、降低交易不确定性、提供可信技术环境、培育交易生态，但没有说明这些功能是否为数据交易所独有、与数据交易平台有何不同。因此，教材材料不足以回答“数据交易所和数据交易平台的区别”，缺少对二者概念边界或差异关系的直接说明。",
+   "citations": [
+    "de:0906:ch06.1.2.3:000:be748416",
+    "de:0906:ch06.1.1.1:001:d1d919ea",
+    "de:0906:ch06.1.1.1:000:5bb3d981",
+    "de:0906:ch05.3.3.2:000:ddbbf7ef",
+    "de:0906:ch06.2.1.4:000:38752962",
+    "de:0906:ch06.2.3.1.i1:000:098e15a1"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C06-0056",
+     "reason": "问题直接涉及的核心概念，释义明确其为场内市场的典型组织形式",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0022",
+     "reason": "问题直接涉及的核心概念，释义将其与数据交易所并列为数据要素市场组织的重要组成部分",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C06-0055",
+     "reason": "数据交易所被定义为场内市场的典型组织形式，是理解两者区别的关键关联概念",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0119",
+     "reason": "直接讨论数据交易所与场外市场的对比，有助于理解交易所与一般交易平台的区别",
+     "role": "related_concept"
+    },
+    {
+     "concept_id": "C06-0086",
+     "reason": "揭示数据交易平台的运营主体角色，有助于区分平台与交易所的定位",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 7,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 3.029,
+     "prompt_tokens": 915,
+     "completion_tokens": 80,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 4.437,
+     "prompt_tokens": 5871,
+     "completion_tokens": 189,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 4.601,
+     "prompt_tokens": 2879,
+     "completion_tokens": 200,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_neighbors",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 9.829,
+     "prompt_tokens": 3642,
+     "completion_tokens": 184,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 5,
+     "latency_s": 4.45,
+     "prompt_tokens": 3575,
+     "completion_tokens": 162,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 6,
+     "latency_s": 3.435,
+     "prompt_tokens": 3791,
+     "completion_tokens": 119,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 7,
+     "latency_s": 5.124,
+     "prompt_tokens": 3693,
+     "completion_tokens": 292,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 9,
+   "prompt_tokens": 32861,
+   "completion_tokens": 3813,
+   "reasoning_tokens": 1121,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch06.1.2.3:000:be748416",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 二、数据市场的类型划分 › （三）按组织形态划分：场内市场与场外市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.4:000:38752962",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （四）数据交易平台运营方"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3:000:382c0ed3",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第六章 数据市场 › 第二节 数据市场的运行机制 › 三、数据交易所与场外市场"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i1:000:098e15a1",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 1.功能定位"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.1.5:000:17dd1cf8",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第二节 数据市场的运行机制 › 一、市场参与主体 › （五）监管机构"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i2:000:69fe990b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 2.运营模式"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.2:000:b8d74703",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （二）场外市场的运行逻辑与制度空间"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.3:000:6bbe1204",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （三）场内与场外的衔接与协同"
+    },
+    {
+     "chunk_id": "de:0906:ch06.4:000:e31aa581",
+     "source": "both",
+     "grade": "background",
+     "path": "第六章 数据市场 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch05.1.2.3.i3:000:07fce643",
+     "source": "bm25",
+     "grade": "background",
+     "path": "二、数据产品的核心特征 › （三）贯穿生命周期的低成本性 › 3.交易阶段"
+    },
+    {
+     "chunk_id": "de:0906:ch05.3.3.2:000:ddbbf7ef",
+     "source": "bm25",
+     "grade": "background",
+     "path": "数据产品的形成与流通 › 三、数据产品流通的基本框架 › （二）数据产品上架与挂牌"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.1:000:5bb3d981",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （一）数据市场的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch06.1.1.1:001:d1d919ea",
+     "source": "both",
+     "grade": "direct",
+     "path": "第一节 数据市场的基本范畴 › 一、数据市场的概念与功能定位 › （一）数据市场的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.2.2:000:2f4ef6bf",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 二、市场运行的核心机制 › （二）交易撮合机制"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.1.i2:001:4608ae59",
+     "source": "ontology",
+     "grade": "background",
+     "path": "三、数据交易所与场外市场 › （一）数据交易所的功能定位与运营模式 › 2.运营模式"
+    },
+    {
+     "chunk_id": "de:0906:ch06.2.3.3:001:aea5fd11",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据市场的运行机制 › 三、数据交易所与场外市场 › （三）场内与场外的衔接与协同"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.1:000:eaf07241",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （一）数据产品交易规则"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.2.2:000:411dac3c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第三节 数据市场的制度基础 › 二、交易规则与标准 › （二）数据产品质量标准与评估规范"
+    },
+    {
+     "chunk_id": "de:0906:ch06.3.3.3:001:bc82bf6a",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "第三节 数据市场的制度基础 › 三、市场基础设施 › （三）信用评价与争议解决机制"
+    },
+    {
+     "chunk_id": "de:0906:ch07.1.1.2:000:c210867f",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第一节 数据交易的流程与方式 › 一、交易流程 › （二）交易磋商与合同签订"
+    },
+    {
+     "chunk_id": "de:0906:ch07.1.1.3:001:c361039d",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第一节 数据交易的流程与方式 › 一、交易流程 › （三）标的交付与价款结算"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 21,
+    "bm25": {
+     "topk": 8,
+     "added": 3,
+     "overlap": 5,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch06.4:000:e31aa581",
+       "score": 8.294,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch05.3.3.2:000:ddbbf7ef",
+       "score": 8.239,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch06.1.1.1:001:d1d919ea",
+       "score": 7.602,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch06.1.2.3:000:be748416",
+       "score": 7.476,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch06.2.1.4:000:38752962",
+       "score": 7.223,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch05.1.2.3.i3:000:07fce643",
+       "score": 6.871,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch06.3.3.3:001:bc82bf6a",
+       "score": 6.796,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.1.1.3:001:c361039d",
+       "score": 6.144,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 13,
+     "bm25": 3,
+     "both": 5
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 82.66
+  },
+  {
+   "id": "r18",
+   "question": "数据要素的非竞争性体现在哪？",
+   "error": "",
+   "fallback": null,
+   "answer": "数据要素的非竞争性主要体现在：同一份数据可以被多个主体在同一时间或不同时点重复使用，一方的使用不会减少另一方的可用数量，也不会降低数据的使用价值，因此数据可以在不产生冲突的情况下被社会广泛共享和复用 [de:0906:ch01.1.2.1.i3:000:448c9f7a]。在权属层面，非竞争性还表现为非排他性，与传统物权强调的独占支配和排他控制存在根本性冲突 [de:0906:ch02.3.2:000:7e052df6]，并使得传统产权框架难以直接适用于数据要素 [de:0906:ch02:000:1da1c146]。",
+   "citations": [
+    "de:0906:ch01.1.2.1.i3:000:448c9f7a",
+    "de:0906:ch02.3.2:000:7e052df6",
+    "de:0906:ch02:000:1da1c146"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C01-0037",
+     "reason": "直接解释非竞争性的含义与体现：同一数据可被多主体同时/不同时点重复使用，一方使用不减少他人可用数量与价值",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C01-0032",
+     "reason": "数据要素的特征总括，非竞争性是其自然属性之一，帮助理解该属性在数据要素特征体系中的位置",
+     "role": "related_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.164,
+     "prompt_tokens": 916,
+     "completion_tokens": 80,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 4.153,
+     "prompt_tokens": 6050,
+     "completion_tokens": 146,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 9.523,
+     "prompt_tokens": 2770,
+     "completion_tokens": 157,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 8.278,
+     "prompt_tokens": 2770,
+     "completion_tokens": 333,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 6,
+   "prompt_tokens": 16477,
+   "completion_tokens": 2339,
+   "reasoning_tokens": 955,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch01.1.1.1.i2:000:101d6a6e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据要素的内涵 › （一）数据要素的概念演进 › 2.多维视角下的数据要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2:000:05d98644",
+     "source": "both",
+     "grade": "background",
+     "path": "第一章 数据要素 › 第一节 数据要素的概念界定 › 二、数据要素的特征"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1:000:3dff9e4a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第一节 数据要素的概念界定 › 二、数据要素的特征 › （一）自然属性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i3:000:448c9f7a",
+     "source": "both",
+     "grade": "direct",
+     "path": "二、数据要素的特征 › （一）自然属性 › 3.非竞争性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.1.i4:000:8ea6cc60",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、数据要素的特征 › （一）自然属性 › 4.非静态性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2:000:43b34fbe",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "第一节 数据要素的概念界定 › 二、数据要素的特征 › （二）社会属性"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.3.2:000:380c424a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第一节 数据要素的概念界定 › 三、数据要素的类型 › （二）按劳动过程分类"
+    },
+    {
+     "chunk_id": "de:0906:ch01.2.1.3:000:7601c6cc",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据要素的演进历程 › 一、经济学关于生产要素的理论发展 › （三）数字经济时代：数据成为第五要素"
+    },
+    {
+     "chunk_id": "de:0906:ch01.4:000:bea34ad9",
+     "source": "both",
+     "grade": "background",
+     "path": "第一章 数据要素 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch02:000:1da1c146",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第二章 数据权属"
+    },
+    {
+     "chunk_id": "de:0906:ch02.3.2:000:7e052df6",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第二章 数据权属 › 第三节 数据权属的界定问题 › 二、数据的权属特征与传统确权逻辑的冲突"
+    },
+    {
+     "chunk_id": "de:0906:ch03.3:000:e6274d38",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第三章 数据价值 › 第三节 数据价值的分配"
+    },
+    {
+     "chunk_id": "de:0906:ch03.3.3.1.i1:000:293fd205",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "数据价值分配的制度安排 › （一）公共数据的收益分配制度 › 1.公共数据有偿使用的定价机制"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 13,
+    "bm25": {
+     "topk": 8,
+     "added": 4,
+     "overlap": 4,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch01.1.2:000:05d98644",
+       "score": 13.865,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.2.1.i3:000:448c9f7a",
+       "score": 13.039,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.2.2:000:43b34fbe",
+       "score": 11.572,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.4:000:bea34ad9",
+       "score": 11.096,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch02.3.2:000:7e052df6",
+       "score": 9.364,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.3:000:e6274d38",
+       "score": 8.464,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch02:000:1da1c146",
+       "score": 8.289,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch03.3.3.1.i1:000:293fd205",
+       "score": 7.49,
+       "also_ontology": false
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 5,
+     "bm25": 4,
+     "both": 4
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 51.01
+  },
+  {
+   "id": "r19",
+   "question": "数据定价有哪些常见方法？",
+   "error": "",
+   "fallback": null,
+   "answer": "数据定价的常见方法主要包括七种：成本加成定价、市场比较定价、收益分成定价、基于价值的定价、动态定价、政府指导定价、拍卖定价。这些方法在教材中分别有说明，且本体中记录为“定价的主要方法”所包含的组成部分 [本体]。\n\n- **成本加成定价**：以数据产品形成过程中的实际投入为基础，加上合理收益形成价格，适用于标准化数据集、基础API接口等 [de:0906:ch07.2.2.1:000:c745c759][de:0906:ch07.2.2.7:001:54664048]。公共数据中的基础性产品也适宜采用该法 [de:0906:ch07.2.3.2:000:a36636c1]。\n- **市场比较定价**：参照同类或相似数据产品的历史成交价、挂牌价和服务费形成价格，适用于已有可比交易案例的行业数据、统计数据等 [de:0906:ch07.2.2.2:000:c63636d7][de:0906:ch07.2.2.7:001:54664048]。\n- **收益分成定价**：把数据价格与数据使用后的增量收益直接挂钩，适用于金融风控、精准营销、供应链优化等效果需验证的场景 [de:0906:ch07.2.2.3:000:6f831491][de:0906:ch07.2.2.7:001:54664048]。\n- **基于价值的定价**：关注数据对特定决策和业务结果产生的边际贡献，适用于高质量、高稀缺、高场景适配的数据产品 [de:0906:ch07.2.2.4:000:e39d3c48][de:0906:ch07.2.2.7:001:54664048]。\n- **动态定价**：根据数据新鲜度、访问频率、服务等级和需求强度调整价格，适用于实时交通、气象、物流、金融行情等高时效数据 [de:0906:ch07.2.2.5:000:3b02d703][de:0906:ch07.2.2.7:001:54664048]。\n- **政府指导定价**：主要适用于公共属性较强、涉及公共利益或具有基础支撑作用的数据产品，如公共数据授权运营、公益服务等 [de:0906:ch07.2.2.6:000:4a592091][de:0906:ch07.2.2.7:001:54664048]。\n- **拍卖定价**：通过多方竞价发现价格，适用于稀缺性较高、需求主体较多、难以事前估值的数据产品 [de:0906:ch07.2.2.7:000:99c4aa74][de:0906:ch07.2.2.7:001:54664048]。\n\n在实际交易中，数据交易所往往会根据数据类型、权利范围、应用场景和风险等级组合使用各类定价机制，基础价格可依据成本形成，交易价格参考市场案例修正，后续收益可通过分成补充 [de:0906:ch07.2.2.7:000:99c4aa74]；同时，数据产品定价需要在可交易边界明确的基础上综合使用多种机制 [de:0906:ch07.2.2:000:b6ac77a2]。",
+   "citations": [
+    "de:0906:ch07.2.2.1:000:c745c759",
+    "de:0906:ch07.2.2.7:001:54664048",
+    "de:0906:ch07.2.3.2:000:a36636c1",
+    "de:0906:ch07.2.2.2:000:c63636d7",
+    "de:0906:ch07.2.2.3:000:6f831491",
+    "de:0906:ch07.2.2.4:000:e39d3c48",
+    "de:0906:ch07.2.2.5:000:3b02d703",
+    "de:0906:ch07.2.2.6:000:4a592091",
+    "de:0906:ch07.2.2.7:000:99c4aa74",
+    "de:0906:ch07.2.2:000:b6ac77a2"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C07-0107",
+     "reason": "问题直接问数据定价的常见方法，该概念是定价方法的总括概念",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0109",
+     "reason": "成本加成定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0110",
+     "reason": "市场比较定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0111",
+     "reason": "收益分成定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0113",
+     "reason": "基于价值的定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0121",
+     "reason": "拍卖定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0163",
+     "reason": "动态定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0166",
+     "reason": "政府指导定价是常见定价方法之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0194",
+     "reason": "市场竞价定价是定价方法的子类，属常见方法",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C07-0127",
+     "reason": "分级分类定价是公共数据定价的常见方法",
+     "role": "question_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.774,
+     "prompt_tokens": 914,
+     "completion_tokens": 79,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 7.31,
+     "prompt_tokens": 5609,
+     "completion_tokens": 172,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 7.354,
+     "prompt_tokens": 3233,
+     "completion_tokens": 400,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 8.69,
+     "prompt_tokens": 4035,
+     "completion_tokens": 542,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 6,
+   "prompt_tokens": 19459,
+   "completion_tokens": 3555,
+   "reasoning_tokens": 1417,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch07.2.2.1:000:c745c759",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （一）成本加成定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.3:000:6f831491",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （三）收益分成定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.4:000:e39d3c48",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （四）基于价值的定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.6:000:4a592091",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （六）政府指导定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.3.2:000:a36636c1",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 三、公共数据产品的定价原则 › （二）分级分类定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.1.2:000:0d503f0a",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据产品的定价机制 › 一、数据产品定价的特殊性 › （二）成本结构与价值贡献的非对应性"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.1.3:000:94697adc",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据产品的定价机制 › 一、数据产品定价的特殊性 › （三）市场参照的稀缺性"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2:000:b6ac77a2",
+     "source": "both",
+     "grade": "background",
+     "path": "第七章 数据交易 › 第二节 数据产品的定价机制 › 二、定价的主要方法"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.2:000:c63636d7",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （二）市场比较定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.5:000:3b02d703",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （五）动态定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.7:000:99c4aa74",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （七）拍卖定价"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.3.1:000:4664d906",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第二节 数据产品的定价机制 › 三、公共数据产品的定价原则 › （一）普惠性优先原则"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.3.3:000:ce8808ab",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第二节 数据产品的定价机制 › 三、公共数据产品的定价原则 › （三）费用减免机制"
+    },
+    {
+     "chunk_id": "de:0906:ch07.2.2.7:001:54664048",
+     "source": "both",
+     "grade": "direct",
+     "path": "第二节 数据产品的定价机制 › 二、定价的主要方法 › （七）拍卖定价"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 14,
+    "bm25": {
+     "topk": 8,
+     "added": 0,
+     "overlap": 8,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch07.2.2.5:000:3b02d703",
+       "score": 10.014,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2:000:b6ac77a2",
+       "score": 9.72,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.4:000:e39d3c48",
+       "score": 9.375,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.6:000:4a592091",
+       "score": 9.345,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.2:000:c63636d7",
+       "score": 9.254,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.7:000:99c4aa74",
+       "score": 8.902,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.1:000:c745c759",
+       "score": 8.883,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch07.2.2.7:001:54664048",
+       "score": 8.797,
+       "also_ontology": true
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 6,
+     "bm25": 0,
+     "both": 8
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 64.11
+  },
+  {
+   "id": "r20",
+   "question": "数据治理与数据管理的关系是什么？",
+   "error": "",
+   "fallback": null,
+   "answer": "根据教材材料，数据治理与数据管理的关系是：二者并不等同，数据治理不同于数据管理。教材指出，“数据治理不同于数据管理或数据安全防护，后两者目标单一，前者则需同时回应多种需求” [de:0906:ch10.1.2:000:9ab6be7c]。这意味着数据治理的目标更加复合多元，而数据管理（与数据安全防护）的目标相对单一。  \n本体结构信息中也记录为：数据治理（C10-0001）—区别于→ 数据管理（C10-0041）[本体]。  \n\n因此，教材原文证据表明数据治理与数据管理存在区别（[de:0906:ch10.1.2:000:9ab6be7c]），本体推导关系同样标注为“区别于”。教材材料未进一步展开二者在其他维度（如职能边界、管辖范围、操作层次）上的具体差异，因此无法基于现有材料作更详细的比较说明。",
+   "citations": [
+    "de:0906:ch10.1.2:000:9ab6be7c"
+   ],
+   "selected_concepts": [
+    {
+     "concept_id": "C10-0001",
+     "reason": "问题直接询问数据治理与数据管理的关系，数据治理是核心概念之一",
+     "role": "question_concept"
+    },
+    {
+     "concept_id": "C10-0041",
+     "reason": "问题直接询问数据治理与数据管理的关系，数据管理是核心概念之一",
+     "role": "question_concept"
+    }
+   ],
+   "select_calls": 4,
+   "select_rounds": [
+    {
+     "round": 1,
+     "latency_s": 2.658,
+     "prompt_tokens": 916,
+     "completion_tokens": 79,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "search_vocab",
+      "search_vocab"
+     ]
+    },
+    {
+     "round": 2,
+     "latency_s": 5.17,
+     "prompt_tokens": 5894,
+     "completion_tokens": 103,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_concept",
+      "get_concept"
+     ]
+    },
+    {
+     "round": 3,
+     "latency_s": 4.198,
+     "prompt_tokens": 2648,
+     "completion_tokens": 115,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "get_neighbors",
+      "get_neighbors"
+     ]
+    },
+    {
+     "round": 4,
+     "latency_s": 5.35,
+     "prompt_tokens": 5738,
+     "completion_tokens": 174,
+     "reasoning_tokens": 0,
+     "reasoning_chars": 0,
+     "reasoning_mode": "disabled",
+     "reasoning_sent": {
+      "type": "disabled"
+     },
+     "tools": [
+      "finish"
+     ]
+    }
+   ],
+   "llm_calls": 8,
+   "prompt_tokens": 36559,
+   "completion_tokens": 4295,
+   "reasoning_tokens": 167,
+   "recalled": [
+    {
+     "chunk_id": "de:0906:ch10:000:d4bc8236",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第十章 数据治理"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.1.i1:000:fc6411ba",
+     "source": "ontology",
+     "grade": "direct",
+     "path": "一、数据治理的内涵与特征 › （一）数据治理的内涵 › 1.数据治理的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.1.i1:001:5b5ce7d3",
+     "source": "both",
+     "grade": "direct",
+     "path": "一、数据治理的内涵与特征 › （一）数据治理的内涵 › 1.数据治理的概念界定"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.1.i2:000:6adcc63a",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据治理的内涵与特征 › （一）数据治理的内涵 › 2.数据治理的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.2.i1:000:64c2ae91",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、数据治理的内涵与特征 › （二）数据治理的特征 › 1.全过程性"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.2:000:9ab6be7c",
+     "source": "both",
+     "grade": "direct",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 二、数据治理的目标"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.2.1:000:e1c78a18",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 二、数据治理的目标 › （一）价值释放"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.2.2:000:8355da33",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 二、数据治理的目标 › （二）安全维护"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.2.3:000:3d60a5eb",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 二、数据治理的目标 › （三）秩序建立"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.2.4:000:a912f247",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 二、数据治理的目标 › （四）生产关系重构"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i4:000:6b0d8b29",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 4.监管与公共服务提供者"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i5:000:0285aebe",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 5.技术社群与第三方机构"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.2:000:6ef0db03",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 三、数据治理的构成要素 › （二）数据治理的制度工具"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.3:000:4827a3a3",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 三、数据治理的构成要素 › （三）数据治理的技术支撑"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.3.i2:000:9cfeee15",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （三）数据治理的技术支撑 › 2.流通技术"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4:000:83710b6e",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 四、数据治理的运行机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.1:000:204c7021",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 四、数据治理的运行机制 › （一）主体协同机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.3.i2:000:0c3c6bcb",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （三）动态调试机制 › 2.标准更新机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.3.i3:000:708fb588",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （三）动态调试机制 › 3.试点推广机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.2.i1:000:c009f1e2",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （二）制度特征 › 1.主体结构"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.2.i2:000:2132f9d7",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （二）制度特征 › 2.制度工具"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.3.i1:000:cdbab7d1",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （三）运行机制 › 1.分类分级治理机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3:000:7a864782",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的中国实践：以“云上贵州”为例"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.2.1:001:36413c97",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的中国实践：以“云上贵州”为例 › 二、案例分析 › （一）数据分类分级的实践"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.2.3:000:f5cb6fc1",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的中国实践：以“云上贵州”为例 › 二、案例分析 › （三）央地协同的组织架构"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.3:001:063396ec",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的中国实践：以“云上贵州”为例 › 三、案例启示"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4:000:0bf50105",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的全球竞争"
+    },
+    {
+     "chunk_id": "de:0906:ch10.5:000:482b2d6d",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第十章 数据治理 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch10.5:001:64399dd4",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 小结"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.1.i2:001:7abc797e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据治理的内涵与特征 › （一）数据治理的内涵 › 2.数据治理的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.2:000:c252894e",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 一、数据治理的内涵与特征 › （二）数据治理的特征"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.2.i2:000:a48b475f",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、数据治理的内涵与特征 › （二）数据治理的特征 › 2.多主体性"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.2.i3:000:8c38e9bd",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、数据治理的内涵与特征 › （二）数据治理的特征 › 3.复合性"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3:000:6e8519ba",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 三、数据治理的构成要素"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i1:000:5db70f9b",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 1.个人信息主体"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i2:000:4bc34a0d",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 2.数据持有者与控制者"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i2:001:2713cadb",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 2.数据持有者与控制者"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1.i3:000:9613abff",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （一）数据治理的主体 › 3.数据处理者"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.2.i1:000:b51a5d0c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （二）数据治理的制度工具 › 1.法律框架"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.2.i2:000:83f66009",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （二）数据治理的制度工具 › 2.政策体系"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.3.i1:000:064dae62",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （三）数据治理的技术支撑 › 1.安全技术"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.1.i1:000:388deab2",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （一）主体协同机制 › 1.权责界定机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.1.i4:000:228d8180",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （一）主体协同机制 › 4.联合行动机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.3:000:1db17e47",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 四、数据治理的运行机制 › （三）动态调试机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.4:000:edefdbd5",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 四、数据治理的运行机制 › （四）风险响应机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.4.i1:000:f52e198e",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （四）风险响应机制 › 1.监测预警机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.4.i3:000:3f7a33c3",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （四）风险响应机制 › 3.溯源追责机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.1.1:000:88b8c305",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的模式比较 › 一、欧盟模式：统一规制 › （一）价值基础"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.1.2.i2:000:e52621ec",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、欧盟模式：统一规制 › （二）制度特征 › 2.制度工具"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.1.2.i3:000:8700d977",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、欧盟模式：统一规制 › （二）制度特征 › 3.技术支撑"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.1.3.i1:000:fd25c43a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、欧盟模式：统一规制 › （三）运行机制 › 1.协同监管机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.2.3.i1:000:ce31df56",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、美国模式：分散治理 › （三）运行机制 › 1.事后执法与私人诉讼机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.2.3.i2:000:69e5a534",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、美国模式：分散治理 › （三）运行机制 › 2.跨境规则输出机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.3.i2:000:8e4880f2",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （三）运行机制 › 2.安全评估与合规审查机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.3.i3:000:8c9e6f21",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （三）运行机制 › 3.央地协同与试点推广机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.4.1:000:350b195d",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的模式比较 › 四、三种模式的比较 › （一）价值取向的差异"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.1:000:865e9734",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的中国实践：以“云上贵州”为例 › 一、案例导入"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.2.1:000:beee851c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的中国实践：以“云上贵州”为例 › 二、案例分析 › （一）数据分类分级的实践"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.2.2:000:04ab01ac",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的中国实践：以“云上贵州”为例 › 二、案例分析 › （二）安全评估与合规审查的运作"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.2.2:002:59bd240f",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的中国实践：以“云上贵州”为例 › 二、案例分析 › （二）安全评估与合规审查的运作"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.3:002:083a329a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的中国实践：以“云上贵州”为例 › 三、案例启示"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.1.2:000:d28f3190",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的全球竞争 › 一、数据跨境流通规则的竞争 › （二）美国：规则输出路径"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.1.3:000:a5112052",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的全球竞争 › 一、数据跨境流通规则的竞争 › （三）中国：示范合作路径"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.1.3:002:45776c46",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的全球竞争 › 一、数据跨境流通规则的竞争 › （三）中国：示范合作路径"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2.1.i1:000:65ca75d9",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、数据治理的技术竞争 › （一）通信技术 › 1.协议架构"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2.3:000:7ab38053",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的全球竞争 › 二、数据治理的技术竞争 › （三）算法技术"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2.3.i1:000:d87ef09c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、数据治理的技术竞争 › （三）算法技术 › 1.基础框架"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2.3.i2:000:da413068",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、数据治理的技术竞争 › （三）算法技术 › 2.大模型"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.3.1.i1:000:7354858f",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据基础设施的控制权竞争 › （一）物理设施布局 › 1.海底光缆"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.3.2.i1:000:1bd007c4",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据基础设施的控制权竞争 › （二）制度运作机制 › 1.接入许可与路由控制"
+    },
+    {
+     "chunk_id": "de:0906:ch01.1.2.2:000:43b34fbe",
+     "source": "bm25",
+     "grade": "irrelevant",
+     "path": "第一节 数据要素的概念界定 › 二、数据要素的特征 › （二）社会属性"
+    },
+    {
+     "chunk_id": "de:0906:ch04.1.2.1:000:32387a22",
+     "source": "bm25",
+     "grade": "background",
+     "path": "第一节 数据资产化的管理基础与发展趋势 › 二、数据资产化的发展趋势 › （一）管理能力的深化"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1:000:90fd9945",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第十章 数据治理 › 数据治理的基本问题"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.1.i2:002:50316f4e",
+     "source": "ontology",
+     "grade": "background",
+     "path": "一、数据治理的内涵与特征 › （一）数据治理的内涵 › 2.数据治理的内涵"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.1.2.i4:000:a7685594",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "一、数据治理的内涵与特征 › （二）数据治理的特征 › 4.动态性"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3:001:c343a3a7",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 三、数据治理的构成要素"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.1:000:cdd08e5d",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 三、数据治理的构成要素 › （一）数据治理的主体"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.2.i3:000:b141fd75",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （二）数据治理的制度工具 › 3.标准规范"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.3.3.i3:000:e90c9275",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据治理的构成要素 › （三）数据治理的技术支撑 › 3.基础设施"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4:001:7465a821",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 四、数据治理的运行机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4:002:fc69ba3a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的基本问题 › 四、数据治理的运行机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.1.i3:000:2d728a48",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （一）主体协同机制 › 3.决策协商机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.2:000:54b15c68",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的基本问题 › 四、数据治理的运行机制 › （二）激励约束机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.2.i1:000:d2cd9547",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （二）激励约束机制 › 1.收益分配机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.1.4.2.i3:000:aac5073a",
+     "source": "both",
+     "grade": "irrelevant",
+     "path": "四、数据治理的运行机制 › （二）激励约束机制 › 3.违规惩戒机制"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2:000:e516528b",
+     "source": "ontology",
+     "grade": "background",
+     "path": "第十章 数据治理 › 数据治理的模式比较"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.2.1:000:4d0c0625",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的模式比较 › 二、美国模式：分散治理 › （一）价值基础"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.2.2.i3:000:376aff4a",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "二、美国模式：分散治理 › （二）制度特征 › 3.技术支撑"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.1:000:db741a71",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的模式比较 › 三、中国模式：分类分级治理 › （一）价值基础"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.3.2.i3:000:6c692a23",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、中国模式：分类分级治理 › （二）制度特征 › 3.技术支撑"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.4:000:a5fb1d55",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的模式比较 › 四、三种模式的比较"
+    },
+    {
+     "chunk_id": "de:0906:ch10.2.4:001:5cc8baa1",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的模式比较 › 四、三种模式的比较"
+    },
+    {
+     "chunk_id": "de:0906:ch10.3.3:000:d4174fd8",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的中国实践：以“云上贵州”为例 › 三、案例启示"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.1:000:3c453510",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的全球竞争 › 一、数据跨境流通规则的竞争"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2:000:9f726af1",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的全球竞争 › 二、数据治理的技术竞争"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.2.1:000:8f59368c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "数据治理的全球竞争 › 二、数据治理的技术竞争 › （一）通信技术"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.3:000:6bcc1148",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "第十章 数据治理 › 数据治理的全球竞争 › 三、数据基础设施的控制权竞争"
+    },
+    {
+     "chunk_id": "de:0906:ch10.4.3.1.i3:000:1f0b7a1c",
+     "source": "ontology",
+     "grade": "irrelevant",
+     "path": "三、数据基础设施的控制权竞争 › （一）物理设施布局 › 3.互联网交换节点"
+    }
+   ],
+   "recall_stage": {
+    "chunks": 98,
+    "bm25": {
+     "topk": 8,
+     "added": 2,
+     "overlap": 6,
+     "hits": [
+      {
+       "chunk_id": "de:0906:ch04.1.2.1:000:32387a22",
+       "score": 8.891,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch10.1.1.1.i1:001:5b5ce7d3",
+       "score": 7.591,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch10.1.2:000:9ab6be7c",
+       "score": 7.394,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch10.2.3.3.i3:000:8c9e6f21",
+       "score": 6.375,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch10.2.3.2.i1:000:c009f1e2",
+       "score": 6.074,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch10.1.4.2.i3:000:aac5073a",
+       "score": 5.744,
+       "also_ontology": true
+      },
+      {
+       "chunk_id": "de:0906:ch01.1.2.2:000:43b34fbe",
+       "score": 5.706,
+       "also_ontology": false
+      },
+      {
+       "chunk_id": "de:0906:ch10.1.3:000:6e8519ba",
+       "score": 5.607,
+       "also_ontology": true
+      }
+     ]
+    },
+    "sources": {
+     "ontology": 90,
+     "bm25": 2,
+     "both": 6
+    }
+   },
+   "invalid_citations": [],
+   "elapsed_s": 79.19
+  }
+ ],
+ "summary": {
+  "hit_rate": {
+   "r11-r13": {
+    "ontology_only": "6/8",
+    "ontology_plus_bm25": "8/8",
+    "ontology_only_rate": 0.75,
+    "ontology_plus_bm25_rate": 1.0
+   },
+   "r14-r20": {
+    "ontology_only": "13/16",
+    "ontology_plus_bm25": "13/16",
+    "ontology_only_rate": 0.812,
+    "ontology_plus_bm25_rate": 0.812
+   },
+   "all": {
+    "ontology_only": "19/24",
+    "ontology_plus_bm25": "21/24",
+    "ontology_only_rate": 0.792,
+    "ontology_plus_bm25_rate": 0.875
+   }
+  },
+  "bm25_only_chunk_grades": {
+   "direct": 9,
+   "background": 15,
+   "irrelevant": 14,
+   "ungraded": 0
+  },
+  "bm25_only_chunks_cited_in_answers": 11,
+  "per_question": [
+   {
+    "id": "r11",
+    "hits": [
+     {
+      "key": "数据要素是指根据特定生产需求",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据要素则是数据成为生产要素后",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 47,
+    "sources": {
+     "ontology": 39,
+     "both": 6,
+     "bm25": 2
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 0,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r12",
+    "hits": [
+     {
+      "key": "而非传统意义上的所有权",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "从“所有权思维”到“权能分割思维”的转变",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据资源持有权、数据加工使用权和数据产品经营权三类权利",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 15,
+    "sources": {
+     "ontology": 7,
+     "both": 2,
+     "bm25": 6
+    },
+    "bm25_only_grades": {
+     "direct": 2,
+     "background": 3,
+     "irrelevant": 1
+    },
+    "citations": 9,
+    "bm25_only_cited": 3,
+    "fallback": null
+   },
+   {
+    "id": "r13",
+    "hits": [
+     {
+      "key": "数据资产入表是将符合确认条件的数据资产纳入企业财务报表体系",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "入表驱动型路径以组织数据资源会计处理为抓手",
+      "ontology_only": false,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "管理筑基型路径强调在尚未具备大规模运营",
+      "ontology_only": false,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 13,
+    "sources": {
+     "ontology": 5,
+     "both": 0,
+     "bm25": 8
+    },
+    "bm25_only_grades": {
+     "direct": 5,
+     "background": 3,
+     "irrelevant": 0
+    },
+    "citations": 6,
+    "bm25_only_cited": 5,
+    "fallback": null
+   },
+   {
+    "id": "r14",
+    "hits": [
+     {
+      "key": "数据市场，简单而言就是以数据产品为交易标的的制度场域",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "交易撮合机制是连接供需双方的桥梁和纽带",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "价格发现机制解决数据定价的问题",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 50,
+    "sources": {
+     "ontology": 42,
+     "both": 2,
+     "bm25": 6
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 0,
+     "irrelevant": 6
+    },
+    "citations": 4,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r15",
+    "hits": [
+     {
+      "key": "当前学界关于数据是否应当确权存在根本性分歧",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据非权利客体论认为",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据产权难以实现论认为",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 5,
+     "bm25": 3
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 2
+    },
+    "citations": 10,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r16",
+    "hits": [
+     {
+      "key": "数据资源化是数据要素价值实现的基础环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据要素化是数据价值形成的核心环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "涉及资源化、要素化、资产化与资本化四个环节",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 4,
+     "bm25": 4
+    },
+    "bm25_only_grades": {
+     "direct": 2,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 2,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r17",
+    "hits": [
+     {
+      "key": "数据交易所与场外市场是数据交易的两种基本组织形态",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "场内交易是指在数据交易所",
+      "ontology_only": false,
+      "ontology_plus_bm25": false
+     }
+    ],
+    "recalled": 21,
+    "sources": {
+     "ontology": 13,
+     "both": 5,
+     "bm25": 3
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 3,
+     "irrelevant": 0
+    },
+    "citations": 6,
+    "bm25_only_cited": 1,
+    "fallback": null
+   },
+   {
+    "id": "r18",
+    "hits": [
+     {
+      "key": "竞争性是指一方的使用会减少另一方可用性的程度",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 13,
+    "sources": {
+     "ontology": 5,
+     "both": 4,
+     "bm25": 4
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 2,
+     "irrelevant": 2
+    },
+    "citations": 3,
+    "bm25_only_cited": 2,
+    "fallback": null
+   },
+   {
+    "id": "r19",
+    "hits": [
+     {
+      "key": "价格发现机制解决数据定价的问题",
+      "ontology_only": false,
+      "ontology_plus_bm25": false
+     },
+     {
+      "key": "公开可信的交易案例仍然有限",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     }
+    ],
+    "recalled": 14,
+    "sources": {
+     "ontology": 6,
+     "both": 8,
+     "bm25": 0
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 0,
+     "irrelevant": 0
+    },
+    "citations": 10,
+    "bm25_only_cited": 0,
+    "fallback": null
+   },
+   {
+    "id": "r20",
+    "hits": [
+     {
+      "key": "数据治理的概念在理论研究和机构实践两个层面尚未形成完全统一的共识",
+      "ontology_only": true,
+      "ontology_plus_bm25": true
+     },
+     {
+      "key": "数据资产管理目标决定了数据资产化的方向",
+      "ontology_only": false,
+      "ontology_plus_bm25": false
+     }
+    ],
+    "recalled": 98,
+    "sources": {
+     "ontology": 90,
+     "both": 6,
+     "bm25": 2
+    },
+    "bm25_only_grades": {
+     "direct": 0,
+     "background": 1,
+     "irrelevant": 1
+    },
+    "citations": 1,
+    "bm25_only_cited": 0,
+    "fallback": null
+   }
+  ]
+ }
+}

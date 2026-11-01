@@ -12,6 +12,8 @@ from . import config, prompts
 from .llm import LLMClient
 from .recall import Recalled
 
+# 全角 / 其他括号 -> 半角方括号：模型偶尔写出 ［S3］ 或 【S3】，不归一化就匹配不上、引用留在正文里
+_BRACKET_MAP = str.maketrans({"［": "[", "］": "]", "【": "[", "】": "]", "〔": "[", "〕": "]"})
 _CITE_RE = re.compile(r"\[([^\[\]\n]{1,120})\]")
 _REF_RE = re.compile(r"^[Ss](\d+)$")
 ONTOLOGY_TAG = "本体"
@@ -47,6 +49,7 @@ def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str],
     valid: list[str] = []
     invalid: list[str] = []
     uses_ontology = False
+    text = (text or "").translate(_BRACKET_MAP)
 
     def repl(m: re.Match) -> str:
         nonlocal uses_ontology
@@ -73,7 +76,7 @@ def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str],
             return ""
         return m.group(0)
 
-    return _CITE_RE.sub(repl, text or ""), valid, invalid, uses_ontology
+    return _CITE_RE.sub(repl, text), valid, invalid, uses_ontology
 
 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,

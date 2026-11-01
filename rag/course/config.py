@@ -60,4 +60,4 @@ COURSE_QUESTION_MAX_CHARS = int(os.environ.get("COURSE_QUESTION_MAX_CHARS", "500
 
 
 # 兜底召回：用问题对教材子块做 BM25（jieba），取 top-k 与本体召回合并去重后再进入筛选；0 = 关闭（见 rag.course.fallback）
-COURSE_BM25_TOPK = int(os.environ.get("COURSE_BM25_TOPK", "8"))
+COURSE_BM25_TOPK = int(os.environ.get("COURSE_BM25_TOPK", "6"))
