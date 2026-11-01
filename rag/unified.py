@@ -75,7 +75,11 @@ class UnifiedService:
             out.update(answer=ans.get("text"), sources=res.get("citations", []))
         else:
             out.update(status="insufficient", answer=config.ADAPTIVE_INSUFFICIENT_TEXT)
+        grade = {v["chunk_id"]: v["grade"] for v in res.get("filtered", [])}
         out["course"] = {k: res.get(k) for k in ("selected_concepts", "fallback")}
+        # 每个召回块的来源（ontology/bm25/both）与筛选等级，便于调试与评测
+        out["course"]["recalled"] = [{"chunk_id": r["chunk_id"], "source": r.get("source"), "grade": grade.get(r["chunk_id"]),
+                                      "path": " › ".join(r["path"][-3:])} for r in res.get("recalled", [])]
 
 
 @router.post("/auto/ask", dependencies=[Depends(require_api_key)])

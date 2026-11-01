@@ -284,3 +284,43 @@ def test_candidate_eval_counts_merged_members_as_covered(ctx_same_name):
     gold = [{"id": "g", "question": "什么是数据要素", "must_recall": [{"key": "数据要素"}]}]
     res = candidate_eval.evaluate(ctx_same_name, gold, 30)
     assert res["rows"][0]["n_concepts_covered"] >= res["rows"][0]["n_candidates"]
+
+
+# ---------------------------------------------------------------- 端到端评测脚本（离线）
+
+def test_unified_course_output_carries_recalled_with_source_and_grade(ctx):
+    router = type("R", (), {"chat": lambda self, *a, **k: LLMResult(content=json.dumps({"route": "course", "complexity": "simple", "reason": "t"}))})()
+    out = UnifiedService(router_client=router, course_ctx=ctx, course_llm=ScriptedLLM(_full_script(ctx))).ask("什么是数据要素")
+    rec = out["course"]["recalled"]
+    assert rec and {"chunk_id", "source", "grade", "path"} <= set(rec[0]) and rec[0]["source"] in ("ontology", "bm25", "both")
+    assert any(r["grade"] == "direct" for r in rec)
+
+
+def test_e2e_run_one_records_stage_timings_and_never_leaks_key(ctx, monkeypatch):
+    from rag.course import eval_e2e
+    router = type("R", (), {"chat": lambda self, *a, **k: LLMResult(content=json.dumps({"route": "course", "complexity": "simple", "reason": "t"}), latency_s=0.5)})()
+    svc = UnifiedService(router_client=router, course_ctx=ctx, course_llm=ScriptedLLM(_full_script(ctx)))
+    row = eval_e2e.run_one(svc, {"id": "r11", "question": "什么是数据要素"}, {"calls": 0, "cap": 99})
+    assert row["error"] == "" and row["route"] == "course" and row["e2e_s"] >= row["total_s"] - 0.01
+    assert set(row["step_calls"]) == {"select", "filter", "answer"} and all(v == 1 for v in row["step_calls"].values())
+    assert row["router_s"] >= 0 and set(row["step_s"]) == {"select", "filter", "answer"} and row["course_calls"] == 3
+    assert "warnings" in row and row["recalled"]
+
+
+def test_e2e_stops_after_two_llm_errors_and_checks_window(monkeypatch, tmp_path):
+    import sys
+    from rag.course import eval_e2e
+    monkeypatch.setattr(eval_e2e, "in_window", lambda now: True)
+    seq = iter(["", "LLMError", "LLMError"] + [""] * 20)
+    monkeypatch.setattr(eval_e2e, "run_one", lambda svc, g, sh: {"id": g["id"], "error": next(seq)})
+    mk = lambda: type("C", (), {"_client": type("X", (), {"with_options": lambda s, **k: s})()})()
+    monkeypatch.setattr(eval_e2e, "OpenAICompatClient", mk)
+    monkeypatch.setattr(eval_e2e, "build_router_client", mk)
+    monkeypatch.setattr(eval_e2e, "CourseContext", type("CC", (), {"load": staticmethod(lambda: type("K", (), {"chunkset": type("S", (), {"chunks": []})()})())}))
+    monkeypatch.setattr(eval_e2e, "key_chunks", lambda ctx, key: [])
+    out = tmp_path / "o.json"
+    monkeypatch.setattr(sys, "argv", ["x", "--out", str(out)])
+    eval_e2e.main()
+    d = json.load(open(out, encoding="utf-8"))
+    assert [r["error"] for r in d["rows"]] == ["", "LLMError", "LLMError"] and "LLMError x2" in d["stopped"]
+    assert d["started_bj"] <= d["finished_bj"]
