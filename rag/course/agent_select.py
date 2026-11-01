@@ -48,6 +48,7 @@ class SelectResult:
     # 结束原因：finish / truncated / no_tool_call（LLM 只回了文字）/ parse_failed（JSON 路径重试后仍无法解析）
     end_reason: str = ""
     candidates: list[dict] = field(default_factory=list)   # single 模式：候选清单（ID、名称、章、来源、得分）
+    expanded: list[dict] = field(default_factory=list)     # single 模式：同名候选展开为各章概念的记录
     fallback: str = ""             # single 模式：parse_failed / empty_selection / no_candidates，空表示正常
     reason: str = ""               # single 模式：模型给的一句话理由
     fast_path: str = ""            # 非空表示走了快速路径（值为命中的别名），此时 0 次 LLM 调用
@@ -57,7 +58,7 @@ class SelectResult:
     def to_dict(self) -> dict:
         return {"selected": [s.to_dict() for s in self.selected], "dropped": self.dropped, "steps": self.steps,
                 "truncated": self.truncated, "finished": self.finished, "parse_failures": self.parse_failures,
-                "tool_log": self.tool_log, "fast_path": self.fast_path, "rounds": self.rounds, "candidates": self.candidates,
+                "tool_log": self.tool_log, "fast_path": self.fast_path, "rounds": self.rounds, "candidates": self.candidates, "expanded": self.expanded,
                 "fallback": self.fallback, "reason": self.reason, "end_reason": self.end_reason, "final_text": self.final_text}
 
 

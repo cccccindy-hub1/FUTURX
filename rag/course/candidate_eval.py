@@ -33,7 +33,7 @@ def evaluate(ctx: CourseContext, gold: list[dict], limit: int) -> dict:
     rows, tot_k, tot_hit_any, tot_hit_all, tot_c, tot_c_hit = [], 0, 0, 0, 0, 0
     for g in gold:
         cands = build_candidates(g["question"], ctx.index, limit)
-        cand_ids = {c.concept_id for c in cands}
+        cand_ids = {m for c in cands for m, _ in (c.members or ((c.concept_id, c.chapter),))}   # 合并候选：全部同名成员都算入选
         keys = []
         for m in g["must_recall"]:
             chunks = key_chunks(ctx, m["key"])
@@ -47,7 +47,7 @@ def evaluate(ctx: CourseContext, gold: list[dict], limit: int) -> dict:
             tot_hit_all += int(len(hit) == len(cs)) if cs else 0
             tot_c += len(cs)
             tot_c_hit += len(hit)
-        rows.append({"id": g["id"], "question": g["question"], "n_candidates": len(cands),
+        rows.append({"id": g["id"], "question": g["question"], "n_candidates": len(cands), "n_concepts_covered": len(cand_ids),
                      "candidates": [c.to_dict() for c in cands], "keys": keys})
     rate = lambda a, b: round(a / b, 3) if b else None
     return {"limit": limit, "rows": rows,

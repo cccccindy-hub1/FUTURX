@@ -211,3 +211,76 @@ def test_defaults():
         assert config.COURSE_SELECT_CANDIDATES == 30
     if "COURSE_FILTER_MAX_CHUNKS" not in os.environ:
         assert config.COURSE_FILTER_MAX_CHUNKS == 40
+
+
+# ---------------------------------------------------------------- 同名概念合并候选
+
+@pytest.fixture
+def ctx_same_name(ctx, monkeypatch):
+    """夹具里没有同名跨章概念：把 C01-0003 并入「数据要素」的同名组（只改索引，不改数据文件）。"""
+    key = ctx.index.name_key("C01-0001")
+    monkeypatch.setitem(ctx.index._name_groups, key, ["C01-0001", "C01-0003"])
+    return ctx
+
+
+def test_same_name_concepts_merge_into_one_candidate_with_chapter_list(ctx_same_name):
+    ctx = ctx_same_name
+    cands = single_select.build_candidates("什么是数据要素", ctx.index, 30)
+    merged = [c for c in cands if c.concept_id == "C01-0001"]                # 夹具里另有同名的 C01-0002/C02-0002，也会被合并
+    assert len(merged) == 1 and len(merged[0].members) == 2
+    assert {m for m, _ in merged[0].members} == {"C01-0001", "C01-0003"}
+    ids = [c.concept_id for c in cands]
+    assert "C01-0003" not in ids and len(ids) == len(set(ids))             # 同名成员不再单独占名额
+    assert "第" in merged[0].line() and "章" in merged[0].line() and "—" in merged[0].line()
+    assert merged[0].to_dict()["members"] and merged[0].expand() == ["C01-0001", "C01-0003"]
+
+
+def test_no_concept_appears_in_two_candidates(ctx_same_name):
+    cands = single_select.build_candidates("什么是数据要素", ctx_same_name.index, 30)
+    all_ids = [m for c in cands for m, _ in c.members]
+    assert len(all_ids) == len(set(all_ids))
+
+
+def test_merged_candidate_saves_slots_for_other_concepts(ctx_same_name):
+    ctx = ctx_same_name
+    n_merged = len(single_select.build_candidates("什么是数据要素", ctx.index, 30))
+    monkey_total = len({c.concept_id for c in single_select.build_candidates("什么是数据要素", ctx.index, 30)})
+    assert n_merged == monkey_total                                          # 每条候选对应一个不同名称
+
+
+def test_selecting_merged_candidate_expands_to_all_chapters(ctx_same_name):
+    ctx = ctx_same_name
+    llm_ = ScriptedLLM([pick(("C01-0001",), ())])
+    r = single_select.select_single("什么是数据要素", ctx.index, llm_)
+    assert [(s.concept_id, s.role) for s in r.selected] == [("C01-0001", "question_concept"), ("C01-0003", "question_concept")]
+    assert r.expanded == [{"candidate": "C01-0001", "name": r.expanded[0]["name"], "to": ["C01-0001", "C01-0003"]}]
+    assert "（同名各章展开）" in r.selected[1].reason
+
+
+def test_selecting_a_member_id_directly_also_expands_without_duplicates(ctx_same_name):
+    ctx = ctx_same_name
+    r = single_select.select_single("什么是数据要素", ctx.index, ScriptedLLM([pick(("C01-0003",), ("C01-0001",))]))
+    ids = [s.concept_id for s in r.selected]
+    assert ids == ["C01-0001", "C01-0003"] and len(ids) == len(set(ids))      # C01-0003 是 C01-0001 的同名成员：展开后代表排第一，不重复
+    assert all(s.role == "question_concept" for s in r.selected)               # 同一概念不重复，question 优先于 related
+    assert r.dropped == []
+
+
+def test_unmerged_candidates_unchanged_and_prompt_explains_merged_format(ctx):
+    cands = single_select.build_candidates("什么是数据要素", ctx.index, 30)
+    single = [c for c in cands if len(c.members) == 1]
+    assert single and all("—" not in c.line() and f"第{c.chapter}章" in c.line() for c in single)
+    assert "同名概念" in prompts.SINGLE_SELECT_SYSTEM and "无需再逐章选" in prompts.SINGLE_SELECT_SYSTEM
+
+
+def test_merged_candidates_deterministic(ctx_same_name):
+    a = single_select.build_candidates("什么是数据要素", ctx_same_name.index, 30)
+    b = single_select.build_candidates("什么是数据要素", ctx_same_name.index, 30)
+    assert [(c.concept_id, c.members) for c in a] == [(c.concept_id, c.members) for c in b]
+
+
+def test_candidate_eval_counts_merged_members_as_covered(ctx_same_name):
+    from rag.course import candidate_eval
+    gold = [{"id": "g", "question": "什么是数据要素", "must_recall": [{"key": "数据要素"}]}]
+    res = candidate_eval.evaluate(ctx_same_name, gold, 30)
+    assert res["rows"][0]["n_concepts_covered"] >= res["rows"][0]["n_candidates"]

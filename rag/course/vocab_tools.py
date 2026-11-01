@@ -173,6 +173,16 @@ class VocabIndex:
         hits.sort(key=lambda h: (h.via == "bm25", -h.score, h.concept_id))   # 名称/别名命中一律排在 BM25 命中之前
         return hits[:limit]
 
+    def name_key(self, concept_id: str) -> str:
+        """同名判断键：去掉括注后的规范化名称（与 _name_groups 一致）。"""
+        return norm(split_name(self.concepts[concept_id].name)[0])
+
+    def same_name_selectable(self, concept_id: str) -> list[str]:
+        """与 concept_id 同名（可能分属不同章）且可选的全部概念 ID，含自身；按 ID 升序。"""
+        key = self.name_key(concept_id)
+        ids = [i for i in self._name_groups.get(key, []) if i in self.selectable]
+        return sorted(set(ids) | ({concept_id} if concept_id in self.selectable else set()))
+
     def get_concept(self, concept_id: str) -> ConceptCard | None:
         c = self.concepts.get(concept_id)
         if c is None:
