@@ -58,6 +58,7 @@ class FakeChat:
         else:
             kind, out = "answer", "最终回答[来源1]"
         self.log.append(kind)
+        self.kwargs = getattr(self, "kwargs", []) + [kw]
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=out))])
 
 
@@ -170,6 +171,21 @@ def test_simple_reliable_one_retrieval_and_generation():
     assert out["status"] == "ok" and rag.llm.log == ["answer"] and len(rag.queries) == 1
     t = out["trace"]["timings"]
     assert {"retrieve_s", "rerank_s", "generate_s", "total_s"} <= set(t) and t["rerank_s"] == 0.01
+
+
+def test_adaptive_answer_uses_service_llm_kwargs_without_stream():
+    """合并 main 后：作答沿用 RAGService._llm_kwargs（含 reasoning_effort 关闭思考），只是不流式。"""
+    rag = FakeRAG([res(score=0.9)], llm=FakeChat())
+    rag._llm_kwargs = lambda messages: {"model": "m", "messages": messages, "temperature": 0.2, "stream": True,
+                                        "reasoning_effort": "none"}
+    AdaptiveRAG(rag, min_rerank_score=0.3).run("扎根理论是什么")
+    kw = rag.llm.kwargs[-1]
+    assert kw["reasoning_effort"] == "none" and "stream" not in kw and kw["model"] == "m"
+
+
+def test_auto_ask_is_bounded_by_concurrency_middleware():
+    from rag.concurrency import RequestConcurrencyMiddleware
+    assert "/auto/ask" in RequestConcurrencyMiddleware._PATHS
 
 
 def test_low_rerank_score_rewrites_and_retries_once_then_answers():

@@ -15,6 +15,8 @@ from .agent_select import SelectResult, Selection, _log_round
 from .llm import LLMClient, parse_json_object
 from .vocab_tools import VocabIndex
 
+MAX_CHAPTERS_PER_CANDIDATE = 2      # 一条合并候选选中后最多展开几章（按定义与问题的 BM25 分取前几章）
+NEIGHBORS_PER_HIT = 3               # 每个字面命中概念最多带几个一跳邻居进候选
 MAX_QUESTION = 3
 MAX_RELATED = 5
 FALLBACK_QUESTION = 3
@@ -60,15 +62,24 @@ _VIA_RANK = {"alias_exact": 0, "alias_in_query": 1, "query_in_alias": 2, "neighb
 
 
 def build_candidates(question: str, index: VocabIndex, limit: int | None = None) -> list[Candidate]:
-    """确定性：同一输入、同一词表，结果与顺序完全一致。别名命中 > 一跳邻居 > BM25；同档按得分降序、ID 升序。"""
+    """确定性：同一输入、同一词表，结果与顺序完全一致。别名命中 > 一跳邻居 > BM25；同档按得分降序、ID 升序。
+    防挤占：一跳邻居每个字面命中最多带 NEIGHBORS_PER_HIT 个，总数不超过 limit//3，剩余名额留给 BM25 命中——
+    否则「数据资产」「数据要素」这类泛词的大量邻居会把更贴近问题措辞的 BM25 命中（如「入表驱动型路径」）挤出清单。"""
     limit = config.COURSE_SELECT_CANDIDATES if limit is None else limit
     hits = index.search_vocab(question, None, 100)             # 别名字面匹配 + 概念名/定义 BM25（jieba）
-    best: dict[str, tuple[str, float]] = {c.concept_id: (c.via, c.score) for c in hits}
+    pool: dict[str, tuple[str, float]] = {h.concept_id: (h.via, h.score) for h in hits}
     literal = [h for h in hits if h.via != "bm25"]
-    for h in literal:                                           # 对字面命中的概念沿本体扩一跳
+    neighbor_quota = max(limit // 3, 1)
+    nb: dict[str, tuple[str, float]] = {}
+    for h in literal:                                           # 对字面命中的概念沿本体扩一跳（每个命中限量）
+        taken = 0
         for n in index.get_neighbors(h.concept_id, "both"):
-            if n.concept_id in index.selectable and n.concept_id not in best:
-                best[n.concept_id] = ("neighbor", h.score * 0.001)
+            if taken >= NEIGHBORS_PER_HIT or len(nb) >= neighbor_quota:
+                break
+            if n.concept_id in index.selectable and n.concept_id not in pool and n.concept_id not in nb:
+                nb[n.concept_id] = ("neighbor", h.score * 0.001)
+                taken += 1
+    best = {**pool, **nb}
     ranked = sorted(best.items(), key=lambda kv: (_VIA_RANK[kv[1][0]], -kv[1][1], kv[0]))
     out: list[Candidate] = []
     absorbed: set[str] = set()                                 # 已被某条候选收为成员的概念，不再单独成候选
@@ -142,22 +153,37 @@ def select_single(question: str, index: VocabIndex, llm: LLMClient, *, model: st
         result.final_text = (res.content or "")[:300] if obj is None else ""
         result.end_reason = "single_fallback"
         q_ids, r_ids = [c.concept_id for c in cands[:FALLBACK_QUESTION]], []
-    result.selected = _expand(q_ids, r_ids, by_rep, member_to_rep, result)
+    result.selected = _expand(q_ids, r_ids, by_rep, member_to_rep, result, question, index)
     return result
 
 
-def _expand(q_ids, r_ids, by_rep, member_to_rep, result: SelectResult) -> list[Selection]:
-    """把选中的候选展开为同名各章的概念 ID；同一概念只出现一次，question 优先于 related。"""
+def _expand(q_ids, r_ids, by_rep, member_to_rep, result: SelectResult, question: str, index: VocabIndex,
+            max_chapters: int | None = None) -> list[Selection]:
+    """把选中的候选展开为同名概念；同一概念只出现一次，question 优先于 related。
+    合并候选不再无条件展开全部同名章：模型直接写出的那一章必留，其余按「概念定义与问题的 BM25 分」取前几章，
+    每个候选最多保留 max_chapters 章（默认 2）。被舍去的章写进 trace（expanded[].dropped）。"""
+    cap = MAX_CHAPTERS_PER_CANDIDATE if max_chapters is None else max_chapters
     out: list[Selection] = []
     seen: set[str] = set()
+    done: set[str] = set()
     for role, ids in (("question_concept", q_ids), ("related_concept", r_ids)):
         for cid in ids:
             cand = by_rep[member_to_rep.get(cid, cid)]
-            for mid in cand.expand():
-                if mid in seen:
-                    continue
-                seen.add(mid)
-                out.append(Selection(mid, "单轮选概念" + ("" if mid == cand.concept_id else "（同名各章展开）"), role))
-            if len(cand.members) > 1:
-                result.expanded.append({"candidate": cand.concept_id, "name": cand.name, "to": cand.expand()})
+            if cand.concept_id in done:                          # 同一候选被重复选（例如写了不同章的 ID）
+                continue
+            done.add(cand.concept_id)
+            members = [m for m, _ in cand.members] or [cand.concept_id]
+            chosen = [cid] if cid in members else [cand.concept_id]
+            if len(members) > 1:
+                sc = index.definition_scores(question, members)
+                rest = sorted((m for m in members if m not in chosen),
+                              key=lambda m: (-sc.get(m, 0.0), index.concepts[m].chapter, m))
+                chosen += rest[: max(cap - len(chosen), 0)]
+            for mid in chosen:
+                if mid not in seen:
+                    seen.add(mid)
+                    out.append(Selection(mid, "单轮选概念" + ("" if mid == cid else "（同名章展开）"), role))
+            if len(members) > 1:
+                result.expanded.append({"candidate": cand.concept_id, "name": cand.name, "to": chosen,
+                                        "dropped": [m for m in members if m not in chosen]})
     return out

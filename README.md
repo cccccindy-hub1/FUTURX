@@ -100,3 +100,14 @@ pytest
 ## License
 
 版权所有，保留所有权利（不设开源许可证）。
+
+## HTTP parallel requests
+
+`python -m rag.cli serve --http --host 127.0.0.1 --port 8000` accepts concurrent
+requests to `/ask`, `/ask/stream`, and `/v1/chat/completions` (including SSE).
+Set `RAG_MAX_CONCURRENT_REQUESTS=10` in `.env` to control the active-request limit
+per process. Restart the server after changing it. Excess requests receive HTTP
+503 with `Retry-After: 1`; clients should retry with backoff. Health checks remain
+available at capacity. The shared embedding/retrieval stage is guarded, while
+upstream LLM generation overlaps across requests. Timing data is local to each
+calling thread. Upstream provider rate limits can still limit throughput.

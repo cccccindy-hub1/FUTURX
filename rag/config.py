@@ -62,6 +62,11 @@ API_MODEL_NAME = os.environ.get("API_MODEL_NAME", "ai-li-teacher")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_API_BASE = os.environ.get("LLM_API_BASE", "https://api.deepseek.com")
 LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+# 思考链开关：上游推理模型默认先「思考」再输出正文，但思考 token 不推给客户端，
+# 表现为首字节要等 30s+。实测 deepseek-v4-pro 关闭后 TTFT 32.5s -> 2.7s。
+# 取值 none / low / medium / high；置空表示不传该参数（沿用上游默认）。
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "none")
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "120"))  # 单次请求超时（秒）
 
 # ---- 查询增强（需要 LLM；默认关闭）----
 QUERY_REWRITE_ENABLED = os.environ.get("QUERY_REWRITE_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -116,3 +121,6 @@ MAX_SOURCE_SHARE = float(os.environ.get("MAX_SOURCE_SHARE", "0.06"))
 PROBE_SIZE = int(os.environ.get("PROBE_SIZE", "60"))
 
 SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}
+
+# Active HTTP requests per process, including streaming responses.
+MAX_CONCURRENT_REQUESTS = int(os.environ.get("RAG_MAX_CONCURRENT_REQUESTS", "10"))

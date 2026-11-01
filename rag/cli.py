@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 
 def _add_retrieval_flags(parser: argparse.ArgumentParser) -> None:
@@ -72,6 +73,21 @@ def _service_kwargs(args) -> dict:
     }
 
 
+def _print_timing(svc, init_elapsed: float) -> None:
+    timing = getattr(svc, "timing", {}) or {}
+    retrieval = timing.get("retrieval", 0.0)
+    llm_total = timing.get("llm_total", 0.0)
+    total = init_elapsed + retrieval + llm_total
+    print()
+    print("耗时统计：")
+    print(f"  - 服务初始化（embedding 模型 + 向量库加载）: {init_elapsed:.3f}s")
+    print(f"  - 检索 RAG（查询向量化 + 向量检索）       : {retrieval:.3f}s")
+    print(f"  - LLM 传输延迟（请求 -> 首 token / TTFT）  : {timing.get('llm_ttft', 0.0):.3f}s")
+    print(f"  - LLM 生成（首 token -> 完成）             : {timing.get('llm_generation', 0.0):.3f}s")
+    print(f"  - LLM 合计                                : {llm_total:.3f}s")
+    print(f"  - 总耗时                                  : {total:.3f}s")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rag", description="nlp_ 学位论文指导知识库 RAG 管线")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -109,7 +125,11 @@ def main() -> None:
 
         q = " ".join(args.question)
         top_k = args.top_k or None
+
+        t_init0 = time.perf_counter()
         svc = RAGService(**_service_kwargs(args))
+        init_elapsed = time.perf_counter() - t_init0
+
         ans, sources, docs = svc.answer(q) if top_k is None else svc.answer(q, top_k)
 
         if args.json:
@@ -125,6 +145,7 @@ def main() -> None:
                 print(f"[来源{i}: {s['source']}]（{s['section']}，距离 {s['distance']:.3f}）")
                 print(d)
                 print("-" * 60)
+            _print_timing(svc, init_elapsed)
             return
 
         print("=" * 60)
@@ -133,6 +154,8 @@ def main() -> None:
         print("参考来源：")
         for s in sources:
             print(f"  - {s['source']}  [{s['section']}]  (距离 {s['distance']:.3f})")
+        _print_timing(svc, init_elapsed)
+
     elif args.cmd == "eval":
         if args.target == "retrieval":
             from .eval import run

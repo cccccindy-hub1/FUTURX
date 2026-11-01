@@ -173,6 +173,12 @@ class VocabIndex:
         hits.sort(key=lambda h: (h.via == "bm25", -h.score, h.concept_id))   # 名称/别名命中一律排在 BM25 命中之前
         return hits[:limit]
 
+    def definition_scores(self, question: str, concept_ids) -> dict[str, float]:
+        """问题与各概念（名称+别名+定义）的 BM25 分；只含 concept_ids 里可选的概念，无命中的记 0。"""
+        pos = {cid: i for i, cid in enumerate(self._doc_ids)}
+        sc = self._bm25.scores(tokenize(question, self._use_jieba))
+        return {c: sc.get(pos[c], 0.0) for c in concept_ids if c in pos}
+
     def name_key(self, concept_id: str) -> str:
         """同名判断键：去掉括注后的规范化名称（与 _name_groups 一致）。"""
         return norm(split_name(self.concepts[concept_id].name)[0])

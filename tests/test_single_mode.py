@@ -178,11 +178,21 @@ def test_single_mode_select_fallback_still_four_calls(ctx):
 
 # ---------------------------------------------------------------- 作答提示词与免责短语
 
-@pytest.mark.parametrize("phrase", ["非教材原文", "只能说", "不能当作教材原文", "教材材料不足以回答", "本体关系材料中未提供"])
+@pytest.mark.parametrize("phrase", ["非教材原文", "不能当作教材原文", "教材材料不足以回答", "本体关系材料中未提供"])
 def test_answer_system_prompt_has_no_defensive_instructions(phrase):
     assert phrase not in prompts.ANSWER_SYSTEM
-    assert "不要声明材料的性质" in prompts.ANSWER_SYSTEM and "[本体]" in prompts.ANSWER_SYSTEM and "[S2]" in prompts.ANSWER_SYSTEM
+    assert "套话式免责" in prompts.ANSWER_SYSTEM and "[本体]" in prompts.ANSWER_SYSTEM and "[S2]" in prompts.ANSWER_SYSTEM
     assert "结尾不要附加说明引用方式的话" in prompts.ANSWER_SYSTEM
+
+
+def test_answer_prompt_distinguishes_boilerplate_from_specific_reason_notes():
+    """禁止的是没有具体原因的套话；教材只给相近/上位概念、或只是学界观点时，要一句话说明并给出最接近的内容。"""
+    sysm = prompts.ANSWER_SYSTEM
+    assert "没有具体原因的套话式免责" in sysm and "有具体原因时" in sysm
+    assert "相近或上位概念" in sysm and "数据市场" in sysm and "数据要素市场" in sysm       # 例：只讲“数据市场”没讲“数据要素市场”
+    assert "学界观点" in sysm and "不要当成教材自己的结论" in sysm
+    assert "最接近的内容" in sysm and "不要因此拒答" in sysm
+    assert "优先采用教材正面给出的界定或构成" in sysm                                        # r14：学界看法不应压过教材正面给出的构成
 
 
 def test_disclaimer_phrases_produce_warnings_without_editing_text(ctx):
@@ -248,20 +258,20 @@ def test_merged_candidate_saves_slots_for_other_concepts(ctx_same_name):
     assert n_merged == monkey_total                                          # 每条候选对应一个不同名称
 
 
-def test_selecting_merged_candidate_expands_to_all_chapters(ctx_same_name):
+def test_selecting_merged_candidate_expands_to_chapters_up_to_cap(ctx_same_name):
     ctx = ctx_same_name
     llm_ = ScriptedLLM([pick(("C01-0001",), ())])
     r = single_select.select_single("什么是数据要素", ctx.index, llm_)
     assert [(s.concept_id, s.role) for s in r.selected] == [("C01-0001", "question_concept"), ("C01-0003", "question_concept")]
-    assert r.expanded == [{"candidate": "C01-0001", "name": r.expanded[0]["name"], "to": ["C01-0001", "C01-0003"]}]
-    assert "（同名各章展开）" in r.selected[1].reason
+    assert r.expanded == [{"candidate": "C01-0001", "name": r.expanded[0]["name"], "to": ["C01-0001", "C01-0003"], "dropped": []}]
+    assert "（同名章展开）" in r.selected[1].reason
 
 
 def test_selecting_a_member_id_directly_also_expands_without_duplicates(ctx_same_name):
     ctx = ctx_same_name
     r = single_select.select_single("什么是数据要素", ctx.index, ScriptedLLM([pick(("C01-0003",), ("C01-0001",))]))
     ids = [s.concept_id for s in r.selected]
-    assert ids == ["C01-0001", "C01-0003"] and len(ids) == len(set(ids))      # C01-0003 是 C01-0001 的同名成员：展开后代表排第一，不重复
+    assert ids[0] == "C01-0003" and set(ids) == {"C01-0003", "C01-0001"} and len(ids) == len(set(ids))   # 模型写的那一章必留且排第一，不重复
     assert all(s.role == "question_concept" for s in r.selected)               # 同一概念不重复，question 优先于 related
     assert r.dropped == []
 
@@ -324,3 +334,83 @@ def test_e2e_stops_after_two_llm_errors_and_checks_window(monkeypatch, tmp_path)
     d = json.load(open(out, encoding="utf-8"))
     assert [r["error"] for r in d["rows"]] == ["", "LLMError", "LLMError"] and "LLMError x2" in d["stopped"]
     assert d["started_bj"] <= d["finished_bj"]
+
+
+# ---------------------------------------------------------------- 截断按相关性 / 展开限章 / 候选防挤占
+
+def _cand_item(cid, text, tier_kind="edge", bm=None, path=("章",)):
+    r = Reason(concept_id="", via=BM25_VIA, anchor="", score=bm) if tier_kind == "bm25" else Reason(
+        concept_id="C", via="edge_evidence", anchor="P1", evidence="verified", source_tier="expert")
+    return Recalled(cid, "p", list(path), text, "body", ["P1"], [r])
+
+
+def test_cap_ranks_by_relevance_not_recall_order_even_within_ontology_blocks():
+    q = "数据资产入表的基本思路"
+    filler = [_cand_item(f"o{i}", f"完全无关的内容第{i}段关于别的话题") for i in range(6)]       # 召回顺序在前，但不相关
+    good = _cand_item("good", "数据资产入表是将符合条件的数据资产纳入财务报表的基本思路", path=("入表",))
+    items = filler + [good]                                                                         # 相关块排在最后：旧逻辑（前 N 个）会把它丢掉
+    kept, st = passage_filter.cap_for_filter(items, 3, question=q, concept_names=["数据资产入表"])
+    assert "good" in {i.chunk_id for i in kept} and st["ranking"] == "relevance" and st["dropped"] == 4
+    assert [i.chunk_id for i in kept] == [i.chunk_id for i in items if i.chunk_id in {k.chunk_id for k in kept}]   # kept 保持召回顺序
+    assert st["dropped_max_score"] <= st["kept_min_score"] + 1e-9                                  # 被丢块的最高分不高于保留块的最低分
+
+
+def test_cap_prefers_ontology_evidence_over_equally_relevant_bm25_only():
+    q = "数据资产入表"
+    onto = _cand_item("onto", "数据资产入表的内容", "edge")
+    bm = _cand_item("bm", "数据资产入表的内容", "bm25", bm=5.0)
+    kept, _ = passage_filter.cap_for_filter([bm, onto], 1, question=q)
+    assert [i.chunk_id for i in kept] == ["onto"]
+
+
+def test_cap_is_deterministic():
+    items = [_cand_item(f"x{i}", f"文本{i % 3}数据要素") for i in range(10)]
+    a = passage_filter.cap_for_filter(items, 4, question="数据要素")[0]
+    b = passage_filter.cap_for_filter(items, 4, question="数据要素")[0]
+    assert [i.chunk_id for i in a] == [i.chunk_id for i in b]
+
+
+def test_expansion_keeps_selected_chapter_and_at_most_two_chapters(ctx, monkeypatch):
+    key = ctx.index.name_key("C01-0001")
+    monkeypatch.setitem(ctx.index._name_groups, key, ["C01-0001", "C01-0003", "C01-0005", "C01-0006"])
+    monkeypatch.setattr(ctx.index, "selectable", ctx.index.selectable | {"C01-0003", "C01-0005", "C01-0006"})
+    cands = single_select.build_candidates("什么是数据要素", ctx.index, 30)
+    cand = next(c for c in cands if c.concept_id == "C01-0001")
+    assert len(cand.members) >= 3
+    r = single_select.select_single("什么是数据要素", ctx.index, ScriptedLLM([pick(("C01-0001",), ())]))
+    picked = [s.concept_id for s in r.selected if s.concept_id in {m for m, _ in cand.members}]
+    assert picked[0] == "C01-0001" and len(picked) == single_select.MAX_CHAPTERS_PER_CANDIDATE
+    assert r.expanded[0]["dropped"] and set(r.expanded[0]["to"]) | set(r.expanded[0]["dropped"]) == {m for m, _ in cand.members}
+
+
+def test_expansion_prefers_chapter_whose_definition_matches_question(ctx, monkeypatch):
+    members = ["C01-0001", "C01-0002", "C02-0001"]
+    monkeypatch.setattr(ctx.index, "definition_scores", lambda q, ids: {"C01-0001": 0.0, "C01-0002": 1.0, "C02-0001": 9.0})
+    out = single_select._expand(["C01-0001"], [], {"C01-0001": single_select.Candidate(
+        "C01-0001", "名", 1, "", "alias_in_query", 1.0, tuple((m, int(m[1:3])) for m in members))},
+        {m: "C01-0001" for m in members}, type("R", (), {"expanded": []})(), "q", ctx.index)
+    assert [s.concept_id for s in out] == ["C01-0001", "C02-0001"]               # 选中的一章必留，另取定义分最高的一章
+
+
+def test_candidates_neighbors_do_not_crowd_out_bm25_hits(ctx):
+    cands = single_select.build_candidates("什么是数据要素", ctx.index, 30)
+    nb = [c for c in cands if c.via == "neighbor"]
+    assert len(nb) <= max(30 // 3, 1) and len(nb) <= len(cands)
+    full = single_select.build_candidates("什么是数据要素", ctx.index, 3)
+    assert len(full) == 3 and len([c for c in full if c.via == "neighbor"]) <= 1
+
+
+def test_select_prompt_tells_model_not_to_waste_slots_on_similar_names():
+    assert "名称相近" in prompts.SINGLE_SELECT_SYSTEM and "把名额留给" in prompts.SINGLE_SELECT_SYSTEM
+
+
+def test_replay_eval_runs_offline_and_reports_counts(ctx):
+    from rag.course import replay_eval
+    row = {"id": "g", "question": "什么是数据要素", "error": "",
+           "selected_concepts": [{"concept_id": "C01-0001", "role": "question_concept"}],
+           "select_stage": {"expanded": []}, "recalled": [{"chunk_id": "x", "source": "ontology", "grade": "direct"}],
+           "filter_cap": {"kept": 1, "dropped": 0}}
+    gold = {"must_recall": [{"key": "数据要素"}]}
+    out = replay_eval.replay_question(ctx, row, gold)
+    assert out["new"]["concepts"] >= 1 and out["new"]["recalled"] >= 1 and out["new"]["kept"] <= config.COURSE_FILTER_MAX_CHUNKS
+    assert out["gold"][0]["recalled"] and "in_top_kept" in out["gold"][0] and out["missing_old_picks"] == []
