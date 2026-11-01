@@ -1,4 +1,4 @@
-"""响应速度测试：初始化服务 -> 随机抽取 30 条 prompt -> 逐条计时 -> 汇总均值。
+"""响应速度测试：初始化服务 -> 随机抽取 20 条 prompt -> 逐条计时 -> 汇总均值。
 
 指标说明（单位：秒）：
 - server_init_time  : 服务初始化耗时（加载 SentenceTransformer + Chroma + OpenAI 客户端）
@@ -36,7 +36,7 @@ from rag.benchmark import build_items, load_raw
 from rag.config import BENCHMARK_SEED, ROOT
 from rag.query import RAGService
 
-SPEED_N_PROMPTS = int(os.environ.get("SPEED_N_PROMPTS", "30"))
+SPEED_N_PROMPTS = int(os.environ.get("SPEED_N_PROMPTS", "20"))
 SPEED_SEED = int(os.environ.get("SPEED_SEED", str(BENCHMARK_SEED)))
 SPEED_REPORT_PATH = Path(os.environ.get("SPEED_REPORT_PATH", ROOT / "speed_test_report.txt"))
 
@@ -66,6 +66,7 @@ def _render_row(i: int, q: str, r: dict) -> str:
     return (
         f"{i:>3} {_clip(q):<42} {_f(r['rag'])} {_f(r['transmission'])} "
         f"{_f(r['generation'])} {_f(r['total'])}"
+        f"\n    Answer (full):\n{r['answer']}"
     )
 
 
@@ -111,23 +112,28 @@ def run_speed_test(
                 "generation": None,
                 "total": None,
                 "error": None,
+                "answer": "",
             }
             try:
                 t = time.perf_counter()
-                svc.answer(item.question)
+                answer, _, _ = svc.answer(item.question)
                 total = time.perf_counter() - t
                 timing = getattr(svc, "timing", {}) or {}
                 row["rag"] = timing.get("retrieval")
                 row["transmission"] = timing.get("llm_ttft")
                 row["generation"] = timing.get("llm_generation")
                 row["total"] = total
+                row["answer"] = answer or ""
             except Exception as e:  # 单条失败不影响整体
                 row["error"] = f"{type(e).__name__}: {e}"
 
             rows.append(row)
-            fh.write(_render_row(i, item.question, row) + "\n")
+            rendered = _render_row(i, item.question, row)
+            fh.write(rendered + "\n")
+            print(rendered, flush=True)
             if row["error"]:
                 fh.write(f"    [错误] {row['error']}\n")
+                print(f"    [错误] {row['error']}", flush=True)
             fh.flush()
 
     # 3) 计算均值
