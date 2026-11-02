@@ -1,10 +1,29 @@
-/* 前端逻辑：调用后端 /ask，渲染问答与来源。 */
+/* 前端逻辑：调用统一入口 /auto/ask/stream（LLM 路由 → 课程 / 论文 / 政策 / 判例 / 名言），流式渲染回答与来源。
+   事件：route →（课程等需要作答的库）stage / materials / delta → done；出错时 error。
+   正文里的引用是序号 [1] [2]，渲染成上标，悬停显示来源路径；done 到达后用 done.answer 覆盖正文，保证与最终结果一致。 */
 const chat = document.getElementById('chat');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const topkSel = document.getElementById('topk');
+const keyInput = document.getElementById('apikey');
 const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
+
+const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', off_topic: '拒答' };
+const KIND_LABELS = { course: '教材', case: '判例', quote: '讲话' };
+const KEY_STORE = 'futurx_api_key';
+
+/* ---- 访问密钥：只存在本浏览器 ---- */
+function loadKey() {
+  try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+}
+function saveKey(v) {
+  try { v ? localStorage.setItem(KEY_STORE, v) : localStorage.removeItem(KEY_STORE); } catch { /* 隐私模式等 */ }
+}
+if (keyInput) {
+  keyInput.value = loadKey();
+  keyInput.addEventListener('change', () => saveKey(keyInput.value.trim()));
+}
 
 /* ---- 探活 ---- */
 function setStatus(ok, text) {
@@ -37,6 +56,7 @@ function addMessage(role, node) {
   wrap.appendChild(node);
   chat.appendChild(wrap);
   scrollBottom();
+  return wrap;
 }
 
 function addUser(text) {
@@ -47,6 +67,7 @@ function addUser(text) {
   hideWelcome();
 }
 
+/* 论文库来源（原 /ask 形状：source / section / distance，可带原文） */
 function sourceCard(i, s, ctx) {
   const card = document.createElement('details');
   card.className = 'source-card';
@@ -60,11 +81,13 @@ function sourceCard(i, s, ctx) {
   path.className = 'src-path';
   path.textContent = s.section ? `${s.source} · ${s.section}` : s.source;
 
-  const dist = document.createElement('span');
-  dist.className = 'src-dist';
-  dist.textContent = '距离 ' + Number(s.distance).toFixed(3);
-
-  summary.append(num, path, dist);
+  summary.append(num, path);
+  if (s.distance !== undefined && s.distance !== null) {
+    const dist = document.createElement('span');
+    dist.className = 'src-dist';
+    dist.textContent = '距离 ' + Number(s.distance).toFixed(3);
+    summary.append(dist);
+  }
   card.appendChild(summary);
 
   if (ctx) {
@@ -76,43 +99,45 @@ function sourceCard(i, s, ctx) {
   return card;
 }
 
-function addAssistant(ans, sources, contexts) {
-  const body = document.createElement('div');
-  body.className = 'assistant-body';
+/* 带序号的来源（课程 / 判例 / 名言）：[n] 路径；有 kind 且不止一种时按库分区 */
+function numberedSources(sources) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sources numbered';
+  const title = document.createElement('div');
+  title.className = 'sources-title';
+  title.textContent = `来源（${sources.length}）`;
+  wrap.appendChild(title);
 
-  if (!ans) {
-    const note = document.createElement('div');
-    note.className = 'bubble assistant note';
-    note.textContent = '（未配置 LLM_API_KEY，以下仅为检索到的资料片段）';
-    body.appendChild(note);
-    (sources || []).forEach((s, i) => body.appendChild(sourceCard(i, s, contexts && contexts[i])));
-  } else {
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble assistant markdown';
-    bubble.innerHTML = renderMarkdown(ans);
-    body.appendChild(bubble);
-
-    if (sources && sources.length) {
-      const wrap = document.createElement('div');
-      wrap.className = 'sources';
-      const title = document.createElement('div');
-      title.className = 'sources-title';
-      title.textContent = `参考来源（${sources.length}）`;
-      wrap.appendChild(title);
-      sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, contexts && contexts[i])));
-      body.appendChild(wrap);
+  const kinds = [...new Set(sources.map((s) => s.kind || 'course'))];
+  for (const kind of kinds) {
+    if (kinds.length > 1) {
+      const h = document.createElement('div');
+      h.className = 'sources-kind';
+      h.textContent = KIND_LABELS[kind] || kind;
+      wrap.appendChild(h);
     }
+    sources.filter((s) => (s.kind || 'course') === kind).forEach((s) => {
+      const row = document.createElement('div');
+      row.className = 'src-row';
+      const num = document.createElement('span');
+      num.className = 'src-n';
+      num.textContent = `[${s.n}]`;
+      const path = document.createElement('span');
+      path.className = 'src-row-path';
+      path.textContent = s.path || s.title || '';
+      row.append(num, path);
+      wrap.appendChild(row);
+    });
   }
-
-  addMessage('assistant', body);
+  return wrap;
 }
 
-/* ---- Markdown（安全转义后做轻量渲染）---- */
+/* ---- Markdown（安全转义后做轻量渲染；[n] 渲染为带来源提示的上标）---- */
 function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function renderMarkdown(md) {
+function renderMarkdown(md, cites) {
   const lines = escapeHtml(md).split('\n');
   let html = '';
   let listType = null;
@@ -122,10 +147,14 @@ function renderMarkdown(md) {
   const closeList = () => {
     if (listType) { html += '</' + listType + '>'; listType = null; }
   };
-  const inline = (t) => t
+  const cite = (t) => (cites ? t.replace(/\[(\d{1,3})\]/g, (m, n) => {
+    const p = cites.get(Number(n));
+    return `<sup class="cite"${p ? ` title="${escapeHtml(p)}"` : ''}>[${n}]</sup>`;
+  }) : t);
+  const inline = (t) => cite(t
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>'));
 
   for (const line of lines) {
     if (line.trim().startsWith('```')) {
@@ -182,7 +211,13 @@ function autoGrow() {
   input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 }
 
-/* 流式回答：先出气泡，边收边渲染，末尾补来源卡片。 */
+function routeTag(routes) {
+  const tag = document.createElement('div');
+  tag.className = 'route-tag';
+  tag.textContent = routes.map((r) => ROUTE_LABELS[r] || r).join(' + ');
+  return tag;
+}
+
 async function send() {
   const q = input.value.trim();
   if (!q) return;
@@ -190,14 +225,18 @@ async function send() {
   addUser(q);
   input.value = '';
   autoGrow();
+  sendBtn.disabled = true;
 
   const t0 = performance.now();
+  let firstAt = null;
   const pending = document.createElement('div');
   pending.className = 'bubble assistant pending';
+  const pendingText = document.createElement('span');
+  pendingText.textContent = '正在判断问题类型';
   const elapsed = document.createElement('span');
   elapsed.className = 'pending-elapsed';
-  pending.append('正在检索', elapsed);
-  addMessage('assistant', pending);
+  pending.append(pendingText, elapsed);
+  const pendingMsg = addMessage('assistant', pending);
   const timer = setInterval(() => {
     elapsed.textContent = ' ' + ((performance.now() - t0) / 1000).toFixed(1) + 's';
   }, 100);
@@ -206,88 +245,113 @@ async function send() {
   body.className = 'assistant-body';
   const bubble = document.createElement('div');
   bubble.className = 'bubble assistant markdown';
-  let sources = [];
-  let contexts = [];
+  const cites = new Map();        // 序号 -> 来源路径（materials 事件陆续填入）
   let text = '';
   let frame = null;
+  let started = false;
+  let finished = false;
 
   const paint = () => {
     frame = null;
-    bubble.innerHTML = renderMarkdown(text);
+    bubble.innerHTML = renderMarkdown(text, cites);
     scrollBottom();
   };
+  const flush = () => { if (!frame) frame = requestAnimationFrame(paint); };
 
-  const flush = () => {
-    if (frame) return;
-    frame = requestAnimationFrame(paint);
-  };
-
-  const finish = () => {
+  const start = () => {
+    if (started) return;
+    started = true;
     clearInterval(timer);
-    if (frame) cancelAnimationFrame(frame);
-    paint();
-    if (sources.length) {
-      const wrap = document.createElement('div');
-      wrap.className = 'sources';
-      const title = document.createElement('div');
-      title.className = 'sources-title';
-      title.textContent = `参考来源（${sources.length}）`;
-      wrap.appendChild(title);
-      sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, contexts && contexts[i])));
-      body.appendChild(wrap);
-    }
-    scrollBottom();
+    pendingMsg.remove();
+    body.appendChild(bubble);
+    addMessage('assistant', body);
   };
 
-  const topk = parseInt(topkSel.value, 10) || 4;
+  const meta = (note) => {
+    const m = document.createElement('div');
+    m.className = 'answer-meta';
+    const total = ((performance.now() - t0) / 1000).toFixed(1);
+    const first = firstAt === null ? '' : `首字 ${((firstAt - t0) / 1000).toFixed(1)}s · `;
+    m.textContent = `${first}总耗时 ${total}s${note ? ' · ' + note : ''}`;
+    return m;
+  };
+
+  const onEvent = (ev) => {
+    if (ev.type === 'route') {
+      const routes = ev.routes || [ev.route];
+      body.appendChild(routeTag(routes));
+      pendingText.textContent = routes.includes('off_topic') ? '正在生成回复' : '正在检索资料';
+    } else if (ev.type === 'stage') {
+      if (ev.stage === 'select') {
+        const names = (ev.concepts || []).slice(0, 4).join('、');
+        pendingText.textContent = names ? `已定位概念：${names}，正在召回教材` : '正在召回教材';
+      } else if (ev.stage === 'filter') {
+        pendingText.textContent = ev.skipped ? `召回 ${ev.recalled} 块，正在作答`
+          : `召回 ${ev.recalled} 块、保留 ${ev.kept} 块，正在作答`;
+      }
+    } else if (ev.type === 'materials') {
+      cites.set(Number(ev.n), ev.path || ev.title || '');
+      if (started) flush();
+    } else if (ev.type === 'delta') {
+      if (firstAt === null) firstAt = performance.now();
+      start();
+      text += ev.text || '';
+      flush();
+    } else if (ev.type === 'done') {
+      finished = true;
+      start();
+      if (frame) { cancelAnimationFrame(frame); frame = null; }
+      const sources = ev.sources || [];
+      sources.forEach((s) => { if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || ''); });
+      text = ev.answer || '（没有返回内容）';
+      if (ev.status && ev.status !== 'ok') bubble.classList.add('note');
+      paint();
+      if (sources.length) {
+        body.appendChild(sources[0].n !== undefined ? numberedSources(sources)
+          : (() => {
+            const wrap = document.createElement('div');
+            wrap.className = 'sources';
+            const title = document.createElement('div');
+            title.className = 'sources-title';
+            title.textContent = `参考来源（${sources.length}）`;
+            wrap.appendChild(title);
+            sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, ev.contexts && ev.contexts[i])));
+            return wrap;
+          })());
+      }
+      body.appendChild(meta());
+      scrollBottom();
+    } else if (ev.type === 'error') {
+      finished = true;
+      start();
+      text += (text ? '\n\n' : '') + '（回答出错，请重试）';
+      bubble.classList.add('note');
+      paint();
+      body.appendChild(meta());
+    }
+  };
+
   try {
-    const r = await fetch('/ask/stream', {
+    const headers = { 'Content-Type': 'application/json' };
+    const key = (keyInput && keyInput.value.trim()) || loadKey();
+    if (key) headers.Authorization = 'Bearer ' + key;
+    const r = await fetch('/auto/ask/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q, top_k: topk }),
+      headers,
+      body: JSON.stringify({ question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false }),
     });
     if (!r.ok) {
-      let data = null;
-      try { data = await r.json(); } catch { /* 非 JSON 响应 */ }
       clearInterval(timer);
-      pending.closest('.msg').remove();
-      const msg = (data && data.detail) || ('HTTP ' + r.status);
-      showError('请求失败：' + (typeof msg === 'string' ? msg : JSON.stringify(msg)));
+      pendingMsg.remove();
+      if (r.status === 401) showError('需要有效的访问密钥：请在下方“访问密钥”里填写后重试。');
+      else if (r.status === 503) showError('服务繁忙或未就绪，请稍后重试。');
+      else showError('请求失败（HTTP ' + r.status + '），请重试。');
       return;
     }
 
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    let started = false;
-
-    const onEvent = (payload) => {
-      if (payload.type === 'sources') {
-        sources = payload.sources || [];
-        contexts = payload.contexts || [];
-        if (!started) {
-          started = true;
-          pending.closest('.msg').remove();
-          clearInterval(timer);
-          body.appendChild(bubble);
-          addMessage('assistant', body);
-        }
-      } else if (payload.type === 'delta') {
-        if (!started) {
-          started = true;
-          pending.closest('.msg').remove();
-          clearInterval(timer);
-          body.appendChild(bubble);
-          addMessage('assistant', body);
-        }
-        text += payload.text || '';
-        flush();
-      } else if (payload.type === 'error') {
-        text += `\n\n（${payload.message}）`;
-        flush();
-      }
-    };
-
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -297,20 +361,21 @@ async function send() {
         const raw = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 2);
         if (!raw.startsWith('data: ')) continue;
-        try { onEvent(JSON.parse(raw.slice(6))); } catch { /* 跳过坏帧 */ }
+        let ev;
+        try { ev = JSON.parse(raw.slice(6)); } catch { continue; /* 跳过坏帧 */ }
+        onEvent(ev);
       }
     }
-
-    if (!started) {
-      pending.closest('.msg').remove();
-      showError('请求失败：服务未返回内容');
-      return;
+    if (!finished) {
+      if (!started) { clearInterval(timer); pendingMsg.remove(); }
+      showError('连接中断，回答不完整，请重试。');
     }
-    finish();
-  } catch (e) {
+  } catch {
     clearInterval(timer);
-    pending.closest('.msg').remove();
-    showError('请求失败：' + e);
+    if (!started) pendingMsg.remove();
+    showError('网络错误，请重试。');
+  } finally {
+    sendBtn.disabled = false;
   }
 }
 

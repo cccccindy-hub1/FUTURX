@@ -273,6 +273,40 @@ body {
   background: var(--panel);
 }
 
+.composer-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.topk input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  width: 130px;
+  background: var(--panel);
+}
+
+/* ---- 统一入口：路由标签、引用上标、带序号来源、耗时 ---- */
+.welcome .hint { font-size: 12px; color: var(--ink-soft); margin-top: 18px; }
+.route-tag {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.markdown sup.cite {
+  color: var(--accent);
+  font-size: 11px;
+  margin: 0 1px;
+  cursor: help;
+}
+.sources.numbered { gap: 4px; }
+.sources-kind { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-top: 4px; }
+.src-row { display: flex; gap: 6px; font-size: 13px; color: var(--ink-soft); line-height: 1.5; }
+.src-n { flex: none; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.src-row-path { overflow-wrap: anywhere; }
+.answer-meta { font-size: 12px; color: var(--ink-soft); opacity: .8; }
+
 .send {
   border: none;
   background: var(--accent);
