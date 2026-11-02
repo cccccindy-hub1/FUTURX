@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from . import config
 from .agent_select import SelectResult, select_concepts
 from .aliases import AliasTable, build_alias_table
-from .answer import answer_question
+from .answer import answer_question, chapter_titles
 from .chunker import ChunkSet, chunk_textbook
 from .evidence import AnchorIndex
 from .fallback import ChunkBM25
@@ -39,6 +40,11 @@ class CourseContext:
     anchors: AnchorIndex
     recaller: Recaller
     bm25: ChunkBM25 | None = None     # 兜底召回索引（COURSE_BM25_TOPK=0 时仍构建，只是不使用）
+
+    @cached_property
+    def chapter_titles(self) -> dict[int, str]:
+        """章号 -> 章标题，给来源路径补章名用。"""
+        return chapter_titles(self.chunkset.chunks)
 
     @classmethod
     def build(cls, concepts: ConceptTable, records: list[Record], book: Textbook,
@@ -152,7 +158,7 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
 
     # Step 4
     relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
-    ar = answer_question(question, kept, relations, traced,
+    ar = answer_question(question, kept, relations, traced, titles=ctx.chapter_titles,
                          on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None,
                          on_source=(lambda e: emit({"type": "materials", "n": e["n"], "chunk_id": e["chunk_id"],
                                                     "path": e["path"]})) if on_event else None)

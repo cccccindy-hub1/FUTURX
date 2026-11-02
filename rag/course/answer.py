@@ -187,13 +187,34 @@ def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str],
     return out, rw.citations, rw.invalid, rw.uses_ontology
 
 
-def source_entry(n: int, chunk: Recalled) -> dict:
-    """学生可见的来源条目：序号 n、chunk_id（给评测/调试）、章名与小节路径。"""
-    return {"n": n, "chunk_id": chunk.chunk_id, "path": " › ".join(chunk.path)}
+_CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百]+章")
+_CHUNK_CHAPTER_RE = re.compile(r":ch(\d+)(?:[.:]|$)")
+
+
+def chapter_titles(chunks) -> dict[int, str]:
+    """章号 -> 章标题（如 6 -> "第六章 数据市场"），取自路径首级就是章标题的子块。"""
+    out: dict[int, str] = {}
+    for c in chunks:
+        if c.chapter is not None and c.chapter not in out and c.path and _CHAPTER_RE.match(c.path[0]):
+            out[c.chapter] = c.path[0]
+    return out
+
+
+def source_entry(n: int, chunk: Recalled, titles: dict[int, str] | None = None) -> dict:
+    """学生可见的来源条目：序号 n、chunk_id（给评测/调试）、章名与小节路径。
+    教材里「第一节」或「一、」用了一级标题样式的章节，标题栈会把章标题挤掉，路径首级不是章名；这里按 chunk_id 的章号补上。"""
+    path = list(chunk.path)
+    m = _CHUNK_CHAPTER_RE.search(chunk.chunk_id)
+    if titles and m and not (path and _CHAPTER_RE.match(path[0])):
+        title = titles.get(int(m.group(1)))
+        if title:
+            path.insert(0, title)
+    return {"n": n, "chunk_id": chunk.chunk_id, "path": " › ".join(path)}
 
 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,
-                    model: str | None = None, on_delta=None, on_source=None) -> AnswerResult:
+                    model: str | None = None, on_delta=None, on_source=None,
+                    titles: dict[int, str] | None = None) -> AnswerResult:
     """on_delta(text)：流式时逐段回调「学生可见」文本（[S#] 已实时改成 [n]，一个被拆在两片里的 [S12] 会先缓冲到闭合）；
     on_source(entry)：某块第一次被引用、分配序号时回调（entry 同 source_entry）。返回值与非流式相同。"""
     model = model or config.COURSE_ANSWER_MODEL
@@ -205,7 +226,7 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
     messages = [{"role": "system", "content": prompts.ANSWER_SYSTEM},
                 {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
                  + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")}]
-    rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(n, by_id[cid]))) if on_source else None)
+    rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(n, by_id[cid], titles))) if on_source else None)
 
     def push(raw: str) -> None:
         shown = rw.feed(raw)
@@ -226,7 +247,7 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
         if tail and on_delta:
             on_delta(tail)
         text = rw.rendered_all
-    sources = [source_entry(rw.numbers[c], by_id[c]) for c in rw.citations]
+    sources = [source_entry(rw.numbers[c], by_id[c], titles) for c in rw.citations]
     return AnswerResult(text=text.strip(), citations=rw.citations, invalid_citations=rw.invalid,
                         uses_ontology=rw.uses_ontology, insufficient=INSUFFICIENT_PHRASE in text, refs=refs,
                         warnings=disclaimer_warnings(text), sources=sources)
