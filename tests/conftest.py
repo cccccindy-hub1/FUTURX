@@ -46,6 +46,13 @@ def isolated_dirs(tmp_path, monkeypatch):
             monkeypatch.setattr(mod, "STORE_DIR", store_dir)
         if hasattr(mod, "CACHE_DIR"):
             monkeypatch.setattr(mod, "CACHE_DIR", cache_dir)
+    # 部署机的 .env 往往配置了 API_KEYS；测试默认在“无鉴权”前提下跑，需要鉴权的用例自己再设
+    monkeypatch.setattr(cfg, "API_KEYS", [])
+    try:
+        import rag.api as api
+        monkeypatch.setattr(api, "API_KEYS", [])
+    except ImportError:          # 未装 fastapi 时相关用例会自行跳过
+        pass
     return {"data": data_dir, "store": store_dir, "cache": cache_dir}
 
 

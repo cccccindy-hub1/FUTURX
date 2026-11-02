@@ -20,7 +20,7 @@ from .evidence import AnchorIndex
 from .fallback import ChunkBM25
 from .llm import LLMClient, Trace, TracingLLM
 from .ontology import ConceptTable, OntologyPaths, Record, load_concepts, load_records
-from .passage_filter import cap_for_filter, filter_passages, pick_for_answer
+from .passage_filter import cap_for_filter, filter_passages, pick_for_answer, skip_filter
 from .recall import DEFAULT_STRATEGY, Recaller, batch_by_budget, dry_run_report
 from .textbook import Textbook, parse_docx
 from .vocab_tools import VocabIndex
@@ -129,9 +129,11 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
         batches = [to_filter] if to_filter else []
     else:
         cap_stats = None
-    fr = filter_passages(question, batches, traced)
+    skipped = (config.COURSE_SELECT_MODE != "agent" and 0 < len(rr.items) <= config.COURSE_FILTER_SKIP_MAX)
+    fr = skip_filter(rr.items) if skipped else filter_passages(question, batches, traced)
     trace.stages["filter"] = {k: v for k, v in fr.to_dict().items() if k != "verdicts"}
     trace.stages["filter"]["cap"] = cap_stats
+    trace.stages["filter"]["skipped"] = skipped
     res["filtered"] = [v.to_dict() for v in fr.verdicts]
     kept, capped = pick_for_answer(rr.items, fr)
     if not kept:

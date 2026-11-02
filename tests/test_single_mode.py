@@ -21,6 +21,7 @@ def single_mode(request, monkeypatch):
     monkeypatch.setattr(config, "COURSE_SELECT_MODE", "single")
     monkeypatch.setattr(config, "COURSE_BM25_TOPK", 0)
     monkeypatch.setattr(config, "COURSE_SELECT_FAST_PATH", False)
+    monkeypatch.setattr(config, "COURSE_FILTER_SKIP_MAX", 0)       # 夹具召回块很少；跳过筛选另有专门测试
 
 
 def pick(q=("C01-0001",), r=("C01-0003",), reason="r") -> LLMResult:
@@ -414,3 +415,59 @@ def test_replay_eval_runs_offline_and_reports_counts(ctx):
     out = replay_eval.replay_question(ctx, row, gold)
     assert out["new"]["concepts"] >= 1 and out["new"]["recalled"] >= 1 and out["new"]["kept"] <= config.COURSE_FILTER_MAX_CHUNKS
     assert out["gold"][0]["recalled"] and "in_top_kept" in out["gold"][0] and out["missing_old_picks"] == []
+
+
+# ---------------------------------------------------------------- 筛选：编号列表格式 / 块少时跳过
+
+def _items(n):
+    return [Recalled(f"c{i}", "p", ["章"], f"t{i}", "body", ["P1"], [Reason("C01-0001", "mention", "P1")])
+            for i in range(n)]
+
+
+def test_filter_id_lists_unlisted_are_irrelevant_and_fabricated_dropped():
+    items = _items(4)
+    llm_ = ScriptedLLM([jtxt({"direct": ["S2", "S99"], "background": ["[S4]", "S2"]})])
+    fr = passage_filter.filter_passages("q", [items], llm_)
+    grade = {v.chunk_id: (v.grade, v.reason) for v in fr.verdicts}
+    assert grade == {"c1": ("direct", ""), "c3": ("background", ""), "c0": ("irrelevant", passage_filter.UNLISTED),
+                     "c2": ("irrelevant", passage_filter.UNLISTED)}
+    assert fr.unjudged == [] and fr.dropped_unknown_ids == ["S99"] and fr.duplicates == ["S2"]
+    assert fr.batches[0]["format"] == "ids"
+    kept, _ = passage_filter.pick_for_answer(items, fr)
+    assert [k.chunk_id for k in kept] == ["c1", "c3"]                   # 先 direct 后 background
+
+
+def test_filter_id_lists_all_empty_means_all_irrelevant_not_parse_failure():
+    llm_ = ScriptedLLM([jtxt({"direct": [], "background": []})])
+    fr = passage_filter.filter_passages("q", [_items(2)], llm_)
+    assert fr.useful_ids == [] and fr.unjudged == [] and fr.batches[0]["parse_failures"] == 0 and len(llm_.calls) == 1
+
+
+def test_filter_bad_id_list_retries_once_then_unjudged():
+    llm_ = ScriptedLLM([jtxt({"direct": "S1"}), jtxt({"foo": 1})])
+    fr = passage_filter.filter_passages("q", [_items(2)], llm_)
+    assert fr.verdicts == [] and fr.unjudged == ["c0", "c1"] and fr.batches[0]["parse_failures"] == 2
+
+
+def test_skip_filter_keeps_all_as_direct_in_recall_order():
+    items = _items(3)
+    fr = passage_filter.skip_filter(items)
+    assert [(v.chunk_id, v.grade, v.reason) for v in fr.verdicts] == [(f"c{i}", "direct", "skipped") for i in range(3)]
+    assert passage_filter.pick_for_answer(items, fr, max_chunks=2)[0] == items[:2]
+
+
+def test_small_recall_skips_filter_call(ctx, monkeypatch):
+    monkeypatch.setattr(config, "COURSE_FILTER_SKIP_MAX", 15)
+    llm_ = ScriptedLLM([pick(), lambda s, m: LLMResult(content="答 [S1]")])
+    r = pipeline.ask("什么是数据要素", ctx=ctx, llm=llm_)
+    assert [c["step"] for c in llm_.calls] == ["select", "answer"]
+    st = r["trace"].stages["filter"]
+    assert st["skipped"] is True and r["answer"] is not None and all(v["reason"] == "skipped" for v in r["filtered"])
+
+
+def test_recall_above_skip_max_still_filters(ctx, monkeypatch):
+    monkeypatch.setattr(config, "COURSE_FILTER_SKIP_MAX", 1)
+    llm_ = ScriptedLLM([pick(), lambda s, m: jtxt({"direct": ["S1"], "background": []}),
+                        lambda s, m: LLMResult(content="答 [S1]")])
+    r = pipeline.ask("什么是数据要素", ctx=ctx, llm=llm_)
+    assert [c["step"] for c in llm_.calls] == ["select", "filter", "answer"] and r["trace"].stages["filter"]["skipped"] is False

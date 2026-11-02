@@ -46,6 +46,7 @@ def run_one(svc: UnifiedService, g: dict, shared: dict) -> dict:
                    select_stage={k: v for k, v in (ctr.get("stages", {}).get("select") or {}).items()
                                  if k in ("fallback", "end_reason", "dropped", "expanded", "reason", "candidates")},
                    filter_cap=(ctr.get("stages", {}).get("filter") or {}).get("cap"),
+                   filter_skipped=(ctr.get("stages", {}).get("filter") or {}).get("skipped", False),
                    warnings=(ctr.get("stages", {}).get("answer") or {}).get("warnings", []),
                    recall_stage={k: v for k, v in (ctr.get("stages", {}).get("recall") or {}).items() if k in ("sources", "chunks")},
                    citations=[c.get("chunk_id") for c in out["sources"]],

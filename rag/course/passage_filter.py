@@ -2,7 +2,10 @@
 
 - 子块在 prompt 中用短编号 S1、S2…（全局递增，跨批不重复），LLM 看不到 chunk_id；本模块负责映射回 chunk_id；
 - 只接受输入批次中出现过的编号，编造的编号丢弃并记录；
-- 批内某个子块没有被判断，或等级不合法：不静默当作无用，记为 unjudged（默认不进入作答并记录）；
+- 输出格式：{"direct":[S#…],"background":[S#…]}，只列有用的编号、不写理由（逐块写理由时筛选耗时约 0.4 秒/块，
+  基本都花在生成理由上）；未列出的编号视为 irrelevant。旧格式 {"verdicts":[{id, grade, reason}]} 仍兼容，
+  旧格式下批内没有被判断或等级不合法的子块不静默当作无用，记为 unjudged（不进入作答并记录）；
+- 召回块不多时（≤ COURSE_FILTER_SKIP_MAX）由 pipeline 跳过筛选，全部按召回顺序直接进入作答（skip_filter）；
 - 作答材料由 pick_for_answer 选出：先 direct 后 background，各自保持召回顺序，最多 max_chunks 个；
 - 原生路径：response_format=json_object；回退路径：prompt 要求 JSON + 本地解析，失败带错误重试 1 次。
 """
@@ -81,16 +84,28 @@ def _render_items(batch: list[Recalled], ref_of: dict[str, str]) -> str:
         prompts.FILTER_ITEM.format(ref=ref_of[it.chunk_id], path=" › ".join(it.path), text=it.text) for it in batch)
 
 
-def _parse_verdicts(content: str) -> list[dict]:
+UNLISTED = "未列出"   # 编号列表格式下没有列出的子块：判为 irrelevant 时记的理由
+
+
+def _parse_verdicts(content: str) -> tuple[list[dict], bool]:
+    """返回 (逐块判断, 是否为编号列表格式)。编号列表格式先展开 direct 再展开 background，重复编号按先出现的算。"""
     val = parse_json_value(content)
+    if isinstance(val, dict) and "verdicts" not in val and any(g in val for g in (DIRECT, BACKGROUND)):
+        items = []
+        for g in (DIRECT, BACKGROUND):
+            refs = val.get(g) or []
+            if not isinstance(refs, list):
+                raise ValueError(f"{g} 不是数组")
+            items += [{"id": r, "grade": g} for r in refs]
+        return items, True
     items = val.get("verdicts") if isinstance(val, dict) else val
     if not isinstance(items, list):
-        raise ValueError("缺少 verdicts 数组")
-    return items
+        raise ValueError("缺少 direct/background 数组")
+    return items, False
 
 
 def _judge_batch(question: str, batch: list[Recalled], ref_of: dict[str, str], llm: LLMClient, model: str,
-                 native: bool, meta: dict) -> list[dict]:
+                 native: bool, meta: dict) -> tuple[list[dict], bool]:
     system = prompts.FILTER_SYSTEM + ("" if native else prompts.FILTER_JSON_FALLBACK)
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": prompts.FILTER_USER.format(
@@ -102,10 +117,10 @@ def _judge_batch(question: str, batch: list[Recalled], ref_of: dict[str, str], l
         except ValueError as e:
             meta["parse_failures"] += 1
             if attempt == 1:
-                return []
+                return [], False
             messages.append({"role": "assistant", "content": res.content})
             messages.append({"role": "user", "content": prompts.RETRY_JSON.format(error=str(e)[:80])})
-    return []
+    return [], False
 
 
 def filter_passages(question: str, batches: list[list[Recalled]], llm: LLMClient, *,
@@ -122,7 +137,9 @@ def filter_passages(question: str, batches: list[list[Recalled]], llm: LLMClient
                 "tier_min": min(i.tier for i in batch), "tier_max": max(i.tier for i in batch),
                 "parse_failures": 0}
         allowed = {ref_of[i.chunk_id]: i.chunk_id for i in batch}
-        for it in _judge_batch(question, batch, ref_of, llm, model, native, meta):
+        items, listed = _judge_batch(question, batch, ref_of, llm, model, native, meta)
+        meta["format"] = "ids" if listed else "verdicts"
+        for it in items:
             if not isinstance(it, dict):
                 continue
             ref = _norm_ref(it.get("id", it.get("ref", it.get("chunk_id"))))
@@ -138,9 +155,21 @@ def filter_passages(question: str, batches: list[list[Recalled]], llm: LLMClient
                 judged.add(cid)
                 out.verdicts.append(Verdict(cid, grade != IRRELEVANT, str(it.get("reason", "")).strip(), ref, grade))
         miss = [i.chunk_id for i in batch if i.chunk_id not in judged]
+        if listed:                      # 编号列表格式：没列出即判为无关，不算漏判
+            out.verdicts += [Verdict(cid, False, UNLISTED, ref_of[cid], IRRELEVANT) for cid in miss]
+            judged.update(miss)
+            miss = []
         out.unjudged += miss
         meta["unjudged"] = len(miss)
         out.batches.append(meta)
+    return out
+
+
+def skip_filter(items: list[Recalled]) -> FilterResult:
+    """不调用 LLM：全部子块记为 direct（理由 skipped），作答时按召回顺序取用。"""
+    out = FilterResult(refs=assign_refs(items))
+    out.verdicts = [Verdict(cid, True, "skipped", ref, DIRECT) for ref, cid in out.refs.items()]
+    out.batches = [{"index": 0, "size": len(items), "skipped": True}]
     return out
 
 

@@ -51,13 +51,14 @@ SINGLE_SELECT_USER = """学生问题：{question}
 SELECT_FORCE_FINISH = "这是你最后一次回复机会（共 {max_steps} 次）。请根据已经获得的信息立即调用 finish 提交选择（没有合适概念时提交空列表），不要再调用其他工具。"
 
 FILTER_SYSTEM = """给下面每个教材子块定一个等级，表示它对回答学生问题的作用。只依据子块内容判断，不依据你自己的知识。
-等级（grade）：
+等级：
 - direct：子块本身包含回答所需的定义、论述、例子或数据，引用它就能回答问题的某一部分；
 - background：不直接回答，但理解答案离不开它，例如问题所依赖的前提概念；
 - irrelevant：与问题无关，或只是出现了相同词语。
 拿不准时取相邻两档中较低的一档。
-输出严格 JSON：{{"verdicts":[{{"id":"S1","grade":"direct","reason":"一句话"}}]}}
-每个输入的编号（S1、S2…）必须恰好出现一次；不得输出输入中没有的编号。"""
+只列出 direct 和 background 的编号，irrelevant 的不要列出；不写理由。输出严格 JSON：
+{{"direct":["S1","S4"],"background":["S2"]}}
+每个编号最多出现一次；不得输出输入中没有的编号；都无关时输出 {{"direct":[],"background":[]}}。"""
 
 # 不支持 response_format=json_object 时追加
 FILTER_JSON_FALLBACK = "\n只输出这个 JSON 对象本身，不要加解释、不要加 Markdown 代码围栏。"

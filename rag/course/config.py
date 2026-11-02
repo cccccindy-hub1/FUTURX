@@ -45,6 +45,8 @@ COURSE_SELECT_MODE = (os.environ.get("COURSE_SELECT_MODE") or "single").strip().
 COURSE_SELECT_CANDIDATES = int(os.environ.get("COURSE_SELECT_CANDIDATES", "30"))   # single 模式候选概念数上限
 # Step 3 筛选一次调用最多送入的子块数；超出时先留本体有证据的块，再按 BM25 分取前若干，丢弃数写入 trace
 COURSE_FILTER_MAX_CHUNKS = int(os.environ.get("COURSE_FILTER_MAX_CHUNKS", "40"))
+# 召回块数不超过此值时跳过筛选（省一次调用），全部直接进入作答；作答本身最多用 COURSE_ANSWER_MAX_CHUNKS 块，故默认取同值；0 = 总是筛选
+COURSE_FILTER_SKIP_MAX = int(os.environ.get("COURSE_FILTER_SKIP_MAX", "15"))
 COURSE_AGENT_MAX_STEPS = int(os.environ.get("COURSE_AGENT_MAX_STEPS", "7"))      # Step 1 最多 LLM 调用次数（含到上限后强制 finish 的那一次，即 4 = 最多 4 次选词调用）
 # Step 1 快速路径（实验开关，默认关闭）：问题里只命中唯一、无歧义的概念别名时，不调用 LLM 直接选中，
 # 并补入最多 COURSE_FAST_RELATED_MAX 个一跳关联概念（见 agent_select.fast_select）；0 = 不补关联概念
