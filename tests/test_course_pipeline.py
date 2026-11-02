@@ -707,7 +707,7 @@ def test_pipeline_no_chunk_id_ever_sent_to_llm(ctx):
     pipeline.ask("q", ctx=ctx, llm=llm_)
     for call in llm_.calls[1:]:
         blob = json.dumps(call["messages"], ensure_ascii=False)
-        assert "de:0906" not in blob and "de:" not in blob
+        assert f"de:{config.BOOK_VERSION}" not in blob and "de:" not in blob          # 任何版本的 chunk_id 都不能出现在送给 LLM 的消息里
 
 
 def test_pipeline_fallback_no_valid_concepts(ctx):

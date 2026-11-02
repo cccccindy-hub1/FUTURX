@@ -298,7 +298,8 @@ def test_sse_course_route_event_sequence(ctx):
     assert kinds.count("done") == 1 and "error" not in kinds
     done = ev[-1]
     text = "".join(e["text"] for e in ev if e["type"] == "delta")
-    assert "[S1]" in text and "[S1]" not in done["answer"] and done["answer"].count("de:0906") >= 1    # delta 原始；done 已换成 chunk_id
+    prefix = f"de:{config.BOOK_VERSION}:"                              # 教材版本随 COURSE_BOOK_VERSION 变化，不写死
+    assert "[S1]" in text and "[S1]" not in done["answer"] and done["answer"].count(prefix) >= 1    # delta 原始；done 已换成 chunk_id
     assert done["status"] == "ok" and done["sources"] and done["trace"]["course"]["totals"]["calls"] == 3
 
 
