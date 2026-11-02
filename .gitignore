@@ -45,3 +45,9 @@ rag/chroma_db.orig/
 speed_test_report.txt
 speed_test_report.json
 speed_test_report.txt.tmp
+
+# ---- 判例库 / 名言库：输出缓存与原始资料（用 CASE_DOC / QUOTE_DOC 指向本机文件）----
+rag/case_cache/
+rag/quote_cache/
+rag/case_data/
+rag/quote_data/
