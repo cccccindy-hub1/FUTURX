@@ -72,8 +72,13 @@ def _empty_result(question: str, trace: Trace) -> dict:
 
 def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, active_concepts=(),
         strategy: str = DEFAULT_STRATEGY, dry_run: bool = False, select: list[tuple[str, str]] | None = None,
-        max_chars: int | None = None) -> dict:
-    """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。"""
+        max_chars: int | None = None, on_event=None) -> dict:
+    """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。
+
+    on_event(dict)：流式输出用的回调（rag.unified 的 /auto/ask/stream）。依次收到
+    stage=select / filter 的进度、materials（作答材料 S# → chunk_id 与章节路径）与作答正文的 delta 片段；
+    不给时行为与原来完全一样。"""
+    emit = on_event or (lambda _e: None)
     max_chars = max_chars or config.COURSE_RECALL_MAX_CHARS
     trace = Trace()
     res = _empty_result(question, trace)
@@ -95,6 +100,8 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     sr: SelectResult = select_concepts(question, active_concepts, ctx.index, traced)
     trace.stages["select"] = {k: v for k, v in sr.to_dict().items() if k != "selected"}
     res["selected_concepts"] = [s.to_dict() for s in sr.selected]
+    emit({"type": "stage", "stage": "select",
+          "concepts": [ctx.index.concepts[s.concept_id].name for s in sr.selected if s.concept_id in ctx.index.concepts]})
     use_bm25 = ctx.bm25 is not None and config.COURSE_BM25_TOPK > 0
     if not sr.selected and not use_bm25:
         res["fallback"] = _fallback("no_valid_concepts", "Step 1 没有选出任何有效概念")
@@ -135,14 +142,21 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     trace.stages["filter"]["cap"] = cap_stats
     trace.stages["filter"]["skipped"] = skipped
     res["filtered"] = [v.to_dict() for v in fr.verdicts]
-    kept, capped = pick_for_answer(rr.items, fr)
+    kept, capped = pick_for_answer(rr.items, fr, question=question,
+                                   concept_names=[ctx.index.concepts[x.concept_id].name for x in sr.selected
+                                                  if x.concept_id in ctx.index.concepts])
+    emit({"type": "stage", "stage": "filter", "recalled": len(rr.items), "kept": len(kept), "skipped": skipped})
     if not kept:
         res["fallback"] = _fallback("all_filtered_out", "召回的子块被全部判为无助于回答")
         return res
 
     # Step 4
     relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
-    ar = answer_question(question, kept, relations, traced)
+    if on_event:
+        emit({"type": "materials", "materials": [{"ref": f"S{n}", "chunk_id": k.chunk_id, "path": " › ".join(k.path)}
+                                                 for n, k in enumerate(kept, 1)]})
+    ar = answer_question(question, kept, relations, traced,
+                         on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None)
     trace.stages["answer"] = {"kept": len(kept), "kept_grades": {g: sum(fr.grade_of(k.chunk_id) == g for k in kept)
                                                                  for g in ("direct", "background")},
                               "capped": capped, "relations": len(relations),

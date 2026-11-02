@@ -6,7 +6,7 @@
   基本都花在生成理由上）；未列出的编号视为 irrelevant。旧格式 {"verdicts":[{id, grade, reason}]} 仍兼容，
   旧格式下批内没有被判断或等级不合法的子块不静默当作无用，记为 unjudged（不进入作答并记录）；
 - 召回块不多时（≤ COURSE_FILTER_SKIP_MAX）由 pipeline 跳过筛选，全部按召回顺序直接进入作答（skip_filter）；
-- 作答材料由 pick_for_answer 选出：先 direct 后 background，各自保持召回顺序，最多 max_chunks 个；
+- 作答材料由 pick_for_answer 选出：先 direct 后 background，同级按与问题的相关分排序，最多 max_chunks 个；
 - 原生路径：response_format=json_object；回退路径：prompt 要求 JSON + 本地解析，失败带错误重试 1 次。
 """
 from __future__ import annotations
@@ -173,12 +173,19 @@ def skip_filter(items: list[Recalled]) -> FilterResult:
     return out
 
 
-def pick_for_answer(items: list[Recalled], fr: FilterResult, max_chunks: int | None = None,
-                    ) -> tuple[list[Recalled], list[str]]:
-    """选作答材料：先 direct 后 background，各自保持召回顺序，最多 max_chunks 个。返回 (材料, 因上限被截掉的 chunk_id)。"""
+def pick_for_answer(items: list[Recalled], fr: FilterResult, max_chunks: int | None = None, question: str = "",
+                    concept_names: list[str] | None = None) -> tuple[list[Recalled], list[str]]:
+    """选作答材料：先 direct 后 background，最多 max_chunks 个。返回 (材料, 因上限被截掉的 chunk_id)。
+
+    给了 question 时，同一等级内按相关分（relevance_scores）从高到低排，截断时先丢最不相关的；否则保持召回顺序。"""
     max_chunks = config.COURSE_ANSWER_MAX_CHUNKS if max_chunks is None else max_chunks
     grade = {v.chunk_id: v.grade for v in fr.verdicts}
-    ranked = [i for g in (DIRECT, BACKGROUND) for i in items if grade.get(i.chunk_id) == g]
+    pool = [i for i in items if grade.get(i.chunk_id) in (DIRECT, BACKGROUND)]
+    if question:
+        sc = relevance_scores(pool, question, concept_names)
+        order = {i.chunk_id: n for n, i in enumerate(items)}
+        pool.sort(key=lambda i: (-sc[i.chunk_id], order[i.chunk_id]))
+    ranked = [i for g in (DIRECT, BACKGROUND) for i in pool if grade[i.chunk_id] == g]
     return ranked[:max_chunks], [i.chunk_id for i in ranked[max_chunks:]]
 
 
@@ -197,18 +204,7 @@ def cap_for_filter(items: list[Recalled], max_chunks: int | None = None, questio
     if len(items) <= max_chunks:
         return items, stats
     order = {i.chunk_id: n for n, i in enumerate(items)}
-    q_grams = _grams(question)
-    name_grams = [_grams(n) for n in (concept_names or []) if n]
-    bm = {i.chunk_id: max((r.score or 0.0 for r in i.reasons if r.via == "bm25"), default=0.0) for i in items}
-    bm_max = max(bm.values()) or 1.0
-
-    def score(i: Recalled) -> float:
-        g = _grams(" ".join(i.path[-2:]) + i.text)
-        overlap_q = len(g & q_grams) / (len(q_grams) or 1)
-        overlap_n = max((len(g & ng) / (len(ng) or 1) for ng in name_grams), default=0.0)
-        return overlap_q + 0.5 * overlap_n + 0.5 * bm[i.chunk_id] / bm_max
-
-    scored = {i.chunk_id: score(i) for i in items}
+    scored = relevance_scores(items, question, concept_names)
     ranked = sorted(items, key=lambda i: (i.tier > 2, -scored[i.chunk_id], order[i.chunk_id]))
     keep_ids = {i.chunk_id for i in ranked[:max_chunks]}
     kept = [i for i in items if i.chunk_id in keep_ids]
@@ -219,6 +215,22 @@ def cap_for_filter(items: list[Recalled], max_chunks: int | None = None, questio
                  dropped_max_score=round(max((scored[i.chunk_id] for i in drop), default=0.0), 3),
                  kept_min_score=round(min((scored[i.chunk_id] for i in kept), default=0.0), 3))
     return kept, stats
+
+
+def relevance_scores(items: list[Recalled], question: str, concept_names: list[str] | None = None) -> dict[str, float]:
+    """块与问题的相关分：字符 bigram 与问题的重合率 + 0.5×与已选概念名的重合率 + 0.5×BM25 分（归一化）。"""
+    q_grams = _grams(question)
+    name_grams = [_grams(n) for n in (concept_names or []) if n]
+    bm = {i.chunk_id: max((r.score or 0.0 for r in i.reasons if r.via == "bm25"), default=0.0) for i in items}
+    bm_max = max(bm.values(), default=0.0) or 1.0
+
+    def score(i: Recalled) -> float:
+        g = _grams(" ".join(i.path[-2:]) + i.text)
+        overlap_q = len(g & q_grams) / (len(q_grams) or 1)
+        overlap_n = max((len(g & ng) / (len(ng) or 1) for ng in name_grams), default=0.0)
+        return overlap_q + 0.5 * overlap_n + 0.5 * bm[i.chunk_id] / bm_max
+
+    return {i.chunk_id: score(i) for i in items}
 
 
 def _grams(text: str) -> set[str]:

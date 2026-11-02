@@ -1,8 +1,8 @@
 """端到端评测（真实调用）：r11–r20 经 UnifiedService.ask（含路由），记录端到端与分环节耗时、来源/等级/引用、warnings。
 
-规则：仅非高峰（北京时间高峰为 09–12、14–18 点）；每题 1 遍、不重试（SDK 自动重试已关）；失败记失败；
+规则：默认仅非高峰（北京时间高峰为 09–12、14–18 点，价格翻倍；--allow-peak 显式放开，结果中记录）；每题 1 遍、不重试（SDK 自动重试已关）；失败记失败；
 连续 2 题 LLMError 即停；每次调用前检查非高峰窗口；总调用硬上限 max_calls，到上限立即停止。结果只含异常类型名，不含 key。
-用法：python -m rag.course.eval_e2e [--max-calls 45] [--out rag/eval_data/course_e2e_eval_result.json]
+用法：python -m rag.course.eval_e2e [--max-calls 45] [--out rag/eval_data/course_e2e_eval_result.json] [--allow-peak]
 """
 from __future__ import annotations
 
@@ -67,9 +67,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-calls", type=int, default=45)
     ap.add_argument("--out", default=str(GOLD.with_name("course_e2e_eval_result.json")))
+    ap.add_argument("--allow-peak", action="store_true", help="允许在北京时间高峰时段运行（价格翻倍）")
     a = ap.parse_args()
-    if not in_window(datetime.now(BJ)):
-        raise SystemExit("当前为北京时间高峰时段，不运行")
+    if not a.allow_peak and not in_window(datetime.now(BJ)):
+        raise SystemExit("当前为北京时间高峰时段，不运行（确需运行加 --allow-peak）")
     try:
         cllm = OpenAICompatClient()
     except LLMNotConfigured:
@@ -79,7 +80,7 @@ def main() -> None:
         raise SystemExit("路由未配置")
     for c in (cllm, rclient):
         c._client = c._client.with_options(max_retries=0)
-    shared = {"calls": 0, "cap": a.max_calls}
+    shared = {"calls": 0, "cap": a.max_calls, "allow_peak": a.allow_peak}
     ctx = CourseContext.load()
     svc = UnifiedService(router_client=CappedLLM(rclient, shared), course_ctx=ctx, course_llm=CappedLLM(cllm, shared))
     gold = json.load(open(GOLD, encoding="utf-8"))
@@ -100,6 +101,11 @@ def main() -> None:
             break
     out = {"config": {"select_mode": config.COURSE_SELECT_MODE, "candidates": config.COURSE_SELECT_CANDIDATES,
                       "select_reasoning": config.COURSE_REASONING["select"], "bm25_topk": config.COURSE_BM25_TOPK,
+                      "filter_reasoning": config.COURSE_REASONING["filter"], "answer_reasoning": config.COURSE_REASONING["answer"],
+                      "filter_skip_max": config.COURSE_FILTER_SKIP_MAX, "book_version": config.BOOK_VERSION,
+                      "allow_peak": a.allow_peak, "select_model": config.COURSE_SELECT_MODEL,
+                      "filter_model": config.COURSE_FILTER_MODEL, "answer_model": config.COURSE_ANSWER_MODEL,
+                      "answer_max_chunks": config.COURSE_ANSWER_MAX_CHUNKS,
                       "filter_max_chunks": config.COURSE_FILTER_MAX_CHUNKS, "model": config.COURSE_LLM_MODEL,
                       "router_model": rc.ROUTER_MODEL},
            "started_bj": started, "finished_bj": datetime.now(BJ).isoformat(timespec="seconds"),

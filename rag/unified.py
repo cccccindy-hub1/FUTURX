@@ -8,10 +8,14 @@
 """
 from __future__ import annotations
 
+import json
+import queue
+import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
@@ -26,6 +30,10 @@ class AutoAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     top_k: int | None = None
     include_trace: bool = True
+
+
+class _Cancelled(Exception):
+    """客户端断开后用来中止 pipeline 回调链（内部使用，不对外暴露）。"""
 
 
 class UnifiedService:
@@ -53,6 +61,85 @@ class UnifiedService:
         trace["total_s"] = round(time.perf_counter() - t0, 4)
         out["trace"] = trace
         return out
+
+    def ask_stream(self, question: str, top_k: int | None = None) -> Iterator[dict[str, Any]]:
+        """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
+
+        课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
+        done 带清理后的 answer（[S#] 已换成 chunk_id）、sources、status；delta 是模型原始文本（含 [S#]），前端对照 materials 渲染。
+        生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。"""
+        question = question.strip()
+        t0 = time.perf_counter()
+        d: RouteDecision = classify(question, self.router_client)
+        yield {"type": "route", "route": d.route, "complexity": d.complexity, "reason": d.reason,
+               "router_s": round(d.latency_s, 3)}
+        if d.route != "course" or self.course_ctx is None or self.course_llm is None:
+            out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
+                                   "answer": None, "sources": [], "status": "ok"}
+            trace: dict[str, Any] = {"router": d.to_dict()}
+            try:
+                if d.route == "off_topic":
+                    out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
+                elif d.route == "policy":
+                    out.update(status="not_available", answer=config.ROUTER_POLICY_TEXT)
+                elif d.route == "course":
+                    self._course(question, out, trace)        # 课程库未加载：返回 unavailable
+                else:
+                    self._thesis(question, top_k, d.complexity, out, trace)
+            except Exception as e:  # noqa: BLE001 - 只带异常类型名
+                yield {"type": "error", "error": type(e).__name__}
+                return
+            trace["total_s"] = round(time.perf_counter() - t0, 4)
+            out["trace"] = trace
+            yield {"type": "done", **{k: out.get(k) for k in ("route", "complexity", "status", "answer", "sources")},
+                   "trace": trace}
+            return
+
+        from .course.pipeline import ask, result_to_json
+        q: queue.Queue = queue.Queue()
+        cancelled = threading.Event()
+        _END = object()
+
+        def on_event(ev: dict) -> None:
+            if cancelled.is_set():                            # 客户端已断开：中止后续回调，让 pipeline 线程尽快抛出收尾
+                raise _Cancelled()
+            q.put(ev)
+
+        def run() -> None:
+            try:
+                q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm, on_event=on_event)))
+            except _Cancelled:
+                pass
+            except Exception as e:  # noqa: BLE001 - 只带异常类型名
+                q.put(("error", type(e).__name__))
+            finally:
+                q.put(_END)
+
+        threading.Thread(target=run, name="auto-ask-stream", daemon=True).start()
+        try:
+            while True:
+                item = q.get()
+                if item is _END:
+                    return
+                if isinstance(item, tuple):
+                    kind, val = item
+                    if kind == "error":
+                        yield {"type": "error", "error": val}
+                        continue
+                    res = result_to_json(val)
+                    trace = {"router": d.to_dict(), "course": res.pop("trace", None)}
+                    trace["total_s"] = round(time.perf_counter() - t0, 4)
+                    ans = res.get("answer")
+                    if ans:
+                        status, text, sources = "ok", ans.get("text"), res.get("citations", [])
+                    else:
+                        status, text, sources = "insufficient", config.ADAPTIVE_INSUFFICIENT_TEXT, []
+                    yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
+                           "answer": text, "sources": sources, "trace": trace}
+                else:
+                    yield item
+        finally:
+            cancelled.set()
 
     def _thesis(self, question, top_k, complexity, out, trace) -> None:
         if self.adaptive is None:
@@ -95,3 +182,32 @@ def auto_ask(req: AutoAskRequest, request: Request):
     if not req.include_trace:
         out.pop("trace", None)
     return out
+
+
+def _sse(payload: dict) -> bytes:
+    return b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
+
+
+@router.post("/auto/ask/stream", dependencies=[Depends(require_api_key)])
+def auto_ask_stream(req: AutoAskRequest, request: Request):
+    """SSE 流式统一入口：先推 route，课程路由再推 stage / materials / delta，最后 done（带清理后的 answer 与 sources）。
+    非课程路由不流式，完整结果直接放进 done。生成中途出错发 error 事件，只带异常类型名。
+    并发名额由 RequestConcurrencyMiddleware 持有到整个流结束。"""
+    svc: UnifiedService | None = getattr(request.app.state, "unified", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
+
+    def gen():
+        events = svc.ask_stream(req.question, req.top_k)
+        try:
+            for ev in events:
+                if ev.get("type") == "done" and not req.include_trace:
+                    ev = {k: v for k, v in ev.items() if k != "trace"}
+                yield _sse(ev)
+        except Exception as e:  # noqa: BLE001 - 流已开始，只能以事件告知，且只带类型名
+            yield _sse({"type": "error", "error": type(e).__name__})
+        finally:
+            events.close()
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

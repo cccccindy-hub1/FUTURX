@@ -7,8 +7,9 @@ from starlette.responses import JSONResponse
 
 
 class RequestConcurrencyMiddleware:
-    # /auto/ask：统一入口，一题最多 4 次付费 LLM 调用（路由 + 课程三步），同样计入并发上限
-    _PATHS = {"/ask", "/ask/stream", "/v1/chat/completions", "/auto/ask"}
+    # /auto/ask 与 /auto/ask/stream：统一入口，一题最多 4 次付费 LLM 调用（路由 + 课程三步），同样计入并发上限；
+    # 流式的名额持有到响应完整结束（见 __call__ 的 finally）
+    _PATHS = {"/ask", "/ask/stream", "/v1/chat/completions", "/auto/ask", "/auto/ask/stream"}
 
     def __init__(self, app, max_requests: int):
         if max_requests < 1:

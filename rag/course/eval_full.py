@@ -39,7 +39,7 @@ class CappedLLM:
     def chat(self, step, messages, **kw):
         if self.s["calls"] >= self.s["cap"]:
             raise CapReached("call cap reached")
-        if not in_window(datetime.now(BJ)):
+        if not self.s.get("allow_peak") and not in_window(datetime.now(BJ)):
             raise CapReached("left off-peak window")
         self.s["calls"] += 1
         return self.inner.chat(step, messages, **kw)

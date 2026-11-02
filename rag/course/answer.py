@@ -91,7 +91,8 @@ def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str],
 
 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,
-                    model: str | None = None) -> AnswerResult:
+                    model: str | None = None, on_delta=None) -> AnswerResult:
+    """on_delta：给了就流式生成（客户端有 chat_stream 时），正文片段原样（含 [S#]）逐段回调；返回值与非流式相同。"""
     model = model or config.COURSE_ANSWER_MODEL
     refs = {f"S{i + 1}": k.chunk_id for i, k in enumerate(kept)}
     passages = "\n\n".join(
@@ -100,7 +101,13 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
     messages = [{"role": "system", "content": prompts.ANSWER_SYSTEM},
                 {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
                  + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")}]
-    res = llm.chat("answer", messages, model=model)
+    stream = getattr(llm, "chat_stream", None) if on_delta else None
+    if stream:
+        res = stream("answer", messages, model=model, on_delta=on_delta)
+    else:
+        res = llm.chat("answer", messages, model=model)
+        if on_delta and res.content:
+            on_delta(res.content)
     text, valid, invalid, onto = sanitize_citations(res.content, refs)
     return AnswerResult(text=text.strip(), citations=valid, invalid_citations=invalid, uses_ontology=onto,
                         insufficient=INSUFFICIENT_PHRASE in text, refs=refs, warnings=disclaimer_warnings(text))

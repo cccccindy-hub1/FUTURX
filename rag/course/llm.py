@@ -94,6 +94,35 @@ class OpenAICompatClient:
             raise LLMError(f"[{step}] LLM 调用失败：{type(e).__name__}: {self._redact(str(e))}") from None
         return parse_response(resp, time.perf_counter() - t0)
 
+    def chat_stream(self, step: str, messages: list[dict], *, model: str, on_delta) -> LLMResult:
+        """流式生成（只用于作答）：content 片段逐段回调 on_delta；reasoning 片段只计长度。返回汇总后的 LLMResult。"""
+        kwargs: dict = {"model": model, "messages": messages, "temperature": 0, "stream": True,
+                        "stream_options": {"include_usage": True}}
+        reasoning = reasoning_param(self.reasoning_for(step))
+        if reasoning:
+            kwargs["extra_body"] = {"reasoning": reasoning}
+        t0 = time.perf_counter()
+        parts: list[str] = []
+        r_chars = 0
+        usage = None
+        try:
+            for chunk in self._client.chat.completions.create(**kwargs):
+                usage = getattr(chunk, "usage", None) or usage
+                for ch in getattr(chunk, "choices", None) or []:
+                    delta = getattr(ch, "delta", None)
+                    r_chars += len(getattr(delta, "reasoning_content", None) or "")
+                    text = getattr(delta, "content", None) or ""
+                    if text:
+                        parts.append(text)
+                        on_delta(text)
+        except Exception as e:  # noqa: BLE001 - 统一脱敏后重抛
+            raise LLMError(f"[{step}] LLM 调用失败：{type(e).__name__}: {self._redact(str(e))}") from None
+        details = getattr(usage, "completion_tokens_details", None)
+        return LLMResult(content="".join(parts), prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                         completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                         reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0, reasoning_chars=r_chars,
+                         latency_s=time.perf_counter() - t0)
+
 
 _EFFORTS = ("low", "medium", "high")
 
@@ -204,9 +233,21 @@ class TracingLLM:
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
         t0 = time.perf_counter()
         res = self.inner.chat(step, messages, model=model, tools=tools, json_mode=json_mode)
+        return self._record(step, model, bool(tools), json_mode, res, t0)
+
+    def __getattr__(self, name):
+        if name == "chat_stream" and hasattr(self.inner, "chat_stream"):   # 内层支持流式时才对外暴露
+            def chat_stream(step, messages, *, model, on_delta):
+                t0 = time.perf_counter()
+                res = self.inner.chat_stream(step, messages, model=model, on_delta=on_delta)
+                return self._record(step, model, False, False, res, t0, stream=True)
+            return chat_stream
+        raise AttributeError(name)
+
+    def _record(self, step, model, tools, json_mode, res, t0, stream=False) -> LLMResult:
         reasoning_for = getattr(self.inner, "reasoning_for", None)
         self.trace.calls.append({
-            "step": step, "model": model, "tools": bool(tools), "json_mode": json_mode,
+            "step": step, "model": model, "tools": bool(tools), "json_mode": json_mode, "stream": stream,
             "reasoning": reasoning_for(step) if reasoning_for else None,
             "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
             "reasoning_tokens": res.reasoning_tokens, "reasoning_chars": res.reasoning_chars,
