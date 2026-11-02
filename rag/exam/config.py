@@ -8,13 +8,16 @@ from pathlib import Path
 
 from ..config import RAG_DIR
 from ..course.config import COURSE_ONTO_ROOT
+from ..course.ontology import OntologyPaths
 
 # ---- 输入 ----
 EXAM_TEACHER_DOC = Path(os.environ.get("EXAM_TEACHER_DOC", RAG_DIR / "exam_data" / "teacher.docx"))
 EXAM_STUDENT_DOC = Path(os.environ.get("EXAM_STUDENT_DOC", RAG_DIR / "exam_data" / "student.docx"))
-# 学生知识集合（三层集合之一），用于把每道题挂到知识点上；默认取课程库本体目录下的同一份文件
-EXAM_STUDENT_SET = Path(os.environ.get(
-    "EXAM_STUDENT_SET", COURSE_ONTO_ROOT / "9.11update" / "三层集合" / "学生知识集合.xlsx"))
+# 学生知识集合（三层集合之一），用于把每道题挂到知识点上；默认取课程库本体目录下的同一份文件（9.11 / 11.2 结构自动识别）
+EXAM_STUDENT_SET = Path(os.environ.get("EXAM_STUDENT_SET", OntologyPaths(COURSE_ONTO_ROOT).student_xlsx))
+# 题库章与教材章按章名对应（概念总表「章节主题」），章名对不上的题库章只做跨章挂接。
+# 11.2 版教材：题库第4章《数据政策》对应教材第4章；题库第11章《数据工程师》教材没有，只跨章挂接
+EXAM_CONCEPT_TABLE = Path(os.environ.get("EXAM_CONCEPT_TABLE", OntologyPaths(COURSE_ONTO_ROOT).concept_xlsx))
 # 题库版本号写入 question_id，换版本时 id 整体换代
 EXAM_BANK_VERSION = os.environ.get("EXAM_BANK_VERSION", "1031")
 

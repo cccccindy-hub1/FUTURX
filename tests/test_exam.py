@@ -10,7 +10,7 @@ import json
 from rag.course.llm import LLMResult
 from rag.exam import config
 from rag.exam.api import router as exam_router
-from rag.exam.bank import compare_student, parse_bank, split_options
+from rag.exam.bank import Question, compare_student, parse_bank, split_options
 from rag.exam.knowledge import StudentIndex, link_question
 from rag.exam.store import ExamBank, ExamItem, format_items
 from rag.router import RouteDecision, classify, rule_route
@@ -281,3 +281,24 @@ def test_api_search_by_concepts_and_question(client, bank):
     qid = bank.items[0].q.question_id
     assert client.get(f"/exam/question/{qid}", params={"include_answer": True}).json()["answer"] == "A"
     assert client.get("/exam/question/nope").status_code == 404
+
+
+def test_book_chapter_map_by_title_and_unmatched_chapter_links_cross_only(tmp_path):
+    from openpyxl import Workbook
+
+    from rag.exam.knowledge import book_chapter_map
+    wb = Workbook(); ws = wb.active; ws.title = "concept总表"
+    ws.append(["概念ID", "章号", "章节主题", "概念名称", "概念类型", "上位或关联项", "释义或知识语境", "收录依据", "教材定位",
+               "教材原文摘录", "专家原词", "专家定位", "归并及版本说明", "收录分组", "问题类型", "问题说明"])
+    for cid, ch, topic in (("C04-0001", 4, "数据政策"), ("C11-0001", 11, "数据资产")):
+        ws.append([cid, ch, topic, topic] + [""] * 12)
+    wb.save(tmp_path / "t.xlsx")
+    m = book_chapter_map({4: "数据政策", 11: "数据工程师"}, tmp_path / "t.xlsx")
+    assert m == {4: 4, 11: None}                       # 题库第11章与教材第11章同号不同名：不当作同章
+    assert book_chapter_map({3: "x"}, tmp_path / "missing.xlsx") == {3: 3}
+    idx = StudentIndex.from_rows([
+        {"集合ID": "S1", "章节": "Ch11", "主体": "数据资产", "关系": "hasDefinition", "客体": "数据资产是……"}])
+    q = Question(question_id="q", chapter=11, chapter_title="数据工程师", qtype="choice", qtype_cn="单项选择题",
+                 number=1, stem="关于“数据资产”的说法", concepts=["数据资产"])
+    link = link_question(q, idx, None)
+    assert link.kp_ids == ["S1"] and link.method == "exact:cross"

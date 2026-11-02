@@ -23,7 +23,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..course.ontology import load_student_set
+from ..course.ontology import load_concepts, load_student_set
 from . import config
 from .bank import Question, norm
 
@@ -127,11 +127,11 @@ class StudentIndex:
                 start = text.find(key, start + 1)
         return out
 
-    def match_concept(self, concept: str, chapter: int) -> tuple[list[str], str]:
-        """一个引号概念 → (主体 key 列表, 匹配方式)。同章优先，同章没有再跨章。"""
+    def match_concept(self, concept: str, chapter: int | None) -> tuple[list[str], str]:
+        """一个引号概念 → (主体 key 列表, 匹配方式)。同章优先，同章没有再跨章；chapter=None（教材无对应章）只跨章。"""
         key = norm(concept).strip("“”\"《》")
         min_chars = config.EXAM_MENTION_MIN_CHARS
-        for scope, tag in ((chapter, "same"), (None, "cross")):
+        for scope, tag in _scopes(chapter):
             def ok(k: str) -> bool:
                 return self._usable(k) and (scope is None or scope in self.chapters_of[k])
             if ok(key):
@@ -151,7 +151,7 @@ class StudentIndex:
                     return sup, f"within:{tag}"
         return [], "none"
 
-    def knowledge_points(self, keys: list[str], chapter: int, per_concept: int) -> list[str]:
+    def knowledge_points(self, keys: list[str], chapter: int | None, per_concept: int) -> list[str]:
         """主体 key → kp_ids：两概念之间的直接三元组优先，其后每个概念按关系优先级取前 per_concept 条，同章优先。"""
         out: list[str] = []
         names = [self.display[k] for k in keys]
@@ -177,21 +177,38 @@ class Link:
     method: str                   # exact / split / contains / within / mention（:same 同章、:cross 跨章），多种用 + 连接
 
 
-def link_question(q: Question, idx: StudentIndex) -> Link:
+def _scopes(chapter: int | None) -> tuple:
+    return ((chapter, "same"), (None, "cross")) if chapter else ((None, "cross"),)
+
+
+def link_question(q: Question, idx: StudentIndex, book_chapter: int | None = -1) -> Link:
+    """book_chapter：该题所在题库章对应的教材章（None = 教材无对应章，只跨章挂接；缺省 = 与题库章号相同）。"""
+    ch = q.chapter if book_chapter == -1 else book_chapter
     keys: list[str] = []
     methods: list[str] = []
     for c in q.concepts:
-        hits, how = idx.match_concept(c, q.chapter)
+        hits, how = idx.match_concept(c, ch)
         if hits:
             methods.append(how)
             keys.extend(k for k in hits if k not in keys)
     if not keys:   # 没有引号概念或都没匹配上：用题干字面提及
         text = norm(q.stem if q.qtype != "case" else q.stem.split("【分析问题】")[-1])
-        for scope, tag in ((q.chapter, "same"), (None, "cross")):
+        for scope, tag in _scopes(ch):
             hits = idx._contained(text, scope, config.EXAM_MENTION_MIN_CHARS)[:4]
             if hits:
                 keys, methods = hits, [f"mention:{tag}"]
                 break
-    kp_ids = idx.knowledge_points(keys, q.chapter, config.EXAM_KP_PER_CONCEPT)
+    kp_ids = idx.knowledge_points(keys, ch, config.EXAM_KP_PER_CONCEPT)
     return Link(concepts=[idx.display[k] for k in keys], kp_ids=kp_ids,
                 method="+".join(dict.fromkeys(methods)) or "none")
+
+
+def book_chapter_map(exam_titles: dict[int, str], concept_table: str | Path | None) -> dict[int, int | None]:
+    """题库章号 → 教材章号：按章名与概念总表「章节主题」对应；总表不可用时按章号相同处理。"""
+    path = Path(concept_table) if concept_table else None
+    if path is None or not path.is_file():
+        return {ch: ch for ch in exam_titles}
+    topics: dict[str, int] = {}
+    for c in load_concepts(path).concepts:
+        topics.setdefault(norm(c.topic), c.chapter)
+    return {ch: topics.get(norm(t)) for ch, t in exam_titles.items()}

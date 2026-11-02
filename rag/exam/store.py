@@ -19,7 +19,7 @@ from pathlib import Path
 from ..course.bm25 import BM25, tokenize
 from . import config
 from .bank import BASIC_QTYPES, QTYPES, Question, _cn_int, compare_student, norm, parse_bank
-from .knowledge import StudentIndex, link_question
+from .knowledge import StudentIndex, book_chapter_map, link_question
 
 _QTYPE_WORDS = (("名词解释", "term"), ("案例", "case"), ("论述", "essay"), ("简答", "short"),
                 ("判断", "judge"), ("选择", "choice"), ("单选", "choice"))
@@ -88,12 +88,15 @@ class ExamBank:
     # ---- 构建 ----
     @classmethod
     def build(cls, teacher_doc: str | Path | None = None, student_set: str | Path | None = None,
-              student_doc: str | Path | None = None) -> "ExamBank":
+              student_doc: str | Path | None = None, concept_table: str | Path | None = None) -> "ExamBank":
         questions, stats = parse_bank(teacher_doc or config.EXAM_TEACHER_DOC)
         idx = StudentIndex.load(student_set)
+        chapters = book_chapter_map({q.chapter: q.chapter_title for q in questions},
+                                    concept_table if concept_table is not None else config.EXAM_CONCEPT_TABLE)
+        stats["book_chapter_map"] = {str(k): v for k, v in sorted(chapters.items())}
         items = []
         for q in questions:
-            link = link_question(q, idx)
+            link = link_question(q, idx, chapters.get(q.chapter))
             items.append(ExamItem(q, link.concepts, link.kp_ids, link.method, _search_text(q, link.concepts)))
         stats["linked"] = sum(1 for it in items if it.kp_ids)
         if student_doc is not None and Path(student_doc).exists():

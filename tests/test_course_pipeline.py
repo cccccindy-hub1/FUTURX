@@ -881,9 +881,9 @@ def test_every_prompt_template_formats_without_error():
     for n in names:
         getattr(prompts, n).format(**values)               # 任何一个模板花括号写错都会在这里抛 KeyError / ValueError
     # JSON 示例经 format 后必须是合法 JSON 片段（单花括号）
-    assert '{"verdicts":[{"id":"S1","grade":"direct"' in prompts.FILTER_SYSTEM.format()
+    assert '{"direct":["S1","S4"],"background":["S2"]}' in prompts.FILTER_SYSTEM.format()
     assert '{"tool": "finish"' in prompts.SELECT_JSON_PROTOCOL.format()
-    assert json.loads(prompts.FILTER_SYSTEM.format().split("输出严格 JSON：")[1].split("\n")[0])["verdicts"][0]["id"] == "S1"
+    assert json.loads(prompts.FILTER_SYSTEM.format().split("输出严格 JSON：")[1].split("\n")[1])["direct"][0] == "S1"
 
 
 def test_prompt_contents_follow_review():
