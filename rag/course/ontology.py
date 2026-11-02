@@ -1,6 +1,12 @@
 """本体数据加载（只读）：概念总表（xlsx）、onto1/onto2 结构化导入 CSV、学生知识集合（核对用）。
 
-约定（均来自 9.11 数据实况）：
+两种目录结构，OntologyPaths 自动识别（根目录下有 onto1/ 即按 11.2 版）：
+- 9.11 版：根/第1-10章_concept总表_问题标注版.xlsx、根/9.11update/onto{1,2}/Ch*_onto{1,2}_9.11.csv、
+  根/9.11update/三层集合/、根/教材/书稿*0906*.docx；
+- 11.2 版（第4章换为《数据政策》、原第4章改为第11章）：根/第1-11章_concept总表_问题标注版.xlsx、
+  根/onto{1,2}/Ch*_onto{1,2}_11.2.csv、根/三层集合/、根/书稿（1102合成版）.docx。
+
+约定（均来自 9.11 数据实况，11.2 版沿用）：
 - CSV 为 UTF-8 with BOM，每章一个文件，两个视角表头相同；confidence / expert_relevance_weight 是字符串；
 - 概念总表第 2 行是「通过核验」占位行，只保留概念ID 匹配 C\\d\\d-\\d{4} 的行；
 - 概念总表的「教材定位」指向旧版分章文件的段号，不是书稿 0906 的 P####，这里原样保存、不参与锚点核对；
@@ -17,7 +23,8 @@ CONCEPT_ID_RE = re.compile(r"^C\d\d-\d{4}$")
 _PARA_ANCHOR_RE = re.compile(r"^P(\d{1,6})$")
 _EXPERT_CELL_RE = re.compile(r"^onto\d+!", re.IGNORECASE)
 
-CONCEPT_XLSX = "第1-10章_concept总表_问题标注版.xlsx"
+CONCEPT_XLSX = "第1-10章_concept总表_问题标注版.xlsx"          # 9.11 版文件名；11.2 版为 第1-11章_…
+CONCEPT_XLSX_GLOB = "第1-*章_concept总表_问题标注版.xlsx"
 CONCEPT_SHEET = "concept总表"
 STUDENT_XLSX = Path("9.11update") / "三层集合" / "学生知识集合.xlsx"
 VIEWS = ("onto1", "onto2")
@@ -210,11 +217,14 @@ def _to_float(s: str) -> float | None:
 
 
 def load_records(csv_dir: str | Path, view: str) -> list[Record]:
-    """读取一个视角目录下所有 Ch*_{view}_9.11.csv，按文件名顺序拼接。"""
+    """读取一个视角目录下所有 Ch*_{view}_<版本>.csv（9.11 / 11.2），按文件名顺序拼接；同一目录只能有一个版本。"""
     csv_dir = Path(csv_dir)
-    files = sorted(csv_dir.glob(f"Ch*_{view}_9.11.csv"))
+    files = sorted(csv_dir.glob(f"Ch*_{view}_*.csv"))
     if not files:
-        raise FileNotFoundError(f"{csv_dir} 下没有 Ch*_{view}_9.11.csv")
+        raise FileNotFoundError(f"{csv_dir} 下没有 Ch*_{view}_<版本>.csv")
+    versions = {f.stem.rsplit("_", 1)[-1] for f in files}
+    if len(versions) > 1:
+        raise ValueError(f"{csv_dir} 下混有多个版本的 CSV：{sorted(versions)}")
     out: list[Record] = []
     for f in files:
         with f.open(encoding="utf-8-sig", newline="") as fh:
@@ -262,16 +272,27 @@ class OntologyPaths:
     root: Path
 
     @property
+    def layout(self) -> str:
+        """"11.2"：根目录下直接有 onto1/；否则按 9.11 版（onto 在 9.11update/ 下）。"""
+        return "11.2" if (self.root / "onto1").is_dir() else "9.11"
+
+    @property
     def concept_xlsx(self) -> Path:
-        return self.root / CONCEPT_XLSX
+        """取章数最多的那份总表（11.2 版目录里只有 第1-11章_…）；都没有时返回 9.11 版文件名，由加载处报错。"""
+        hits = sorted(self.root.glob(CONCEPT_XLSX_GLOB),
+                      key=lambda p: int(re.search(r"第1-(\d+)章", p.name).group(1)) if re.search(r"第1-(\d+)章", p.name) else 0)
+        return hits[-1] if hits else self.root / CONCEPT_XLSX
 
     def onto_dir(self, view: str) -> Path:
-        return self.root / "9.11update" / view
+        return self.root / view if self.layout == "11.2" else self.root / "9.11update" / view
 
     @property
     def student_xlsx(self) -> Path:
+        if self.layout == "11.2":
+            return self.root / "三层集合" / "学生知识集合.xlsx"
         return self.root / STUDENT_XLSX
 
     def find_textbook(self) -> Path | None:
-        hits = sorted((self.root / "教材").glob("书稿*0906*.docx"))
+        pattern = (self.root, "书稿*合成版*.docx") if self.layout == "11.2" else (self.root / "教材", "书稿*0906*.docx")
+        hits = sorted(pattern[0].glob(pattern[1]))
         return hits[0] if hits else None

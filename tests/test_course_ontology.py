@@ -455,3 +455,35 @@ def test_onto_root_default_inside_course_data_not_store():
     from rag.course import config as course
 
     assert base.STORE_DIR not in course.COURSE_ONTO_ROOT.parents
+
+
+# ---------------------------------------------------------------- 11.2 版目录结构
+
+def test_paths_detect_11_2_layout(tmp_path):
+    for d in ("onto1", "onto2", "三层集合"):
+        (tmp_path / d).mkdir()
+    for name in ("第1-10章_concept总表_问题标注版.xlsx", "第1-11章_concept总表_问题标注版.xlsx", "书稿（1102合成版）.docx"):
+        (tmp_path / name).write_bytes(b"")
+    p = ontology.OntologyPaths(tmp_path)
+    assert p.layout == "11.2" and p.onto_dir("onto1") == tmp_path / "onto1"
+    assert p.concept_xlsx.name == "第1-11章_concept总表_问题标注版.xlsx"        # 取章数最多的那份
+    assert p.student_xlsx == tmp_path / "三层集合" / "学生知识集合.xlsx"
+    assert p.find_textbook().name == "书稿（1102合成版）.docx"
+
+
+def test_paths_keep_9_11_layout(tmp_path):
+    (tmp_path / "9.11update" / "onto1").mkdir(parents=True)
+    p = ontology.OntologyPaths(tmp_path)
+    assert p.layout == "9.11" and p.onto_dir("onto2") == tmp_path / "9.11update" / "onto2"
+    assert p.concept_xlsx.name == "第1-10章_concept总表_问题标注版.xlsx"         # 文件不存在时仍给出 9.11 文件名，由加载处报错
+    assert p.student_xlsx == tmp_path / "9.11update" / "三层集合" / "学生知识集合.xlsx"
+
+
+def test_load_records_reads_11_2_files_and_rejects_mixed_versions(data, tmp_path):
+    d = tmp_path / "v112"; d.mkdir()
+    src = next(data["onto1"].glob("*.csv"))
+    (d / "Ch04_第4章_数据政策_onto1_11.2.csv").write_bytes(src.read_bytes())
+    assert len(ontology.load_records(d, "onto1")) == len(ontology.load_records(data["onto1"], "onto1"))
+    (d / "Ch01_第1章_数据要素_onto1_9.11.csv").write_bytes(src.read_bytes())
+    with pytest.raises(ValueError, match="多个版本"):
+        ontology.load_records(d, "onto1")

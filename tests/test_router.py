@@ -114,6 +114,13 @@ def test_rules_cannot_decide_means_refuse():
     assert rule_route("什么是数据要素").route == "course"
 
 
+def test_rule_policy_chapter_questions_go_to_course_but_clause_lookups_stay_policy():
+    assert rule_route("数据政策的演进脉络分为哪几个阶段").route == "course"
+    assert rule_route("如何对数据政策进行评估").route == "course"
+    assert rule_route("数据政策的传导路径有哪些").route == "course"
+    assert rule_route("数据安全法第几条规定了数据分类分级").route == "policy"
+
+
 def test_rule_generic_words_alone_do_not_make_policy():
     assert rule_route("学校的规定通知我几点下课").route == "off_topic"
 

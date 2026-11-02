@@ -12,7 +12,10 @@ COURSE_TEXTBOOK = Path(os.environ.get("COURSE_TEXTBOOK", RAG_DIR / "course_data"
 # 教材版本号写入 chunk_id，换版本时 id 整体换代，旧映射不会张冠李戴
 BOOK_VERSION = os.environ.get("COURSE_BOOK_VERSION", "0906")
 
-# 本体数据根目录（含 9.11update/onto1、onto2、三层集合 与 第1-10章_concept总表_问题标注版.xlsx），只读
+# 本体数据根目录，只读。两种结构自动识别（见 ontology.OntologyPaths）：
+#   9.11 版：9.11update/onto1、onto2、三层集合 + 第1-10章_concept总表_问题标注版.xlsx
+#   11.2 版：onto1、onto2、三层集合 + 第1-11章_concept总表_问题标注版.xlsx + 书稿（1102合成版）.docx
+#     （用 11.2 版时同时设 COURSE_BOOK_VERSION=1102，chunk_id 随之换代）
 COURSE_ONTO_ROOT = Path(os.environ.get("COURSE_ONTO_ROOT", RAG_DIR / "course_data" / "ontology"))
 
 # ---- 输出（与 rag/chroma_db、rag/cache 分开）----
