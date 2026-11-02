@@ -40,7 +40,8 @@ COURSE_LLM_API_BASE = os.environ.get("COURSE_LLM_API_BASE", "").strip()
 COURSE_LLM_API_KEY = os.environ.get("COURSE_LLM_API_KEY", "").strip()
 COURSE_LLM_MODEL = os.environ.get("COURSE_LLM_MODEL") or "deepseek/deepseek-v4-pro"
 COURSE_SELECT_MODEL = os.environ.get("COURSE_SELECT_MODEL") or COURSE_LLM_MODEL
-COURSE_FILTER_MODEL = os.environ.get("COURSE_FILTER_MODEL") or COURSE_LLM_MODEL
+COURSE_FILTER_MODEL_ENV = os.environ.get("COURSE_FILTER_MODEL", "").strip()      # 用户显式设置的值（空=未设置），供 scripts/check_filter_model.py 判断
+COURSE_FILTER_MODEL = COURSE_FILTER_MODEL_ENV or COURSE_LLM_MODEL
 COURSE_ANSWER_MODEL = os.environ.get("COURSE_ANSWER_MODEL") or COURSE_LLM_MODEL
 COURSE_LLM_NATIVE_TOOLS = _env_bool("COURSE_LLM_NATIVE_TOOLS", True)  # False：prompt 约定 JSON + 本地解析
 # Step 1 模式：single = 本地候选 + 一次 LLM 调用（默认）；agent = 旧的多轮工具调用
