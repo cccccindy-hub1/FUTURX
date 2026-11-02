@@ -415,8 +415,9 @@ def test_sanitize_strips_literal_placeholder_and_keeps_valid_refs():
 
     text, valid, invalid, _ = sanitize_citations("依据均为教材原文 [S#]，见[S1]。", {"S1": "de:x"})
     assert "[S#]" not in text and "S#" not in text and valid == ["de:x"] and invalid == []
-    assert "[de:x]" in text
-    assert "[S#]" not in prompts.ANSWER_SYSTEM.replace("“[S#]”", "")      # 提示词不再把 [S#] 当示例
+    assert "[1]" in text and "de:x" not in text                        # 正文是序号，不是 chunk_id
+    assert "占位符 “[S#]”" in prompts.ANSWER_SYSTEM                          # 提示词明确说明 [S#] 只是编号写法，不要原样写出占位符
+    assert "如 [S2]" in prompts.ANSWER_SYSTEM
 
 
 # ---------------------------------------------------------------- 选词快速路径 + 每轮 trace
@@ -773,11 +774,11 @@ def test_llm_error_cause_extracted_without_message(monkeypatch):
 def test_sanitize_normalizes_fullwidth_brackets(raw):
     from rag.course.answer import sanitize_citations
     text, valid, invalid, _ = sanitize_citations(raw, {"S1": "de:x"})
-    assert text == "见[de:x]。" and valid == ["de:x"] and invalid == []
+    assert text == "见[1]。" and valid == ["de:x"] and invalid == []          # 全角也能识别；正文是序号，chunk_id 只在 valid 里
 
 
 def test_sanitize_fullwidth_invalid_placeholder_and_ontology_tags():
     from rag.course.answer import sanitize_citations
     text, valid, invalid, onto = sanitize_citations("甲［S9］乙【S#】丙【本体】丁［de:fake］", {"S1": "de:x"})
     assert "S9" not in text and "S#" not in text and "de:fake" not in text and valid == []
-    assert set(invalid) == {"S9", "de:fake"} and onto and "[本体]" in text
+    assert set(invalid) == {"S9", "de:fake"} and onto and "[本体]" not in text and "本体" not in text.replace("丙", "")   # 本体标记被去掉，但记录 uses_ontology

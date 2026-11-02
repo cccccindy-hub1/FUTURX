@@ -66,7 +66,9 @@ class UnifiedService:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
-        done 带清理后的 answer（[S#] 已换成 chunk_id）、sources、status；delta 是模型原始文本（含 [S#]），前端对照 materials 渲染。
+        正文对学生只显示序号：delta 与 done.answer 里的引用都是按首次出现编号的 [1] [2]，不出现 [S#] 和 chunk_id；
+        服务端实时维护 S# → 序号的映射，一个被拆在两片里的 [S12] 先缓冲到闭合再输出。
+        materials 在某块第一次被引用（分配序号）时发出，带 n、chunk_id、章节路径；done 带最终的 sources（按序号排列，只含被引用的块）。
         生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。"""
         question = question.strip()
         t0 = time.perf_counter()
@@ -131,7 +133,7 @@ class UnifiedService:
                     trace["total_s"] = round(time.perf_counter() - t0, 4)
                     ans = res.get("answer")
                     if ans:
-                        status, text, sources = "ok", ans.get("text"), res.get("citations", [])
+                        status, text, sources = "ok", ans.get("text"), ans.get("sources", [])
                     else:
                         status, text, sources = "insufficient", config.ADAPTIVE_INSUFFICIENT_TEXT, []
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
@@ -159,7 +161,7 @@ class UnifiedService:
         trace["course"] = res.pop("trace", None)
         ans = res.get("answer")
         if ans:
-            out.update(answer=ans.get("text"), sources=res.get("citations", []))
+            out.update(answer=ans.get("text"), sources=ans.get("sources", []))      # [{n, chunk_id, path}]，按序号排列，只含正文引用过的块
         else:
             out.update(status="insufficient", answer=config.ADAPTIVE_INSUFFICIENT_TEXT)
         grade = {v["chunk_id"]: v["grade"] for v in res.get("filtered", [])}
@@ -190,7 +192,8 @@ def _sse(payload: dict) -> bytes:
 
 @router.post("/auto/ask/stream", dependencies=[Depends(require_api_key)])
 def auto_ask_stream(req: AutoAskRequest, request: Request):
-    """SSE 流式统一入口：先推 route，课程路由再推 stage / materials / delta，最后 done（带清理后的 answer 与 sources）。
+    """SSE 流式统一入口：先推 route，课程路由再推 stage / delta / materials，最后 done（带最终 answer 与 sources）。
+    delta 与 answer 里引用都是序号 [1] [2]（不含 [S#] 与 chunk_id）；materials 在序号分配时发出（n、chunk_id、path）。
     非课程路由不流式，完整结果直接放进 done。生成中途出错发 error 事件，只带异常类型名。
     并发名额由 RequestConcurrencyMiddleware 持有到整个流结束。"""
     svc: UnifiedService | None = getattr(request.app.state, "unified", None)

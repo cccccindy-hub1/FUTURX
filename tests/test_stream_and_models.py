@@ -210,8 +210,9 @@ def test_answer_streaming_matches_non_streaming(ctx):
     got = []
     a = answer.answer_question("q", kept, [], S(), on_delta=got.append)
     b = answer.answer_question("q", kept, [], S())
-    assert "".join(got) == text and got[0].startswith("要点甲") and len(got) == 3        # delta 是原始文本，含 [S#]
-    assert a.to_dict() == b.to_dict() and "[S1]" not in a.text and kept[0].chunk_id in a.text
+    assert "".join(got) == a.text == "要点甲[1]，要点乙[2]，结论。"                      # delta 已是学生可见文本：[n]，本体标记已去掉
+    assert "S1" not in "".join(got) and kept[0].chunk_id not in "".join(got)
+    assert a.to_dict() == b.to_dict() and "[S1]" not in a.text and kept[0].chunk_id not in a.text   # 流式与非流式结果一致
 
 
 def test_answer_on_delta_falls_back_to_chat_when_client_has_no_stream(ctx):
@@ -219,7 +220,7 @@ def test_answer_on_delta_falls_back_to_chat_when_client_has_no_stream(ctx):
     kept = _items(ctx, "P0005")[:1]
     got = []
     ar = answer.answer_question("q", kept, [], ScriptedLLM([LLMResult(content="整段[S1]")]), on_delta=got.append)
-    assert got == ["整段[S1]"] and kept[0].chunk_id in ar.text                           # 整段内容一次性回调
+    assert got == ["整段[1]"] and "[1]" in ar.text and kept[0].chunk_id not in ar.text    # 整段内容一次性回调，且已是序号
 
 
 # ---------------------------------------------------------------- pipeline on_event
@@ -244,14 +245,17 @@ def test_pipeline_on_event_order_and_content(ctx):
     events = []
     r = pipeline.ask("什么是数据要素", ctx=ctx, llm=StreamScript(_course_script()), on_event=events.append)
     kinds = [(e["type"], e.get("stage")) for e in events]
-    assert kinds[:3] == [("stage", "select"), ("stage", "filter"), ("materials", None)]
-    assert all(k[0] == "delta" for k in kinds[3:]) and len(kinds) > 3
-    sel, flt, mat = events[0], events[1], events[2]
+    assert kinds[:2] == [("stage", "select"), ("stage", "filter")] and {k[0] for k in kinds[2:]} == {"delta", "materials"}
+    sel, flt = events[0], events[1]
     assert sel["concepts"] and flt["kept"] >= 1 and flt["recalled"] >= flt["kept"]
-    m0 = mat["materials"][0]
-    assert m0["ref"] == "S1" and m0["chunk_id"].startswith("de:") and m0["path"]
+    mats = [e for e in events if e["type"] == "materials"]
+    assert [m["n"] for m in mats] == [1] and mats[0]["chunk_id"].startswith("de:") and mats[0]["path"]
     text = "".join(e["text"] for e in events if e["type"] == "delta")
-    assert "[S1]" in text and r["answer"]["text"] != text and "[S1]" not in r["answer"]["text"]     # delta 原始，最终清理后换成 chunk_id
+    assert "[1]" in text and "[S1]" not in text and "de:" not in text         # delta 是学生可见文本：序号，没有 [S#] 和 chunk_id
+    assert text == r["answer"]["text"]                                         # 流式拼起来与最终正文逐字一致
+    # materials 在序号分配时发出：必须早于第一个带 "[1]" 的 delta，这样前端渲染 [1] 时来源已就绪
+    first_with_marker = next(i for i, e in enumerate(events) if e["type"] == "delta" and "[1]" in e["text"])
+    assert events.index(mats[0]) < first_with_marker
     assert r["trace"].calls[-1]["step"] == "answer" and r["trace"].calls[-1]["stream"] is True
 
 
@@ -264,9 +268,10 @@ def test_pipeline_without_on_event_is_unchanged_and_not_streaming(ctx):
 def test_pipeline_on_event_materials_match_answer_refs(ctx):
     events = []
     r = pipeline.ask("什么是数据要素", ctx=ctx, llm=StreamScript(_course_script()), on_event=events.append)
-    mats = next(e for e in events if e["type"] == "materials")["materials"]
-    assert [m["chunk_id"] for m in mats] == list(r["answer"]["refs"].values())
-    assert [m["ref"] for m in mats] == list(r["answer"]["refs"].keys())
+    mats = [e for e in events if e["type"] == "materials"]
+    assert [m["chunk_id"] for m in mats] == r["answer"]["citations"] == [s["chunk_id"] for s in r["answer"]["sources"]]
+    assert [m["n"] for m in mats] == [s["n"] for s in r["answer"]["sources"]] == [1]
+    assert [m["path"] for m in mats] == [s["path"] for s in r["answer"]["sources"]]
 
 
 # ---------------------------------------------------------------- /auto/ask/stream（SSE）
@@ -294,12 +299,16 @@ def test_sse_course_route_event_sequence(ctx):
     kinds = [e["type"] for e in ev]
     assert kinds[0] == "route" and kinds[-1] == "done" and ev[0]["route"] == "course"
     first = {k: kinds.index(k) for k in ("route", "stage", "materials", "delta", "done")}
-    assert first["route"] < first["stage"] < first["materials"] < first["delta"] < first["done"]
+    assert first["route"] < first["stage"] < first["delta"] < first["done"] and first["materials"] < first["done"]
+    marker_at = next(i for i, e in enumerate(ev) if e["type"] == "delta" and "[1]" in e["text"])
+    assert first["materials"] < marker_at                                       # materials 先于第一个带 [1] 的 delta
     assert kinds.count("done") == 1 and "error" not in kinds
     done = ev[-1]
     text = "".join(e["text"] for e in ev if e["type"] == "delta")
     prefix = f"de:{config.BOOK_VERSION}:"                              # 教材版本随 COURSE_BOOK_VERSION 变化，不写死
-    assert "[S1]" in text and "[S1]" not in done["answer"] and done["answer"].count(prefix) >= 1    # delta 原始；done 已换成 chunk_id
+    assert "[1]" in text and "[S1]" not in text and prefix not in text and prefix not in done["answer"]     # delta 与 done 的正文都只有序号
+    assert text.strip() == done["answer"].strip()
+    assert [s["n"] for s in done["sources"]] == [1] and done["sources"][0]["chunk_id"].startswith(prefix) and done["sources"][0]["path"]
     assert done["status"] == "ok" and done["sources"] and done["trace"]["course"]["totals"]["calls"] == 3
 
 

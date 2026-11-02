@@ -43,3 +43,15 @@ def summarize(rows: list[dict], gold: list[dict]) -> dict:
                              "ontology_only_rate": rate(v[0], v[2]), "ontology_plus_bm25_rate": rate(v[1], v[2])}
                          for k, v in groups.items()},
             "bm25_only_chunk_grades": bm_grades, "bm25_only_chunks_cited_in_answers": bm_only_cited, "per_question": per_q}
+
+
+def select_ids(gold: list[dict], ids: str) -> list[dict]:
+    """--ids r13,r14：只保留指定题号，保持评测集原有顺序；有不存在的题号直接报错（不静默少跑）。"""
+    want = [x.strip() for x in (ids or "").split(",") if x.strip()]
+    if not want:
+        return gold
+    known = {g["id"] for g in gold}
+    bad = [x for x in want if x not in known]
+    if bad:
+        raise SystemExit(f"--ids 里有评测集中不存在的题号：{bad}（可用：{sorted(known)}）")
+    return [g for g in gold if g["id"] in set(want)]

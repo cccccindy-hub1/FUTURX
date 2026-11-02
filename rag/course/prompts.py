@@ -53,12 +53,13 @@ SELECT_FORCE_FINISH = "这是你最后一次回复机会（共 {max_steps} 次�
 FILTER_SYSTEM = """给下面每个教材子块定一个等级，表示它对回答学生问题的作用。只依据子块内容判断，不依据你自己的知识。
 等级：
 - direct：子块本身包含回答所需的定义、论述、例子或数据，引用它就能回答问题的某一部分；
-- background：不直接回答，但理解答案离不开它，例如问题所依赖的前提概念；
-- irrelevant：与问题无关，或只是出现了相同词语。
-拿不准时取相邻两档中较低的一档。
+  问题问构成、组成、环节、类型、方法、机制、区别时，讲其中任一组成部分、环节、类型、方法或机制的段落都判 direct，即使它只讲了其中一个；
+- background：与问题主题相关，但不直接回答，例如问题所依赖的前提概念、上位或相邻概念；拿不准是否相关时判 background，不要判 irrelevant；
+- irrelevant：只有明显在讲别的主题，或只是碰巧出现了相同词语时才判 irrelevant。
+direct 与 background 之间拿不准时取 background。
 只列出 direct 和 background 的编号，irrelevant 的不要列出；不写理由。输出严格 JSON：
 {{"direct":["S1","S4"],"background":["S2"]}}
-每个编号最多出现一次；不得输出输入中没有的编号；都无关时输出 {{"direct":[],"background":[]}}。"""
+每个编号最多出现一次；不得输出输入中没有的编号；都明显无关时输出 {{"direct":[],"background":[]}}。"""
 
 # 不支持 response_format=json_object 时追加
 FILTER_JSON_FALLBACK = "\n只输出这个 JSON 对象本身，不要加解释、不要加 Markdown 代码围栏。"
@@ -71,7 +72,8 @@ ANSWER_SYSTEM = """你是《数据要素》课程助教。只依据下面给出�
 - 回答要精炼：先用一两句话直接回答问题，再按需分点补充；每个要点不超过两三句，不复述材料原文，不写引言和总结段；
   问题要求列举时列全要点、每点一句；全文一般不超过 400 字；
 - 教材内容的每个论断后用材料里实际出现的编号标注依据，如 [S2]；
-- 若提供了【本体结构信息】，其中的关系用 [本体] 标注，写成一般陈述即可；
+- 若提供了【本体结构信息】，可把其中的关系写成一般陈述，但不要为它加任何方括号标记（不要写 [本体]、[onto1]、[onto2] 等）；
+  只有教材原文的论断才用 [S#] 编号标注；
 - 不要写没有具体原因的套话式免责（如“以上仅供参考”“这部分不是教材原文”“材料未必完整”），结尾不要附加说明引用方式的话；
 - 有具体原因时，用一句话说明清楚，再给出教材里最接近的内容，不要因此拒答：
   · 教材只讲了相近或上位概念（例如只讲“数据市场”而没讲“数据要素市场”）时，先说明教材讲的是哪一个，再据此作答；
@@ -91,7 +93,7 @@ ANSWER_ONTOLOGY = """
 {ontology}"""
 
 ANSWER_PASSAGE = "[{ref}] {path}\n{text}"
-ANSWER_RELATION = "{subject}（{subject_id}）—{predicate}→ {object}（{object_id}）[{view}]"
+ANSWER_RELATION = "{subject}—{predicate}→{object}"
 
 TOOL_SPECS = [
     {"type": "function", "function": {

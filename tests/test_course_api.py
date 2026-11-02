@@ -45,7 +45,9 @@ def test_ask_full_run_returns_pipeline_result(ctx):
     body = r.json()
     assert body["question"] == "什么是数据要素？" and body["fallback"] is None
     assert [c["chunk_id"] for c in body["citations"]] == [keep.chunk_id]
-    assert body["answer"]["text"] == f"数据要素是参与价值创造的数据资源[{keep.chunk_id}]。"
+    assert body["answer"]["text"] == "数据要素是参与价值创造的数据资源[1]。"                       # 学生可见正文只有序号，没有 chunk_id
+    assert keep.chunk_id not in body["answer"]["text"]
+    assert body["answer"]["sources"] == [{"n": 1, "chunk_id": keep.chunk_id, "path": body["answer"]["sources"][0]["path"]}]
     assert [c["step"] for c in body["trace"]["calls"]] == ["select", "select", "filter", "answer"]
     assert body["trace"]["totals"]["calls"] == 4 and llm_.script == []
 

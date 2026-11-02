@@ -76,8 +76,8 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
     """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。
 
     on_event(dict)：流式输出用的回调（rag.unified 的 /auto/ask/stream）。依次收到
-    stage=select / filter 的进度、materials（作答材料 S# → chunk_id 与章节路径）与作答正文的 delta 片段；
-    不给时行为与原来完全一样。"""
+    stage=select / filter 的进度、作答正文的 delta 片段（学生可见文本：[S#] 已实时改成按首次出现编号的 [n]），
+    以及每块第一次被引用时的 materials（n、chunk_id、章节路径）；不给时行为与原来完全一样。"""
     emit = on_event or (lambda _e: None)
     max_chars = max_chars or config.COURSE_RECALL_MAX_CHARS
     trace = Trace()
@@ -152,17 +152,19 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
 
     # Step 4
     relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
-    if on_event:
-        emit({"type": "materials", "materials": [{"ref": f"S{n}", "chunk_id": k.chunk_id, "path": " › ".join(k.path)}
-                                                 for n, k in enumerate(kept, 1)]})
     ar = answer_question(question, kept, relations, traced,
-                         on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None)
+                         on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None,
+                         on_source=(lambda e: emit({"type": "materials", "n": e["n"], "chunk_id": e["chunk_id"],
+                                                    "path": e["path"]})) if on_event else None)
     trace.stages["answer"] = {"kept": len(kept), "kept_grades": {g: sum(fr.grade_of(k.chunk_id) == g for k in kept)
                                                                  for g in ("direct", "background")},
                               "capped": capped, "relations": len(relations),
                               "invalid_citations": ar.invalid_citations, "warnings": ar.warnings}
     res["answer"] = ar.to_dict()
-    res["citations"] = [{"chunk_id": c, "path": next(k.path for k in kept if k.chunk_id == c)} for c in ar.citations]
+    # citations：与 answer.sources 同序（序号 1..n），保留 chunk_id 供评测脚本使用；path 仍是列表形式（向后兼容）
+    res["citations"] = [{"n": src["n"], "chunk_id": src["chunk_id"], "path": next(k.path for k in kept if k.chunk_id == src["chunk_id"])}
+                        for src in ar.sources]
+    res["sources"] = ar.sources
     return res
 
 

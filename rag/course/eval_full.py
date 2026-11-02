@@ -16,7 +16,7 @@ from pathlib import Path
 from .. import config as rc
 from ..eval_router import BJ, in_window
 from . import config
-from .eval_full_report import summarize
+from .eval_full_report import select_ids, summarize
 from .llm import LLMError, LLMNotConfigured, OpenAICompatClient
 from .pipeline import CourseContext, ask, result_to_json
 from .recall_eval import GOLD, key_chunks
@@ -82,6 +82,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-calls", type=int, default=100)
     ap.add_argument("--out", default=str(GOLD.with_name("course_full_eval_result.json")))
+    ap.add_argument("--ids", default="", help="只跑指定题号，逗号分隔（如 r13,r14）；不给则跑全部，其余行为不变")
     a = ap.parse_args()
     if not in_window(datetime.now(BJ)):
         raise SystemExit("当前为北京时间高峰时段，不运行")
@@ -93,7 +94,7 @@ def main() -> None:
     shared = {"calls": 0, "cap": a.max_calls}
     capped = CappedLLM(llm, shared)
     ctx = CourseContext.load()
-    gold = json.load(open(GOLD, encoding="utf-8"))
+    gold = select_ids(json.load(open(GOLD, encoding="utf-8")), a.ids)
     for g in gold:                                      # 关键句 -> 子块
         for m in g["must_recall"]:
             m["chunks"] = key_chunks(ctx, m["key"])

@@ -627,7 +627,7 @@ def test_filter_prompt_has_short_refs_and_no_recall_reason_or_chunk_id(ctx):
     assert it.chunk_id not in user and "de:" not in user
     for leaked in ("召回原因", "edge_evidence", "mention", "dependsOn", "supports", "C01-"):
         assert leaked not in user
-    assert "较低的一档" in sysm and "拿不准时判 true" not in sysm
+    assert "拿不准是否相关时判 background" in sysm and "拿不准时判 true" not in sysm
 
 
 # ---------------------------------------------------------------- Step 4：作答与引用
@@ -642,9 +642,9 @@ def test_answer_uses_short_refs_and_maps_back_to_chunk_ids(ctx):
     assert "[S1]" in user and "[S2]" in user and a not in user and b not in user       # LLM 只看到短编号
     assert ar.citations == [a, b] and ar.refs == {"S1": a, "S2": b}
     assert set(ar.invalid_citations) == {"S9", a, "de:fake:000"}                        # 越界编号、绕过编号直接写 chunk_id、编造 ID 都不信任
-    assert f"[{a}]" in ar.text and f"[{b}]" in ar.text                                   # 有效 [S#] 换回 [chunk_id]
+    assert "[1]" in ar.text and "[2]" in ar.text and a not in ar.text and b not in ar.text   # 有效 [S#] 改成序号，正文不含 chunk_id
     assert "[S9]" not in ar.text and "de:fake:000" not in ar.text
-    assert "[本体]" in ar.text and ar.uses_ontology and "[第一章 › 第一节]" in ar.text
+    assert "[本体]" not in ar.text and ar.uses_ontology and "[第一章 › 第一节]" in ar.text   # 本体标记不留给学生；章节路径等普通方括号保留
 
 
 def test_answer_citations_only_from_kept_chunks(ctx):
@@ -688,7 +688,7 @@ def test_pipeline_full_run_native(ctx):
     res = pipeline.ask("什么是数据要素？", ctx=ctx, llm=llm_)
     assert res["fallback"] is None and res["answer"]["citations"] == [keep.chunk_id]
     assert [c["chunk_id"] for c in res["citations"]] == [keep.chunk_id]
-    assert f"[{keep.chunk_id}]" in res["answer"]["text"] and "[S1]" not in res["answer"]["text"]   # 输出时换回 chunk_id
+    assert "[1]" in res["answer"]["text"] and "[S1]" not in res["answer"]["text"] and keep.chunk_id not in res["answer"]["text"]   # 输出时换成序号
     assert [s["concept_id"] for s in res["selected_concepts"]] == ["C01-0001", "C01-0003"]
     assert {r["chunk_id"] for r in res["recalled"]} == {i.chunk_id for i in items}
     assert [c["step"] for c in res["trace"].calls] == ["select", "select", "filter", "answer"]
@@ -891,7 +891,7 @@ def test_prompt_contents_follow_review():
     assert "最多有 6 次回复机会" in sel and "换说法" in sel and "泛词不要选" in sel
     assert "召回原因" not in prompts.FILTER_ITEM and "{reasons}" not in prompts.FILTER_ITEM
     assert "chunk_id" not in prompts.FILTER_SYSTEM and "chunk_id" not in prompts.ANSWER_SYSTEM
-    assert "[S#]" in prompts.ANSWER_SYSTEM and "较低的一档" in prompts.FILTER_SYSTEM and "拿不准时判 true" not in prompts.FILTER_SYSTEM
+    assert "[S#]" in prompts.ANSWER_SYSTEM and "拿不准是否相关时判 background" in prompts.FILTER_SYSTEM and "拿不准时判 true" not in prompts.FILTER_SYSTEM
     assert all(g in prompts.FILTER_SYSTEM for g in ("direct", "background", "irrelevant"))
 
 

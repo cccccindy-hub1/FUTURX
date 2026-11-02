@@ -76,7 +76,7 @@ def main() -> None:
             ctr = (out.get("trace") or {}).get("course") or {}
             row.update(route=out["route"], status=out["status"], answer=out["answer"],
                        citations=[c.get("chunk_id") for c in out["sources"]],
-                       citation_paths=[c.get("path") for c in out["sources"]],
+                       citation_paths=[c["path"].split(" › ") if isinstance(c.get("path"), str) else c.get("path") for c in out["sources"]],  # sources.path 是字符串；拆回列表与旧结果同形
                        fallback=course.get("fallback"),
                        selected_concepts=course.get("selected_concepts"),
                        steps=[c["step"] for c in ctr.get("calls", [])],

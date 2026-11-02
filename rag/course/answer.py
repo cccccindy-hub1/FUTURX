@@ -1,7 +1,8 @@
 """Step 4：只依据筛选后的子块作答；引用只来自这些子块；区分教材原文与本体结构信息。
 
-LLM 看到并使用的是短编号 [S1][S2]…；本模块把有效的 [S#] 换回 chunk_id 后再输出，
-编号不在材料内的引用从正文移除并记录。
+LLM 看到并使用的是短编号 [S1][S2]…。对学生可见的正文里，[S#] 改成按首次出现顺序编号的 [1][2]…
+（CitationRewriter：同一块用同一序号，相邻的重复引用合并；非教材块的标记如 [本体]、[onto1] 一律去掉）；
+chunk_id 只保留在 sources / citations / trace 里，正文不出现。编号不在材料内的引用从正文移除并记录。
 """
 from __future__ import annotations
 
@@ -26,18 +27,19 @@ INSUFFICIENT_PHRASE = "教材材料不足以回答"
 
 @dataclass
 class AnswerResult:
-    text: str = ""                                            # 已把 [S#] 换回 [chunk_id]
-    citations: list[str] = field(default_factory=list)        # chunk_id，按首次出现顺序，仅限 kept 子块
+    text: str = ""                                            # 学生可见正文：[S#] 已改成按首次出现编号的 [n]，不含 chunk_id
+    citations: list[str] = field(default_factory=list)        # chunk_id，按首次出现顺序（= 序号 1..n），仅限 kept 子块
     invalid_citations: list[str] = field(default_factory=list)  # 答案里引用了材料外的编号（已从文本中移除）
     uses_ontology: bool = False
     insufficient: bool = False
     refs: dict[str, str] = field(default_factory=dict)        # S# -> chunk_id（本次提供给 LLM 的全部材料）
     warnings: list[str] = field(default_factory=list)         # 命中的免责短语（不改正文）
+    sources: list[dict] = field(default_factory=list)         # [{n, chunk_id, path}]，按序号排列，只含正文实际引用过的块
 
     def to_dict(self) -> dict:
         return {"text": self.text, "citations": self.citations, "invalid_citations": self.invalid_citations,
                 "uses_ontology": self.uses_ontology, "insufficient": self.insufficient, "refs": self.refs,
-                "warnings": self.warnings}
+                "warnings": self.warnings, "sources": self.sources}
 
 
 def disclaimer_warnings(text: str) -> list[str]:
@@ -47,67 +49,184 @@ def disclaimer_warnings(text: str) -> list[str]:
 
 def render_relations(relations: list[dict]) -> str:
     return "\n".join(prompts.ANSWER_RELATION.format(
-        subject=r["subject"], subject_id=r["subject_id"], predicate=r.get("predicate_label") or r["predicate_id"],
-        object=r["object"], object_id=r["object_id"], view=r["view"]) for r in relations)
+        subject=r["subject"], predicate=r.get("predicate_label") or r["predicate_id"], object=r["object"])
+        for r in relations)
 
 
-def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str], list[str], bool]:
-    """把 [S#] 换回 [chunk_id]；编号不在 refs 的 [S#] 以及直接写出的 chunk_id（de:…）移除并记录。
+class CitationRewriter:
+    """把模型输出里的 [S#] 改成学生可见的序号 [n]；流式与非流式共用，保证两边正文逐字一致。
 
-    返回 (清理后文本, 有效引用 chunk_id 列表, 无效引用列表, 是否使用本体标记)。
-    章节路径等普通方括号内容（不是 S# 也不是 de:…）原样保留。
+    - 序号按「首次出现」分配，同一块始终用同一个序号；
+    - 相邻的重复引用合并：连续引用同一块时只保留一个（中间只隔空白、标点或其它被去掉的标记也算相邻）；
+    - 编号不在 refs 的 [S#]、占位符 [S#]、直接写出的 chunk_id（de:…）、[本体] / [onto1] / [onto2] 这类非教材块标记，
+      一律从正文去掉（前两类、chunk_id 记入 invalid_citations；本体标记只记 uses_ontology）；
+    - 章节路径等普通方括号内容原样保留；
+    - 流式：feed() 逐片喂入，返回可以立即输出的文本；一个 [S12] 被拆在两个分片时，未闭合的 "[…" 缓冲到下一片，
+      最长缓冲 MAX_PENDING 个字符，超过就当作普通文本放出（避免正文里一个孤立的 "[" 把后面整段扣住）。
+    - on_assign(n, chunk_id)：第一次给某块分配序号时回调（流式用它发 materials 事件）。
     """
-    valid: list[str] = []
-    invalid: list[str] = []
-    uses_ontology = False
-    text = (text or "").translate(_BRACKET_MAP)
 
-    def repl(m: re.Match) -> str:
-        nonlocal uses_ontology
-        tag = m.group(1).strip()
-        if tag == ONTOLOGY_TAG:
-            uses_ontology = True
-            return m.group(0)
+    MAX_PENDING = 130
+
+    def __init__(self, refs: dict[str, str], on_assign=None):
+        self.refs, self.on_assign = refs, on_assign
+        self.numbers: dict[str, int] = {}            # chunk_id -> 序号（按首次出现）
+        self.invalid: list[str] = []
+        self.uses_ontology = False
+        self._buf = ""                               # 尚未能确定的尾部（以 "[" 开头、还没闭合）
+        self._last_cited: str | None = None          # 紧邻的上一处输出是否为引用（用于相邻合并）
+        self._out_tail = ""                          # 已输出文本的尾部，用于判断「相邻」
+        self._rendered: list[str] = []               # 已输出的全部学生可见文本
+        self._held = ""                              # 暂扣的尾部空白：等看到后面是不是会被整体去掉的标记再决定输不输出
+
+    # ---- 对外 ----
+    def feed(self, chunk: str) -> str:
+        self._buf += (chunk or "").translate(_BRACKET_MAP)
+        return self._emit(self._drain(final=False))
+
+    def finish(self) -> str:
+        out = self._drain(final=True)
+        self._held = ""                                # 文末的空白不输出
+        return self._emit(out)
+
+    def _emit(self, text: str) -> str:
+        self._rendered.append(text)
+        return text
+
+    @property
+    def rendered_all(self) -> str:
+        return "".join(self._rendered)
+
+    @property
+    def citations(self) -> list[str]:
+        return sorted(self.numbers, key=self.numbers.get)
+
+    # ---- 内部 ----
+    def _drain(self, final: bool) -> str:
+        out = []
+        buf = self._buf
+        pos = 0
+        while pos < len(buf):
+            lb = buf.find("[", pos)
+            if lb < 0:
+                out.append(self._plain(buf[pos:]))
+                pos = len(buf)
+                break
+            if lb > pos:
+                out.append(self._plain(buf[pos:lb]))
+                pos = lb
+            rb = buf.find("]", lb + 1)
+
+            if rb < 0:                                # 还没闭合
+                if final or len(buf) - lb > self.MAX_PENDING:
+                    out.append(self._plain(buf[lb:lb + 1]))      # 当作普通 "["，继续往后扫
+                    pos = lb + 1
+                    continue
+                break
+            inner = buf[lb + 1:rb]
+            if "\n" in inner or "[" in inner or len(inner) > 120:     # 不是合法的 [...] 引用样式：当普通文本
+                out.append(self._plain(buf[lb:lb + 1]))
+                pos = lb + 1
+                continue
+            piece = self._tag(inner.strip(), buf[lb:rb + 1])
+            if piece:
+                out.append(self._held + piece)         # 有输出：暂扣的空白在它前面补回去
+            self._held = ""                            # 无输出（被整体去掉）：暂扣的空白一并丢弃
+            pos = rb + 1
+        self._buf = buf[pos:]
+        return "".join(out)
+
+    def _plain(self, text: str) -> str:
+        if text.strip(" \t，。、；：,.;:"):               # 有实质内容的普通文本打断「相邻」
+            self._last_cited = None
+        text = self._held + text
+        self._held = ""
+        body = text.rstrip(" \t")
+        if len(body) != len(text):                     # 尾部空白扣住：流式下后面可能紧跟 [本体] 这类会被整体去掉的标记
+            self._held = text[len(body):]
+        self._out_tail = (self._out_tail + body)[-8:]
+        return body
+
+    def _tag(self, tag: str, raw: str) -> str:
+        if tag == ONTOLOGY_TAG or re.fullmatch(r"onto[12]?", tag, flags=re.I):
+            self.uses_ontology = True
+            return ""
+        if tag in ("S#", "S＃"):                       # 模型照抄提示词里的占位符：直接去掉，不计入无效引用
+            return ""
         sm = _REF_RE.match(tag)
         if sm:
             ref = f"S{int(sm.group(1))}"
-            cid = refs.get(ref)
+            cid = self.refs.get(ref)
             if cid is None:
-                if ref not in invalid:
-                    invalid.append(ref)
+                if ref not in self.invalid:
+                    self.invalid.append(ref)
                 return ""
-            if cid not in valid:
-                valid.append(cid)
-            return f"[{cid}]"
-        if tag in ("S#", "S＃"):           # 模型照抄提示词里的占位符：直接去掉，不计入无效引用
+            new = cid not in self.numbers
+            if new:
+                self.numbers[cid] = len(self.numbers) + 1
+                if self.on_assign:
+                    self.on_assign(self.numbers[cid], cid)
+            if self._last_cited == cid:                # 相邻重复引用同一块：合并
+                return ""
+            self._last_cited = cid
+            return f"[{self.numbers[cid]}]"
+        if tag.startswith("de:"):                      # 绕过编号直接写 chunk_id：一律不信任
+            if tag not in self.invalid:
+                self.invalid.append(tag)
             return ""
-        if tag.startswith("de:"):          # 绕过编号直接写 chunk_id：一律不信任
-            if tag not in invalid:
-                invalid.append(tag)
-            return ""
-        return m.group(0)
+        self._last_cited = None
+        return raw
 
-    return _CITE_RE.sub(repl, text), valid, invalid, uses_ontology
+
+def sanitize_citations(text: str, refs: dict[str, str]) -> tuple[str, list[str], list[str], bool]:
+    """一次性版本：返回 (学生可见正文, 有效引用 chunk_id 按首次出现顺序, 无效引用, 是否出现过本体标记)。"""
+    rw = CitationRewriter(refs)
+    rw.feed(text or "")
+    rw.finish()
+    out = rw.rendered_all
+    return out, rw.citations, rw.invalid, rw.uses_ontology
+
+
+def source_entry(n: int, chunk: Recalled) -> dict:
+    """学生可见的来源条目：序号 n、chunk_id（给评测/调试）、章名与小节路径。"""
+    return {"n": n, "chunk_id": chunk.chunk_id, "path": " › ".join(chunk.path)}
 
 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,
-                    model: str | None = None, on_delta=None) -> AnswerResult:
-    """on_delta：给了就流式生成（客户端有 chat_stream 时），正文片段原样（含 [S#]）逐段回调；返回值与非流式相同。"""
+                    model: str | None = None, on_delta=None, on_source=None) -> AnswerResult:
+    """on_delta(text)：流式时逐段回调「学生可见」文本（[S#] 已实时改成 [n]，一个被拆在两片里的 [S12] 会先缓冲到闭合）；
+    on_source(entry)：某块第一次被引用、分配序号时回调（entry 同 source_entry）。返回值与非流式相同。"""
     model = model or config.COURSE_ANSWER_MODEL
     refs = {f"S{i + 1}": k.chunk_id for i, k in enumerate(kept)}
+    by_id = {k.chunk_id: k for k in kept}
     passages = "\n\n".join(
         prompts.ANSWER_PASSAGE.format(ref=ref, path=" › ".join(k.path), text=k.text)
         for (ref, _cid), k in zip(refs.items(), kept)) or "（无）"
     messages = [{"role": "system", "content": prompts.ANSWER_SYSTEM},
                 {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
                  + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")}]
+    rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(n, by_id[cid]))) if on_source else None)
+
+    def push(raw: str) -> None:
+        shown = rw.feed(raw)
+        if shown and on_delta:
+            on_delta(shown)
+
     stream = getattr(llm, "chat_stream", None) if on_delta else None
     if stream:
-        res = stream("answer", messages, model=model, on_delta=on_delta)
+        res = stream("answer", messages, model=model, on_delta=push)
+        tail = rw.finish()
+        if tail and on_delta:
+            on_delta(tail)
+        text = rw.rendered_all
     else:
         res = llm.chat("answer", messages, model=model)
-        if on_delta and res.content:
-            on_delta(res.content)
-    text, valid, invalid, onto = sanitize_citations(res.content, refs)
-    return AnswerResult(text=text.strip(), citations=valid, invalid_citations=invalid, uses_ontology=onto,
-                        insufficient=INSUFFICIENT_PHRASE in text, refs=refs, warnings=disclaimer_warnings(text))
+        push(res.content or "")
+        tail = rw.finish()
+        if tail and on_delta:
+            on_delta(tail)
+        text = rw.rendered_all
+    sources = [source_entry(rw.numbers[c], by_id[c]) for c in rw.citations]
+    return AnswerResult(text=text.strip(), citations=rw.citations, invalid_citations=rw.invalid,
+                        uses_ontology=rw.uses_ontology, insufficient=INSUFFICIENT_PHRASE in text, refs=refs,
+                        warnings=disclaimer_warnings(text), sources=sources)

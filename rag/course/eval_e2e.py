@@ -2,7 +2,7 @@
 
 规则：默认仅非高峰（北京时间高峰为 09–12、14–18 点，价格翻倍；--allow-peak 显式放开，结果中记录）；每题 1 遍、不重试（SDK 自动重试已关）；失败记失败；
 连续 2 题 LLMError 即停；每次调用前检查非高峰窗口；总调用硬上限 max_calls，到上限立即停止。结果只含异常类型名，不含 key。
-用法：python -m rag.course.eval_e2e [--max-calls 45] [--out rag/eval_data/course_e2e_eval_result.json] [--allow-peak]
+用法：python -m rag.course.eval_e2e [--max-calls 45] [--out rag/eval_data/course_e2e_eval_result.json] [--allow-peak] [--ids r13,r14]
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from ..router import build_router_client
 from ..unified import UnifiedService
 from . import config
 from .eval_full import MAX_LLM_FAIL_STREAK, CapReached, CappedLLM
-from .eval_full_report import summarize
+from .eval_full_report import select_ids, summarize
 from .llm import LLMError, LLMNotConfigured, OpenAICompatClient
 from .pipeline import CourseContext
 from .recall_eval import GOLD, key_chunks
@@ -68,6 +68,7 @@ def main() -> None:
     ap.add_argument("--max-calls", type=int, default=45)
     ap.add_argument("--out", default=str(GOLD.with_name("course_e2e_eval_result.json")))
     ap.add_argument("--allow-peak", action="store_true", help="允许在北京时间高峰时段运行（价格翻倍）")
+    ap.add_argument("--ids", default="", help="只跑指定题号，逗号分隔（如 r13,r14,r16,r17）；不给则跑全部，其余行为不变")
     a = ap.parse_args()
     if not a.allow_peak and not in_window(datetime.now(BJ)):
         raise SystemExit("当前为北京时间高峰时段，不运行（确需运行加 --allow-peak）")
@@ -83,7 +84,7 @@ def main() -> None:
     shared = {"calls": 0, "cap": a.max_calls, "allow_peak": a.allow_peak}
     ctx = CourseContext.load()
     svc = UnifiedService(router_client=CappedLLM(rclient, shared), course_ctx=ctx, course_llm=CappedLLM(cllm, shared))
-    gold = json.load(open(GOLD, encoding="utf-8"))
+    gold = select_ids(json.load(open(GOLD, encoding="utf-8")), a.ids)
     for g in gold:
         for m in g["must_recall"]:
             m["chunks"] = key_chunks(ctx, m["key"])
@@ -103,7 +104,7 @@ def main() -> None:
                       "select_reasoning": config.COURSE_REASONING["select"], "bm25_topk": config.COURSE_BM25_TOPK,
                       "filter_reasoning": config.COURSE_REASONING["filter"], "answer_reasoning": config.COURSE_REASONING["answer"],
                       "filter_skip_max": config.COURSE_FILTER_SKIP_MAX, "book_version": config.BOOK_VERSION,
-                      "allow_peak": a.allow_peak, "select_model": config.COURSE_SELECT_MODEL,
+                      "allow_peak": a.allow_peak, "ids": a.ids or "all", "select_model": config.COURSE_SELECT_MODEL,
                       "filter_model": config.COURSE_FILTER_MODEL, "answer_model": config.COURSE_ANSWER_MODEL,
                       "answer_max_chunks": config.COURSE_ANSWER_MAX_CHUNKS,
                       "filter_max_chunks": config.COURSE_FILTER_MAX_CHUNKS, "model": config.COURSE_LLM_MODEL,
