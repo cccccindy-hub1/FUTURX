@@ -353,6 +353,29 @@ def test_build_app_injects_course_and_survives_degradation(monkeypatch):
     assert out["status"] == "unavailable"
 
 
+def test_build_app_survives_missing_thesis_store(monkeypatch, caplog):
+    import logging
+
+    from rag import serve
+
+    def boom(**kw):
+        raise RuntimeError(f"Collection [nlp_degree_thesis] does not exist /secret/{SECRET}")
+    monkeypatch.setattr(serve, "RAGService", boom)
+    ctx, llm = object(), object()
+    monkeypatch.setattr(serve, "load_course_backend", lambda: (ctx, llm))
+    with caplog.at_level(logging.WARNING):
+        app = serve.build_app()                  # 论文库缺失，课程库照常启动
+    assert SECRET not in caplog.text and "RuntimeError" in caplog.text
+    assert app.state.service is None and app.state.unified.rag is None
+    assert app.state.unified.course_ctx is ctx
+    c = TestClient(app)
+    assert c.get("/health").json() == {"status": "ok"}
+    assert c.post("/ask", json={"question": "文献综述怎么写"}).status_code == 503
+    assert c.post("/ask/stream", json={"question": "文献综述怎么写"}).status_code == 503
+    out = app.state.unified.__class__(router_client=route_llm("thesis")).ask("文献综述怎么写")
+    assert out["status"] == "unavailable"
+
+
 # ---------------------------------------------------------------- 路由评测脚本（mock）
 
 def test_eval_router_single_call_no_retry_and_summary():
