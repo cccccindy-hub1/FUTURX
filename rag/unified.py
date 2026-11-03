@@ -1,7 +1,7 @@
 """统一入口：POST /auto/ask —— 先路由，再分发到对应知识库。现有 /ask、/v1/*、/course/ask 不变。
 
 - off_topic：固定拒答文案，不检索、不调用任何作答模型；
-- policy：政策检索尚未上线，返回占位（接口与路由已打通）；
+- policy：政策库（agentic：点名直达文件 / 条 → BM25 ≤15 块 → 模型选块 1 次 → 作答 1 次）；
 - course：走 rag.course.pipeline.ask（需要课程上下文与课程 LLM，未加载时返回 unavailable）；
   试卷库已加载时，另附 practice：本题选中概念对应的 1–3 道【基础】题（只给题目 ID 与题干，不额外调用 LLM），
   供前端追问「要不要来几道基础题」；
@@ -9,7 +9,7 @@
 - thesis：走 rag.adaptive.AdaptiveRAG（simple / complex 由路由给出）；
 - case：判例库（agentic：点名直达 / BM25 初筛 ≤12 案 / 模型选案 1 次 / 作答 1 次；「第 X 章有哪些判例」列表模式不调用模型）；
 - quote：名言库（BM25 初筛段落 / 模型挑段落编号 1 次，程序原文照录，不再调用模型）；
-- routes 有两个库（仅 course / case / quote 之间）：各库并行检索、各自筛选，只调**一次**作答（rag.combined）。
+- routes 有两个库（仅 course / case / quote / policy 之间）：各库并行检索、各自筛选，只调**一次**作答（rag.combined）。
 单库判例、名言不流式，结果放进 done；组合问答只有一次作答，照常流式，materials 事件带库别 kind。
 返回里带 route（= routes[0]）/ routes / complexity / reason / router 耗时 / 各路径 trace，便于调试。
 """
@@ -45,12 +45,13 @@ class _Cancelled(Exception):
 
 CASE_UNAVAILABLE = "判例库未加载（服务器上缺少判例原始 docx，见 CASE_DOC）。"
 PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
+POLICY_UNAVAILABLE = "政策库未加载（服务器上缺少数据政策汇编 docx，见 POLICY_DOC）。"
 QUOTE_UNAVAILABLE = "名言库未加载（服务器上缺少名言合集 docx，见 QUOTE_DOC）。"
 
 
 class UnifiedService:
     def __init__(self, *, rag=None, router_client=None, course_ctx=None, course_llm=None,
-                 case_index=None, quote_index=None, lib_llm=None, pick_model=None, answer_model=None, exam_bank=None):
+                 case_index=None, quote_index=None, policy_index=None, lib_llm=None, pick_model=None, answer_model=None, exam_bank=None):
         """case_index / quote_index：启动时从 docx 读入的内存索引（rag.cases.retrieval.CaseIndex / rag.quotes.retrieval.QuoteIndex），
         不用向量库；lib_llm：判例 / 名言（以及后面的政策）选择与作答用的胜算云 OpenAICompatClient（缺省沿用课程库的 course_llm，绝不用论文库的 key）；
         pick_model：选案 / 挑段模型（Flash、关闭思考）；answer_model：作答模型（Pro、思考 low）。没有传入索引时，该路由返回 unavailable，不影响其它库。"""
@@ -63,15 +64,18 @@ class UnifiedService:
         self.lib_llm = lib_llm or course_llm
         self.pick_model = pick_model or cc.LIB_PICK_MODEL
         self.answer_model = answer_model or cc.LIB_ANSWER_MODEL
-        self.case_index, self.quote_index = case_index, quote_index
+        self.case_index, self.quote_index, self.policy_index = case_index, quote_index, policy_index
         self.case_refs = case_index.refs if case_index is not None else []
-        self.case_retriever = self.quote_retriever = None
+        self.case_retriever = self.quote_retriever = self.policy_retriever = None
         if case_index is not None and self.lib_llm is not None:
             from .cases.retrieval import CaseRetriever
             self.case_retriever = CaseRetriever(case_index, self.lib_llm, model=self.pick_model)
         if quote_index is not None and self.lib_llm is not None:
             from .quotes.retrieval import QuoteRetriever
             self.quote_retriever = QuoteRetriever(quote_index, self.lib_llm, model=self.pick_model)
+        if policy_index is not None and self.lib_llm is not None:
+            from .policy.retrieval import PolicyRetriever
+            self.policy_retriever = PolicyRetriever(policy_index, self.lib_llm, model=self.pick_model)
 
     # ---------------------------------------------------------------- 可用性
     def _available(self, routes: list[str]) -> list[str]:
@@ -83,6 +87,8 @@ class UnifiedService:
             elif r == "case" and (self.case_retriever is None):
                 bad.append(r)
             elif r == "quote" and (self.quote_retriever is None):
+                bad.append(r)
+            elif r == "policy" and (self.policy_retriever is None):
                 bad.append(r)
         return bad
 
@@ -99,7 +105,7 @@ class UnifiedService:
         elif d.route == "off_topic":
             out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
         elif d.route == "policy":
-            out.update(status="not_available", answer=config.ROUTER_POLICY_TEXT)
+            self._policy(question, out, trace)
         elif d.route == "course":
             self._course(question, out, trace)
         elif d.route == "exam":
@@ -140,7 +146,7 @@ class UnifiedService:
                 elif d.route == "off_topic":
                     out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
                 elif d.route == "policy":
-                    out.update(status="not_available", answer=config.ROUTER_POLICY_TEXT)
+                    self._policy(question, out, trace)    # 单库政策：不流式，结果放进 done
                 elif d.route == "course":
                     self._course(question, out, trace)        # 课程库未加载：返回 unavailable
                 elif d.route == "exam":
@@ -249,11 +255,28 @@ class UnifiedService:
                    sources=[{"n": k, "kind": "quote", "chunk_id": p.speech.speech_id, "path": source_line(p.speech),
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
 
+    # ---------------------------------------------------------------- 政策（单库，不流式）
+    def _policy(self, question, out, trace) -> None:
+        if self.policy_retriever is None:
+            out.update(status="unavailable", answer=POLICY_UNAVAILABLE)
+            return
+        from .policy.retrieval import NOT_FOUND_TEXT, answer_policy
+        got = self.policy_retriever.retrieve(question)
+        trace["policy"] = {"mode": got["mode"], **got["trace"]}
+        if not got["hits"]:
+            out.update(status="insufficient", answer=NOT_FOUND_TEXT, sources=[])        # 没找到：不调用作答模型
+            trace["policy"]["answer_calls"] = 0
+            return
+        t1 = time.perf_counter()
+        ans = answer_policy(question, got["hits"], self.lib_llm, model=self.answer_model)
+        trace["policy"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, removed_quotes=ans.removed_quotes)
+        out.update(answer=ans.text, sources=ans.sources)
+
     # ---------------------------------------------------------------- 组合（各库并行取材，一次作答）
     def _combined(self, question, d, out, trace) -> None:
         bad = self._available(d.routes)
         if bad:
-            names = {"course": "课程库", "case": "判例库", "quote": "名言库"}
+            names = {"course": "课程库", "case": "判例库", "quote": "名言库", "policy": "政策库"}
             out.update(status="unavailable", answer="、".join(names[b] for b in bad) + "服务未加载，暂时无法组合回答。")
             return
         from .combined import answer_combined, gather_materials

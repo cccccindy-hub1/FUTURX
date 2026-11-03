@@ -436,12 +436,12 @@ def test_existing_routes_unchanged_by_the_new_dispatch(cctx):
     assert llm.steps() == ["select", "filter", "answer"] and "combined" not in out["trace"] and "case" not in out["trace"]
     off = svc_with(StepLLM({}), ["off_topic"]).ask("今天天气怎么样")
     pol = svc_with(StepLLM({}), ["policy"]).ask("数据二十条第几条")
-    assert off["status"] == "refused" and off["answer"] == config_text("refusal") and pol["status"] == "not_available"
+    assert off["status"] == "refused" and off["answer"] == config_text("refusal") and pol["status"] == "unavailable"
 
 
 def config_text(kind):
     from rag import config as rc
-    return rc.ROUTER_REFUSAL_TEXT if kind == "refusal" else rc.ROUTER_POLICY_TEXT
+    return rc.ROUTER_REFUSAL_TEXT
 
 
 def test_thesis_route_still_uses_adaptive(cctx):

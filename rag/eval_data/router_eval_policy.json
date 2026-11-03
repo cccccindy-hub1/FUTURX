@@ -1,0 +1,204 @@
+[
+ {
+  "id": "p1",
+  "question": "数据相关政策法规给一个实例",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p2",
+  "question": "数据爬虫有什么判例",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p3",
+  "question": "数据安全法第二十一条规定了什么",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p4",
+  "question": "数据政策的演进分几个阶段",
+  "expected_routes": [
+   "course"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p5",
+  "question": "给我一句名人名言",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p6",
+  "question": "上海有哪些公共数据开放的规定",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p7",
+  "question": "举一个政策法规的例子",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p8",
+  "question": "数据二十条讲了什么",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p9",
+  "question": "深圳经济特区数据条例有哪些规定",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p10",
+  "question": "个人信息保护法第十三条是什么",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p11",
+  "question": "数据跨境流动有什么规定",
+  "expected_routes": [
+   "policy"
+  ],
+  "expected_route": "policy",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p12",
+  "question": "结合政策法规说明数据确权为什么难",
+  "expected_routes": [
+   "course",
+   "policy"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p13",
+  "question": "结合数据安全法的规定举一个判例",
+  "expected_routes": [
+   "case",
+   "policy"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p14",
+  "question": "数据政策的传导路径有哪些",
+  "expected_routes": [
+   "course"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p15",
+  "question": "如何对数据政策进行评估",
+  "expected_routes": [
+   "course"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p16",
+  "question": "给我一句总书记谈数字经济的名言",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p17",
+  "question": "微博诉云智联案是怎么判的",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p18",
+  "question": "数据不正当竞争的案例有哪些",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p19",
+  "question": "论文里怎么引用数据安全法",
+  "expected_routes": [
+   "thesis"
+  ],
+  "expected_route": "thesis",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ },
+ {
+  "id": "p20",
+  "question": "今天天气怎么样",
+  "expected_routes": [
+   "off_topic"
+  ],
+  "expected_route": "off_topic",
+  "expected_count": 1,
+  "note": "政策库上线后的边界题"
+ }
+]

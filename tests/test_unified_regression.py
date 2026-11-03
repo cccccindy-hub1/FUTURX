@@ -213,9 +213,10 @@ def test_off_topic_stream_is_route_then_done(ctx):
     assert [e["type"] for e in ev] == ["route", "done"] and ev[-1]["status"] == "refused"
 
 
-def test_policy_placeholder_unchanged(ctx):
-    out = make(ctx, True, route_client(["policy"]), ScriptedLLM([])).ask("数据二十条第几条规定")
-    assert out["status"] == "not_available" and out["answer"] == config.ROUTER_POLICY_TEXT
+def test_policy_route_without_the_policy_library_is_unavailable_and_touches_no_other_library(ctx):
+    llm = ScriptedLLM([])
+    out = make(ctx, True, route_client(["policy"]), llm).ask("数据二十条第几条规定")
+    assert out["status"] == "unavailable" and "政策库未加载" in out["answer"] and llm.calls == []
 
 
 # ---------------------------------------------------------------- 路由本身：旧格式、旧字段、旧 40 题

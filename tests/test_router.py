@@ -146,10 +146,12 @@ def test_router_failure_on_irrelevant_question_still_refuses():
     assert out["status"] == "refused" and out["trace"]["router"]["source"] == "rules_refuse"
 
 
-def test_policy_returns_placeholder():
+def test_policy_without_the_library_loaded_is_unavailable_not_a_placeholder():
     svc = UnifiedService(rag=Boom(), router_client=route_llm("policy"))
     out = svc.ask("数据二十条讲了什么")
-    assert out["route"] == "policy" and out["status"] == "not_available" and "尚未上线" in out["answer"]
+    assert out["route"] == "policy" and out["status"] == "unavailable" and "政策库未加载" in out["answer"] and "尚未上线" not in out["answer"]
+    from rag import config as rc
+    assert not hasattr(rc, "ROUTER_POLICY_TEXT")                                   # 占位文案已删除
 
 
 def test_course_unavailable_without_context():
@@ -806,7 +808,8 @@ def test_old_single_route_json_still_works_and_gives_one_element_routes():
     (["course", "case", "quote"], ["course", "case"]),           # 最多 2 个
     (["course", "course"], ["course"]),                           # 去重
     (["thesis", "case"], ["thesis"]),                             # thesis 不参与组合
-    (["policy", "course"], ["policy"]), (["off_topic", "case"], ["off_topic"]),
+    (["policy", "course"], ["policy", "course"]), (["course", "policy", "case"], ["course", "policy"]),      # 政策参与组合，最多 2 个
+    (["off_topic", "case"], ["off_topic"]), (["exam", "policy"], ["exam"]), (["policy", "thesis"], ["policy"]),
     (["case", "thesis"], ["case"]),                               # 非组合类混进来：不组合，保留可组合的
     (["nonsense", "case"], ["case"]), ("quote", ["quote"])])
 def test_normalize_routes_enforces_combination_rules(raw, expected):
@@ -847,7 +850,7 @@ def test_combined_route_failure_falls_back_to_rules_with_same_shape():
 
 def test_router_prompt_lists_new_categories_and_output_format():
     from rag.router import ROUTER_SYSTEM, CHAPTER_NAMES
-    for w in ("case", "quote", "routes", "count", "chapter", "最多 2 个", "组合", "off_topic、thesis、policy 只能单独出现"):
+    for w in ("case", "quote", "policy", "routes", "count", "chapter", "最多 2 个", "组合", "off_topic、thesis、exam 只能单独出现", "给我一句名人名言"):
         assert w in ROUTER_SYSTEM
     assert all(f"{n} {name}" in ROUTER_SYSTEM for n, name in CHAPTER_NAMES.items())     # 提示词里给出 10 个章名
 
@@ -929,3 +932,38 @@ def test_eval_router_single_call_accepts_routes_and_old_route_format():
     assert (new["pred"], new["pred_routes"], new["error"]) == ("course", ["course", "case"], "")
     assert (old["pred"], old["pred_routes"]) == ("thesis", ["thesis"])
     assert er.single_call(RouterLLM({"routes": ["nonsense"]}), "q")["error"] == "ValueError"
+
+
+# ---------------------------------------------------------------- 政策库上线后的路由边界
+
+def test_refusal_text_lists_the_six_scopes():
+    from rag import config as rc
+    for w in ("学位论文写作与指导", "《数据要素》课程知识点", "课程试题", "数据政策法规", "数据法律判例", "总书记关于数字领域的讲话名言"):
+        assert w in rc.ROUTER_REFUSAL_TEXT
+
+
+def test_policy_boundary_eval_set_rule_fallback_all_correct():
+    rows = json.load(open("rag/eval_data/router_eval_policy.json", encoding="utf-8"))
+    assert len(rows) == 20 and len({r["id"] for r in rows}) == 20
+    assert [r["id"] for r in rows if rule_route(r["question"]).routes != r["expected_routes"]] == []
+
+
+@pytest.mark.parametrize("q,routes", [
+    ("数据相关政策法规给一个实例", ["policy"]), ("数据爬虫有什么判例", ["case"]), ("数据安全法第二十一条规定了什么", ["policy"]),
+    ("数据政策的演进分几个阶段", ["course"]), ("给我一句名人名言", ["quote"]), ("举一个政策法规的例子", ["policy"]),
+    ("上海有哪些公共数据开放的规定", ["policy"]), ("数据二十条讲了什么", ["policy"]), ("论文里怎么引用数据安全法", ["thesis"]),
+    ("结合政策法规说明数据确权为什么难", ["course", "policy"]), ("结合数据安全法的规定举一个判例", ["case", "policy"]),
+    ("数据政策的功能和传导路径是什么", ["course"])])
+def test_rule_fallback_policy_case_course_quote_boundaries(q, routes):
+    assert rule_route(q).routes == routes
+
+
+def test_quote_type_questions_never_fall_to_refusal_in_rules():
+    for q in ("给我一句名人名言", "来一句金句", "总书记有什么原话", "引用一句习近平的话"):
+        assert rule_route(q).routes == ["quote"], q
+
+
+def test_llm_policy_combinations_are_accepted():
+    for routes in (["course", "policy"], ["case", "policy"], ["quote", "policy"]):
+        d = classify("q", routes_llm(routes))
+        assert d.routes == routes and d.combined

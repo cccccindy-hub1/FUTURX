@@ -88,10 +88,9 @@ ROUTER_API_KEY = (os.environ.get("ROUTER_API_KEY") or os.environ.get("COURSE_LLM
 ROUTER_REASONING = os.environ.get("ROUTER_REASONING", "disabled").strip()  # disabled / low / medium / high
 ROUTER_TIMEOUT = float(os.environ.get("ROUTER_TIMEOUT", "15"))             # 秒；超时走规则兜底
 ROUTER_REFUSAL_TEXT = os.environ.get("ROUTER_REFUSAL_TEXT") or (
-    "抱歉，我只能回答以下范围的问题：①学位论文写作与指导（选题、开题、文献综述、研究方法等）；"
-    "②《数据要素》课程知识点；③数据相关政策法规。您的问题不在这些范围内，请换一个相关问题试试。"
+    "抱歉，我只能回答以下范围的问题：①学位论文写作与指导；②《数据要素》课程知识点；③课程试题；"
+    "④数据政策法规；⑤数据法律判例；⑥总书记关于数字领域的讲话名言。您的问题不在这些范围内，请换一个相关问题试试。"
 )
-ROUTER_POLICY_TEXT = os.environ.get("ROUTER_POLICY_TEXT") or "政策检索尚未上线：您的问题已被识别为数据政策法规类，目前暂时无法检索政策库，敬请期待。"
 
 # ---- 原 RAG 自适应（rag.adaptive）：simple 一次检索；低置信度改写重查一次；complex 拆子问题 ----
 # 重排最高分低于该值视为检索不可靠（bge-reranker-v2-m3 经 CrossEncoder 默认 sigmoid，分数 0~1；初始值未经评测校准）

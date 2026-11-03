@@ -313,7 +313,7 @@ def test_sse_course_route_event_sequence(ctx):
 
 
 def test_sse_non_course_routes_are_not_streamed_but_complete_in_done():
-    for route, status in (("off_topic", "refused"), ("policy", "not_available")):
+    for route, status in (("off_topic", "refused"), ("policy", "unavailable")):
         r = _app(UnifiedService(router_client=route_llm(route))).post("/auto/ask/stream", json={"question": "q"})
         ev = _events(r)
         assert [e["type"] for e in ev] == ["route", "done"] and ev[0]["route"] == route

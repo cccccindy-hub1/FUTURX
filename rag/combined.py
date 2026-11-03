@@ -1,9 +1,10 @@
-"""跨库组合问答：一次路由出多个库（最多 2 个，仅 course / case / quote 之间），各库并行检索、各自筛选，**只调一次作答**。
+"""跨库组合问答：一次路由出多个库（最多 2 个，仅 course / case / quote / policy 之间），各库并行检索、各自筛选，**只调一次作答**。
 
 材料分区交给作答模型：
     【教材材料】[S1] …      课程库筛选后的教材块
     【判例材料】[C1] …      判例卡片 + 最相关正文块（头部标签由程序填写，模型不写）
     【讲话原文】[Q1] …      命中的讲话及已挑出的段落——只供引用，不得改写
+    【政策条文】[P1] …      政策库选出的条文块（头部「篇｜文件名｜条号」由程序给出）
 作答要求：先讲知识点，再用判例或讲话印证、说明二者的联系；不分成两个独立回答，不是每个库各出一个答案再拼接。
 
 引用与来源：正文统一编号 [1] [2]（按首次出现；[S#]/[C#]/[Q#] 经同一个 CitationRewriter）；来源列表按库分区（教材 / 判例 / 讲话）。
@@ -17,8 +18,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-COMBINED_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。下面的材料分三个区，只依据这些材料回答，不使用材料之外的知识，直接作答，只写一个回答。
-- 【教材材料】用 [S#] 编号，是知识点的依据；【判例材料】用 [C#] 编号，每个编号是一个判例；【讲话原文】用 [Q#] 编号，是习近平总书记的讲话原文。
+COMBINED_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。下面的材料分几个区（教材、判例、讲话原文、政策条文，有哪个区就有哪个），只依据这些材料回答，不使用材料之外的知识，直接作答，只写一个回答。
+- 【教材材料】用 [S#] 编号，是知识点的依据；【判例材料】用 [C#] 编号，每个编号是一个判例；【讲话原文】用 [Q#] 编号，是习近平总书记的讲话原文；【政策条文】用 [P#] 编号，是政策法规的条文块，写到政策时要点明文件名和条号。
 - 回答一律用“总—分—总”结构，要精炼，全文一般不超过 500 字：
   · 总：开头用一两句话直接回答问题，不写引言；
   · 分：先把知识点讲清楚，再用判例或讲话来印证，并说明二者与知识点的联系；每个要点不超过两三句，不复述材料原文；
@@ -26,16 +27,16 @@ COMBINED_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。�
   · 总：用一句话收束要点，不重复前文原句；
 - 最后单独一行，写一个问句：结合本题内容引导学生进一步思考，或询问学生还想了解哪方面（如“你想进一步了解……，还是……？”）；
   这个问句不加引用编号，只写一句；
-- 每个论断后用对应编号标注依据，如 [S2]、[C1]、[Q1]；不要引用材料中没有的编号。
+- 每个论断后用对应编号标注依据，如 [S2]、[C1]、[Q1]、[P1]；不要引用材料中没有的编号。
 - 讲话原文不能被改写或概括：引用讲话时只写 [Q#] 标记来指明位置，不要自己写出讲话里的话，也不要把讲话文字放进引号；原文由系统另行附在回答末尾。
 - 判例的案号、法院、日期、金额等细节材料里没有就不要写；不要编造。
 - 不要写没有具体原因的套话式免责，结尾不要附加说明引用方式的话。"""
 
 COMBINED_USER = "问题：{question}\n\n{materials}"
 
-SECTION_TITLES = {"course": "【教材材料】", "case": "【判例材料】", "quote": "【讲话原文】"}
-KIND_ORDER = ("course", "case", "quote")           # 来源列表的分区顺序
-KIND_LABELS = {"course": "教材", "case": "判例", "quote": "讲话"}
+SECTION_TITLES = {"course": "【教材材料】", "case": "【判例材料】", "quote": "【讲话原文】", "policy": "【政策条文】"}
+KIND_ORDER = ("course", "case", "quote", "policy")           # 来源列表的分区顺序
+KIND_LABELS = {"course": "教材", "case": "判例", "quote": "讲话", "policy": "政策"}
 
 
 # ---------------------------------------------------------------- 讲话引文校验：引号里的讲话文字必须逐字出自入选原文
@@ -87,13 +88,14 @@ class Materials:
     relations: list = field(default_factory=list)
     case_hits: list = field(default_factory=list)                   # CaseHit
     quote_picks: list = field(default_factory=list)                 # QuotePick（Q 编号从 1 起）
+    policy_hits: list = field(default_factory=list)                 # PolicyHit（P 编号从 1 起）
     traces: dict = field(default_factory=dict)                      # 每个库的检索 / 筛选 trace
     empty: list = field(default_factory=list)                       # 没有找到材料的库
 
     @property
     def sections(self) -> list[str]:
         return [k for k in KIND_ORDER if (k == "course" and self.course_kept) or (k == "case" and self.case_hits)
-                or (k == "quote" and self.quote_picks)]
+                or (k == "quote" and self.quote_picks) or (k == "policy" and self.policy_hits)]
 
 
 def render_materials(m: Materials) -> str:
@@ -108,6 +110,9 @@ def render_materials(m: Materials) -> str:
     if m.quote_picks:
         body = "\n\n".join(f"[Q{p.n}] {source_line(p.speech)}（只供引用，不得改写）\n" + "\n".join(p.texts()) for p in m.quote_picks)
         parts.append(SECTION_TITLES["quote"] + "\n" + body)
+    if m.policy_hits:
+        from .policy.retrieval import render_materials as render_policy
+        parts.append(SECTION_TITLES["policy"] + "\n" + render_policy(m.policy_hits))
     return "\n\n".join(parts)
 
 
@@ -152,6 +157,11 @@ def build_refs(m: Materials) -> tuple[dict[str, str], dict[str, tuple[str, objec
         key = f"quote:{p.speech.speech_id}"
         refs[f"S{k}"] = key
         info[key] = ("quote", p)
+    for h in m.policy_hits:
+        k += 1
+        key = f"policy:{h.chunk['chunk_id']}"
+        refs[f"S{k}"] = key
+        info[key] = ("policy", h)
     return refs, info
 
 
@@ -159,6 +169,8 @@ def _normalize_markers(text: str, m: Materials) -> str:
     """把模型写的 [S#]/[C#]/[Q#] 都映射成统一的 [S#]（编号按 build_refs 的顺序）。越界编号映射成一个不存在的 S 号，由改写器当无效引用去掉。"""
     n_course, n_case = len(m.course_refs), len(m.case_hits)
     q_numbers = {p.n: idx for idx, p in enumerate(m.quote_picks, 1)}
+    n_quote = len(m.quote_picks)
+    p_numbers = {h.n: idx for idx, h in enumerate(m.policy_hits, 1)}
     text = text.translate(str.maketrans({"［": "[", "］": "]", "【": "[", "】": "]", "〔": "[", "〕": "]"}))
 
     def repl(mo):
@@ -169,8 +181,10 @@ def _normalize_markers(text: str, m: Materials) -> str:
             return f"[S{n_course + num}]" if 1 <= num <= n_case else "[S0]"
         if letter == "Q":
             return f"[S{n_course + n_case + q_numbers[num]}]" if num in q_numbers else "[S0]"
+        if letter == "P":
+            return f"[S{n_course + n_case + n_quote + p_numbers[num]}]" if num in p_numbers else "[S0]"
         return mo.group(0)
-    return re.sub(r"\[\s*([SCQscq])\s*(\d+)\s*\]", repl, text)
+    return re.sub(r"\[\s*([SCQPscqp])\s*(\d+)\s*\]", repl, text)
 
 
 def source_for(kind: str, obj, n: int, titles=None) -> dict:
@@ -184,6 +198,9 @@ def source_for(kind: str, obj, n: int, titles=None) -> dict:
         meta = obj.ref.meta
         return {"n": n, "kind": "case", "chunk_id": obj.ref.case_id, "path": source_path(obj), "title": obj.ref.title,
                 "case_number": meta.get("case_number", ""), "source_url": meta.get("source_url", "")}
+    if kind == "policy":
+        from .policy.retrieval import source_entry
+        return source_entry(obj, n)
     from .quotes.retrieval import source_line
     return {"n": n, "kind": "quote", "chunk_id": obj.speech.speech_id, "path": source_line(obj.speech),
             "title": obj.speech.title, "year": obj.speech.year}
@@ -236,7 +253,7 @@ def answer_combined(question: str, m: Materials, llm, *, model: str, on_delta=No
     if tail and on_delta:
         on_delta(tail)
     body = rw.rendered_all.strip()
-    originals = [para for p in m.quote_picks for para in p.texts()]
+    originals = [para for p in m.quote_picks for para in p.texts()] + [h.chunk["body"] for h in m.policy_hits]
     body, removed = scrub_fabricated_quotes(body, originals)
     if removed:
         body = tidy_after_removal(body)
@@ -248,6 +265,10 @@ def answer_combined(question: str, m: Materials, llm, *, model: str, on_delta=No
     cited_picks = [obj for _, (kind, obj) in cited if kind == "quote"]
     appendix = quote_appendix(cited_picks)
     text = body + ("\n\n" + appendix if appendix else "")
+    if m.policy_hits and any(kind == "policy" for _, (kind, _o) in cited):            # 引用了政策：程序附注（征求意见稿标注 + 以汇编为准）
+        from .policy.retrieval import CLOSING_NOTE, DRAFT_LABEL
+        drafts = list(dict.fromkeys(o.chunk["policy"] for _, (kind, o) in cited if kind == "policy" and o.draft))
+        text += "\n\n" + ("、".join(f"《{t}》" for t in drafts) + f"为{DRAFT_LABEL}。" if drafts else "") + CLOSING_NOTE
     return CombinedAnswer(text=text, body=body, sources=sources, removed_quotes=removed, invalid=list(rw.invalid))
 
 
@@ -275,6 +296,13 @@ def _quote_material(svc, question: str, count: int, first_n: int = 1) -> dict:
     return out
 
 
+def _policy_material(svc, question: str, first_n: int = 1) -> dict:
+    t0 = time.perf_counter()
+    out = svc.policy_retriever.retrieve(question, first_n=first_n)
+    out["trace"]["retrieve_s"] = round(time.perf_counter() - t0, 4)
+    return out
+
+
 def gather_materials(svc, question: str, decision, *, on_event=None) -> Materials:
     """routes 里的每个库在各自线程里并行检索 / 筛选。每个库的耗时写进 traces。库内出错整体抛出（由上层转成 error 事件，只带类型名）。"""
     routes = list(decision.routes)
@@ -289,6 +317,8 @@ def gather_materials(svc, question: str, decision, *, on_event=None) -> Material
         if "quote" in routes:
             # 讲话的 Q 编号从 1 起，与教材 / 判例的 S#、C# 互不冲突
             jobs["quote"] = pool.submit(_quote_material, svc, question, decision.count, 1)
+        if "policy" in routes:
+            jobs["policy"] = pool.submit(_policy_material, svc, question, 1)
         results = {k: f.result() for k, f in jobs.items()}
         wall = round(time.perf_counter() - t0, 4)
     if "course" in results:
@@ -314,5 +344,11 @@ def gather_materials(svc, question: str, decision, *, on_event=None) -> Material
         m.traces["quote"] = {"mode": out["mode"], **out["trace"]}
         if not out["picks"]:
             m.empty.append("quote")
+    if "policy" in results:
+        out = results["policy"]
+        m.policy_hits = out["hits"]
+        m.traces["policy"] = {"mode": out["mode"], **out["trace"]}
+        if not out["hits"]:
+            m.empty.append("policy")
     m.traces["wall_s"] = wall
     return m

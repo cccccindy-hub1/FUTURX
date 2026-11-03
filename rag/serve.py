@@ -109,14 +109,15 @@ def load_exam_backend():
 def load_doc_libraries():
     """启动时直接读原始 docx 建内存索引（不用向量库、不用 bge-m3；解析结果按 docx 的 mtime+size 缓存成 JSON）。
 
-    返回 (case_index, quote_index)。docx 不存在 / 解析失败时对应项为 None，统一入口的 case / quote 路由降级为 unavailable，
+    返回 (case_index, quote_index, policy_index)。docx 不存在 / 解析失败时对应项为 None，统一入口的 case / quote 路由降级为 unavailable，
     不影响其它路由启动。日志只记异常类型名。
     """
     import logging
 
     log = logging.getLogger(__name__)
     out = []
-    for name, loader, label in (("case", "rag.cases.retrieval:CaseIndex", "判例库"), ("quote", "rag.quotes.retrieval:QuoteIndex", "名言库")):
+    for name, loader, label in (("case", "rag.cases.retrieval:CaseIndex", "判例库"), ("quote", "rag.quotes.retrieval:QuoteIndex", "名言库"),
+                                ("policy", "rag.policy.retrieval:PolicyIndex", "政策库")):
         mod, cls = loader.split(":")
         try:
             import importlib
@@ -191,10 +192,10 @@ def build_app(**service_kwargs):
 
     course_ctx, course_llm = load_course_backend()
     exam_bank = load_exam_backend()
-    case_index, quote_index = load_doc_libraries()
+    case_index, quote_index, policy_index = load_doc_libraries()
     app.state.unified = UnifiedService(rag=svc, router_client=build_router_client(),
                                        course_ctx=course_ctx, course_llm=course_llm, exam_bank=exam_bank,
-                                       case_index=case_index, quote_index=quote_index)
+                                       case_index=case_index, quote_index=quote_index, policy_index=policy_index)
     app.include_router(unified_router)
     if exam_bank is not None:
         from .exam.api import router as exam_router
