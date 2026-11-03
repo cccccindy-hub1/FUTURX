@@ -592,3 +592,38 @@ def test_sse_course_only_route_still_streams_as_before(cctx):
 def test_combined_stream_slot_is_in_concurrency_paths():
     from rag import concurrency
     assert "/auto/ask/stream" in concurrency.RequestConcurrencyMiddleware._PATHS            # 组合 / 单库都走这两个已计入并发的路径
+
+
+# ---------------------------------------------------------------- 组合回答：总—分—总 + 结尾问句
+
+def test_combined_prompt_requires_total_part_total_and_a_closing_question_without_citation():
+    from rag.combined import COMBINED_SYSTEM as S
+    for w in ("总—分—总", "总：开头用一两句话直接回答", "分：先把知识点讲清楚，再用判例或讲话来印证", "总：用一句话收束要点",
+              "最后单独一行，写一个问句", "这个问句不加引用编号", "不要分成「教材部分」「判例部分」两个独立回答"):
+        assert w in S
+    assert "不写引言和总结段" not in S                           # 旧的与“总”相矛盾的指令已去掉
+
+
+def test_combined_prompt_keeps_quote_rules_and_matches_the_course_prompts_structure_wording():
+    from rag.combined import COMBINED_SYSTEM as S
+    from rag.course import prompts
+    for w in ("[Q#] 标记来指明位置", "不要把讲话文字放进引号", "[S2]、[C1]、[Q1]"):
+        assert w in S
+    shared = "最后单独一行，写一个问句：结合本题内容引导学生进一步思考，或询问学生还想了解哪方面"
+    assert shared in S and shared in prompts.ANSWER_SYSTEM                  # 与线上课程单库的问句要求同一措辞
+
+
+def test_closing_question_survives_citation_rewriting_and_quote_scrubbing():
+    """问句不带编号、可能含引号 / 问号：数字编号改写和“引号内讲话文字核对”都不能把它删掉或改动。"""
+    from rag.combined import scrub_fabricated_quotes
+    body = "数据确权的难点在于边界不清[1]，判例也体现了这一点[2]。\n你想进一步了解数据确权的权利束，还是平台数据的保护边界？"
+    out, removed = scrub_fabricated_quotes(body, ["数据是新型生产要素。"])
+    assert out == body and removed == []
+
+
+def test_closing_question_with_short_quoted_terms_is_not_mistaken_for_a_fabricated_speech():
+    from rag.combined import scrub_fabricated_quotes
+    q = "你想进一步了解“数据要素”的内涵，还是“三权分置”？"
+    assert scrub_fabricated_quotes(q, ["数据是新型生产要素。"]) == (q, [])
+    out, removed = scrub_fabricated_quotes("总书记指出“数据是最重要的生产要素，必须无条件开放”[Q1]。\n" + q, ["数据是新型生产要素。"])
+    assert removed == ["数据是最重要的生产要素，必须无条件开放"] and out.endswith(q) and "必须无条件开放" not in out      # 编造的删，问句原样留下
