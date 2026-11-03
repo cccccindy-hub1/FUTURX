@@ -30,6 +30,8 @@ class FakeClient:
     def __init__(self, path):
         self.path = str(path)
         FakeClient.opened.append(self.path)
+        Path(self.path).mkdir(parents=True, exist_ok=True)
+        (Path(self.path) / "chroma.sqlite3").touch()                      # 真实 PersistentClient 一打开就会在目录里建库文件
 
     def list_collections(self):
         return [type("C", (), {"name": n})() for (p, n) in FakeClient.registry if p == self.path]
@@ -140,7 +142,7 @@ def test_refuses_to_overwrite_a_nonempty_collection_without_rebuild(tmp_path, mo
     monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
     cache = write_chunks(tmp_path / "cc", CASE_CHUNKS)
     build("cases", cache, tmp_path / "case_store", "data_law_cases", embed=embed, client_factory=FakeClient)
-    with pytest.raises(SystemExit, match="拒绝覆盖"):
+    with pytest.raises(SystemExit, match="已存在且非空"):                          # 目录非空就拒绝（比集合非空更早、更严）
         build("cases", cache, tmp_path / "case_store", "data_law_cases", embed=embed, client_factory=FakeClient)
     assert FakeClient.deleted == []                                             # 没有删任何东西
 
@@ -151,7 +153,7 @@ def test_rebuild_deletes_only_its_own_collection(tmp_path, monkeypatch):
     store = tmp_path / "case_store"
     other = FakeClient(store).create_collection("someone_else")                  # 同一目录里别人的集合
     other.add(["x"], ["d"], [{}], [[1.0]])
-    build("cases", cache, store, "data_law_cases", embed=embed, client_factory=FakeClient)
+    build("cases", cache, store, "data_law_cases", rebuild=True, embed=embed, client_factory=FakeClient)       # 目录非空：必须显式 --rebuild
     build("cases", cache, store, "data_law_cases", rebuild=True, embed=embed, client_factory=FakeClient)
     assert FakeClient.deleted == [(str(store), "data_law_cases")] and (str(store), "someone_else") in FakeClient.registry
 
@@ -274,3 +276,132 @@ def test_build_app_wires_case_and_quote_into_the_unified_service(monkeypatch, tm
     assert u.case_retriever is not None and u.case_retriever.svc is sentinel[0] and u.quote_retriever.svc is sentinel[2]
     assert u.case_llm is None and u.quote_llm is None            # 课程 LLM 没配置时没有可用的作答模型 -> 两个库仍是 unavailable（见 _available）
     assert u._available(["case"]) == ["case"] and u._available(["quote"]) == ["quote"]
+
+
+# ---------------------------------------------------------------- 目录非空即拒绝 / 一键入口 rag.cases.build、rag.quotes.build
+
+def _patch_build(monkeypatch, tmp_path):
+    """让 run_cli 用假 Chroma / 假嵌入；返回 (cache, store)。"""
+    monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
+    import sys, types
+    chroma = types.ModuleType("chromadb")
+    chroma.PersistentClient = FakeClient
+    st = types.ModuleType("sentence_transformers")
+    st.SentenceTransformer = lambda *a, **k: type("M", (), {"encode": staticmethod(lambda t, **kw: type("A", (), {"tolist": lambda self: embed(t)})())})()
+    monkeypatch.setitem(sys.modules, "chromadb", chroma)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", st)
+
+
+def test_nonempty_store_directory_is_refused_unless_rebuild_even_without_collection(tmp_path, monkeypatch):
+    monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
+    cache = write_chunks(tmp_path / "cache", CASE_CHUNKS)
+    store = tmp_path / "case_store"
+    store.mkdir()
+    (store / "something.sqlite3").write_text("x")                                           # 目录里已有东西（哪怕不是我们的集合）
+    with pytest.raises(SystemExit, match="已存在且非空"):
+        build("cases", cache, store, "data_law_cases", embed=embed, client_factory=FakeClient)
+    assert FakeClient.opened == [] and (store / "something.sqlite3").exists()                # 拒绝时连客户端都没打开，文件原样
+    info = build("cases", cache, store, "data_law_cases", rebuild=True, embed=embed, client_factory=FakeClient)
+    assert info["written"] == 2
+
+
+def test_empty_or_missing_store_directory_is_fine(tmp_path, monkeypatch):
+    monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
+    cache = write_chunks(tmp_path / "cache", QUOTE_CHUNKS)
+    empty = tmp_path / "quote_store"
+    empty.mkdir()
+    assert build("quotes", cache, empty, "xi_digital_quotes", embed=embed, client_factory=FakeClient)["written"] == 1
+    assert build("quotes", cache, tmp_path / "newdir", "xi_digital_quotes", embed=embed, client_factory=FakeClient)["written"] == 1
+
+
+def test_dry_run_does_not_trip_the_nonempty_directory_check_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
+    cache = write_chunks(tmp_path / "cache", CASE_CHUNKS)
+    store = tmp_path / "case_store"
+    store.mkdir()
+    (store / "f").write_text("x")
+    assert build("cases", cache, store, "data_law_cases", dry_run=True)["chunks"] == 2 and sorted(p.name for p in store.iterdir()) == ["f"]
+
+
+def test_cases_build_module_chunks_missing_cache_from_env_doc_then_builds(tmp_path, monkeypatch):
+    """python -m rag.cases.build：缓存里还没有 chunks.jsonl 时，从 CASE_DOC 切块再建库；不传 --doc 就读 .env 的路径。"""
+    docx = pytest.importorskip("docx")
+    from test_cases_parse import _case_doc, base_spec
+    _patch_build(monkeypatch, tmp_path)
+    (tmp_path / "case_data").mkdir()
+    doc = _case_doc(tmp_path / "case_data" / "判例.docx", base_spec())
+    from rag.cases import config as cc
+    monkeypatch.setattr(cc, "CASE_DOC", doc)
+    monkeypatch.setattr(cc, "CASE_CACHE_DIR", tmp_path / "case_cache")
+    monkeypatch.setattr(cc, "CASE_STORE_DIR", tmp_path / "case_store")
+    from rag.cases import build as cases_build                                                # noqa: F401  (模块可导入)
+    assert kbbuild.run_cli("cases", ["--dry-run"]) == 0
+    assert (tmp_path / "case_cache" / "chunks.jsonl").is_file() and not (tmp_path / "case_store").exists()      # dry-run：切了块，没建库
+    assert kbbuild.run_cli("cases", []) == 0
+    col = FakeClient.registry[(str(tmp_path / "case_store"), "data_law_cases")]
+    assert col.count() > 4 and str(tmp_path / "chroma_db") not in FakeClient.opened
+    with pytest.raises(SystemExit, match="已存在且非空"):
+        kbbuild.run_cli("cases", [])                                                          # 第二次：目录非空，拒绝
+    assert kbbuild.run_cli("cases", ["--rebuild"]) == 0 and FakeClient.deleted == [(str(tmp_path / "case_store"), "data_law_cases")]
+
+
+def test_quotes_build_module_uses_quote_doc_and_independent_store(tmp_path, monkeypatch):
+    pytest.importorskip("docx")
+    from test_cases_parse import _quote_doc
+    _patch_build(monkeypatch, tmp_path)
+    (tmp_path / "quote_data").mkdir()
+    doc = _quote_doc(tmp_path / "quote_data" / "讲话.docx", [(2018, ["某会议上的讲话"])], [(2018, ["1.第一段。", "第二段。"])])
+    from rag.quotes import config as qc
+    monkeypatch.setattr(qc, "QUOTE_DOC", doc)
+    monkeypatch.setattr(qc, "QUOTE_CACHE_DIR", tmp_path / "quote_cache")
+    monkeypatch.setattr(qc, "QUOTE_STORE_DIR", tmp_path / "quote_store")
+    assert kbbuild.run_cli("quotes", []) == 0
+    col = FakeClient.registry[(str(tmp_path / "quote_store"), "xi_digital_quotes")]
+    assert col.count() == 1 and json.loads(col.rows[0][2]["paragraphs_json"]) == ["第一段。", "第二段。"]
+
+
+def test_missing_source_doc_gives_actionable_message(tmp_path, monkeypatch):
+    _patch_build(monkeypatch, tmp_path)
+    from rag.cases import config as cc
+    monkeypatch.setattr(cc, "CASE_DOC", tmp_path / "nope.docx")
+    monkeypatch.setattr(cc, "CASE_CACHE_DIR", tmp_path / "case_cache")
+    monkeypatch.setattr(cc, "CASE_STORE_DIR", tmp_path / "case_store")
+    with pytest.raises(SystemExit, match="找不到原始资料.*CASE_DOC"):
+        kbbuild.run_cli("cases", [])
+
+
+@pytest.mark.parametrize("kind", ["cases", "quotes"])
+def test_build_entrypoints_refuse_when_store_is_inside_or_equal_to_thesis_store(tmp_path, monkeypatch, kind):
+    _patch_build(monkeypatch, tmp_path)
+    for bad in (tmp_path / "chroma_db", tmp_path / "chroma_db" / "sub"):
+        with pytest.raises(SystemExit, match="拒绝"):
+            kbbuild.run_cli(kind, ["--store", str(bad), "--dry-run"])
+    assert FakeClient.opened == []                                                            # 一次都没打开过客户端
+
+
+def test_default_raw_data_dirs_and_ignore_rules():
+    from rag.cases import config as cc
+    from rag.quotes import config as qc
+    assert cc.CASE_DOC.parent.name == "case_data" and qc.QUOTE_DOC.parent.name == "quote_data"
+    ig = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+    for d in ("rag/case_store/", "rag/quote_store/", "rag/case_data/", "rag/quote_data/"):
+        assert d in ig
+    for mod in ("rag/cases/build.py", "rag/quotes/build.py"):
+        src = Path(mod).read_text(encoding="utf-8")
+        assert "run_cli" in src and "chroma_db" not in src.replace("rag/chroma_db", "")        # 入口只转发给 kbbuild，不自己碰任何库
+
+
+def test_collection_level_guard_still_blocks_when_directory_check_is_bypassed(tmp_path, monkeypatch):
+    """目录检查之外还有集合级保险：假客户端不在磁盘落文件（目录看起来是空的），但集合里已有数据 -> 仍然拒绝覆盖。"""
+    monkeypatch.setattr(kbbuild.base, "STORE_DIR", tmp_path / "chroma_db")
+    cache = write_chunks(tmp_path / "cc", CASE_CHUNKS)
+    store = tmp_path / "case_store"
+
+    class Ghost(FakeClient):
+        def __init__(self, path):
+            self.path = str(path)
+            FakeClient.opened.append(self.path)                                  # 不创建目录里的文件
+    Ghost(store).create_collection("data_law_cases").add(["a"], ["d"], [{}], [[1.0]])
+    with pytest.raises(SystemExit, match="拒绝覆盖"):
+        build("cases", cache, store, "data_law_cases", embed=embed, client_factory=Ghost)
+    assert FakeClient.deleted == []

@@ -86,7 +86,10 @@ def build(kind: str, cache_dir: Path, store: Path, collection: str, *, rebuild: 
     if client_factory is None:
         import chromadb
         client_factory = lambda p: chromadb.PersistentClient(path=str(p))        # noqa: E731
-    Path(store).mkdir(parents=True, exist_ok=True)
+    store_p = Path(store)
+    if store_p.is_dir() and any(store_p.iterdir()) and not rebuild:
+        raise SystemExit(f"目录 {store_p} 已存在且非空，拒绝写入；确认要重建请加 --rebuild（只会删除这个库自己的集合，不动目录里的其它东西）")
+    store_p.mkdir(parents=True, exist_ok=True)
     client = client_factory(store)
     existing = [c.name if hasattr(c, "name") else c for c in client.list_collections()]
     if collection in existing:
@@ -103,6 +106,51 @@ def build(kind: str, cache_dir: Path, store: Path, collection: str, *, rebuild: 
         col.add(ids=ids[i:i + BATCH], documents=docs[i:i + BATCH], metadatas=metas[i:i + BATCH], embeddings=embed(docs[i:i + BATCH]))
     info["written"] = col.count()
     return info
+
+
+def chunk_if_needed(kind: str, doc: Path | None, cache: Path) -> Path:
+    """cache 里还没有 chunks.jsonl 时，用 doc（默认取 CASE_DOC / QUOTE_DOC）先切块；已有则直接用。返回 cache。"""
+    if (cache / "chunks.jsonl").is_file():
+        return cache
+    if kind == "cases":
+        from .cases import config as c
+        from .cases.cli import export_cases as export
+    else:
+        from .quotes import config as c
+        from .quotes.cli import export_quotes as export
+    src = Path(doc) if doc else (c.CASE_DOC if kind == "cases" else c.QUOTE_DOC)
+    if not src.is_file():
+        raise SystemExit(f"找不到原始资料 {src}（在 .env 里设 {'CASE_DOC' if kind == 'cases' else 'QUOTE_DOC'}，"
+                         f"或放到 rag/{'case' if kind == 'cases' else 'quote'}_data/ 下）")
+    export(src, cache)
+    return cache
+
+
+def run_cli(kind: str, argv=None) -> int:
+    """python -m rag.cases.build / rag.quotes.build 的共同入口。"""
+    ap = argparse.ArgumentParser(prog=f"rag.{'cases' if kind == 'cases' else 'quotes'}.build",
+                                 description=f"{'判例库' if kind == 'cases' else '名言库'}：切块（如缺）+ 建向量库；"
+                                             "独立目录，不碰论文库 Chroma；调用大模型 0 次，只用本地 BGE-m3")
+    ap.add_argument("--doc", default=None, help="原始 docx，默认取 .env 的 CASE_DOC / QUOTE_DOC（rag/case_data/、rag/quote_data/）")
+    ap.add_argument("--cache", default=None, help="切块输出目录，默认 CASE_CACHE_DIR / QUOTE_CACHE_DIR")
+    ap.add_argument("--store", default=None, help="向量库目录，默认 rag/case_store / rag/quote_store")
+    ap.add_argument("--rebuild", action="store_true", help="目录已存在且非空时允许重建（只删除这个库自己的集合）")
+    ap.add_argument("--dry-run", action="store_true", help="只切块 + 校验并打印将写入的块数，不加载模型、不写向量库")
+    a = ap.parse_args(argv)
+    if kind == "cases":
+        from .cases import config as c
+        cache, store, coll = Path(a.cache or c.CASE_CACHE_DIR), Path(a.store or c.CASE_STORE_DIR), c.CASE_COLLECTION
+    else:
+        from .quotes import config as c
+        cache, store, coll = Path(a.cache or c.QUOTE_CACHE_DIR), Path(a.store or c.QUOTE_STORE_DIR), c.QUOTE_COLLECTION
+    try:
+        check_store_safe(store, coll)                                    # 先检查目标安全，再做任何事
+        chunk_if_needed(kind, Path(a.doc) if a.doc else None, cache)
+        info = build(kind, cache, store, coll, rebuild=a.rebuild, dry_run=a.dry_run)
+    except UnsafeStore as e:
+        raise SystemExit(f"拒绝：{e}")
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+    return 0
 
 
 def main() -> None:
