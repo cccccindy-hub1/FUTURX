@@ -19,3 +19,7 @@ CASE_BODY_MIN = int(os.environ.get("CASE_BODY_MIN", "800"))                     
 CASE_BODY_MAX = int(os.environ.get("CASE_BODY_MAX", "1200"))                         # 正文块字数上限（超出按段落 / 句子拆开）
 
 CASE_CARD_FALLBACK_CHARS = CASE_CARD_MAX_CHARS      # 旧名，保留给已有引用
+
+# ---- 向量库（独立的 Chroma 目录与集合，绝不读写论文库的 rag/chroma_db）----
+CASE_STORE_DIR = Path(os.environ.get("CASE_STORE_DIR", RAG_DIR / "case_store"))
+CASE_COLLECTION = os.environ.get("CASE_COLLECTION", "data_law_cases")

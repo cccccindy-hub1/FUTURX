@@ -52,6 +52,27 @@ _SYSTEM_PROMPT = """你是数字治理科研团队的学术论文指导助手。
 
 
 class RAGService:
+    # 不经 __init__ 构造的实例（测试脚手架、子类）仍落到论文库的全局配置，与加参数之前的行为一致。
+    # 在读取时才解析模块全局（而不是导入时固化），这样运行期改写 rag.query.STORE_DIR 的做法（测试夹具、部署脚本）依旧有效。
+    _store_dir = None
+    _collection_name = None
+
+    @property
+    def store_dir(self):
+        return STORE_DIR if self._store_dir is None else self._store_dir
+
+    @store_dir.setter
+    def store_dir(self, value):
+        self._store_dir = value
+
+    @property
+    def collection_name(self) -> str:
+        return COLLECTION_NAME if self._collection_name is None else self._collection_name
+
+    @collection_name.setter
+    def collection_name(self, value):
+        self._collection_name = value
+
     def __init__(
         self,
         mode: str = RETRIEVAL_MODE,
@@ -61,7 +82,12 @@ class RAGService:
         rewrite: bool = QUERY_REWRITE_ENABLED,
         use_hyde: bool = HYDE_ENABLED,
         expand_context: bool = CONTEXT_EXPAND_ENABLED,
+        store_dir=None,
+        collection_name: str | None = None,
     ):
+        """store_dir / collection_name：向量库目录与集合名，不传则用全局配置（论文库，行为与以前完全一致）。
+        判例库、名言库各传自己的目录与集合名（rag/case_store · data_law_cases，rag/quote_store · xi_digital_quotes），
+        绝不读写论文库的 Chroma；BM25 缓存按集合名分文件（CACHE_DIR/{集合名}.bm25.pkl），同样互不覆盖。"""
         self._request_state = local()
         self._retrieval_lock = RLock()
 
@@ -74,8 +100,10 @@ class RAGService:
             self.model = SentenceTransformer(EMBED_MODEL, local_files_only=True)
         except Exception:
             self.model = SentenceTransformer(EMBED_MODEL)
-        client = chromadb.PersistentClient(path=str(STORE_DIR))
-        self.collection = client.get_collection(COLLECTION_NAME)
+        self.store_dir = store_dir                   # None = 读取时落到论文库的全局配置（见上面的 property）
+        self.collection_name = collection_name
+        client = chromadb.PersistentClient(path=str(self.store_dir))
+        self.collection = client.get_collection(self.collection_name)
         self.llm = (
             OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE, timeout=LLM_TIMEOUT, max_retries=1)
             if LLM_API_KEY
@@ -143,7 +171,7 @@ class RAGService:
                 top_k=top_k,
                 fetch_k=max(self.fetch_k, top_k),
                 where=self.where,
-                collection_name=COLLECTION_NAME,
+                collection_name=self.collection_name,
             )
             if self.expand_context:
                 self._expand(result)
@@ -156,7 +184,7 @@ class RAGService:
         找不到父块（未用父子分块建库）时保留子块原文。
         """
         if self._parents is None:
-            self._parents = load_parents(COLLECTION_NAME)
+            self._parents = load_parents(self.collection_name)
         if not self._parents:
             return
         seen: set[str] = set()

@@ -51,3 +51,5 @@ rag/case_cache/
 rag/quote_cache/
 rag/case_data/
 rag/quote_data/
+rag/case_store/
+rag/quote_store/
