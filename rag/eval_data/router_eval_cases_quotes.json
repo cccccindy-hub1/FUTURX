@@ -1,0 +1,309 @@
+[
+ {
+  "id": "c01",
+  "question": "举三个关于数据爬取的判例",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 3,
+  "expected_chapter": 6,
+  "expected_complexity": "simple",
+  "note": "count=3，章=数据市场"
+ },
+ {
+  "id": "c02",
+  "question": "微博诉云智联案是怎么判的？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 6,
+  "expected_complexity": "simple",
+  "note": "点名某案"
+ },
+ {
+  "id": "c03",
+  "question": "指导性案例262号讲了什么？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "案号直达"
+ },
+ {
+  "id": "c04",
+  "question": "第六章有哪些判例？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 6,
+  "expected_complexity": "simple",
+  "note": "列表模式"
+ },
+ {
+  "id": "c05",
+  "question": "有没有关于隐私权纠纷的案例？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 9,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c06",
+  "question": "法院怎么认定平台对公开数据享有的权益？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 2,
+  "expected_complexity": "simple",
+  "note": "没说“判例”，但问法院如何认定"
+ },
+ {
+  "id": "c07",
+  "question": "大数据搬家软件案的争议焦点是什么？",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 6,
+  "expected_complexity": "simple",
+  "note": "点名别名"
+ },
+ {
+  "id": "c08",
+  "question": "举一个数据安全方面的刑事案件",
+  "expected_routes": [
+   "case"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 8,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c09",
+  "question": "总书记关于数据安全是怎么说的？",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c10",
+  "question": "给我两条习近平关于人工智能的原话",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 2,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c11",
+  "question": "引用一句总书记谈数字经济的话",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c12",
+  "question": "总书记在网络安全和信息化工作会议上的讲话讲了什么？",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c13",
+  "question": "习近平关于数字中国建设的重要论述有哪些？",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "问“有哪些”但没写数量：count 取默认 1（标注已更正，原先误标为 3）"
+ },
+ {
+  "id": "c14",
+  "question": "总书记有哪些谈数据要素的名言？",
+  "expected_routes": [
+   "quote"
+  ],
+  "expected_route": "quote",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c15",
+  "question": "结合判例说明数据确权为什么难",
+  "expected_routes": [
+   "course",
+   "case"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": 2,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c16",
+  "question": "用总书记的讲话谈谈数据要素的作用",
+  "expected_routes": [
+   "course",
+   "quote"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c17",
+  "question": "数据安全的主要风险有哪些？举两个判例说明",
+  "expected_routes": [
+   "course",
+   "case"
+  ],
+  "expected_route": "course",
+  "expected_count": 2,
+  "expected_chapter": 8,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c18",
+  "question": "结合习近平的论述，讲讲数据治理为什么重要",
+  "expected_routes": [
+   "course",
+   "quote"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c19",
+  "question": "结合判例和总书记的讲话谈谈数据安全",
+  "expected_routes": [
+   "case",
+   "quote"
+  ],
+  "expected_route": "case",
+  "expected_count": 1,
+  "expected_chapter": 8,
+  "expected_complexity": "simple",
+  "note": "判例+讲话，不含课程知识点的组合"
+ },
+ {
+  "id": "c20",
+  "question": "什么是数据产权？再给一个相关判例",
+  "expected_routes": [
+   "course",
+   "case"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": 2,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c21",
+  "question": "数据价值化为什么重要？引用一句总书记的话来印证",
+  "expected_routes": [
+   "course",
+   "quote"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": ""
+ },
+ {
+  "id": "c22",
+  "question": "论文里怎么引用判决书？",
+  "expected_routes": [
+   "thesis"
+  ],
+  "expected_route": "thesis",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "论文写作问题，沾“判决书”但不是问判例"
+ },
+ {
+  "id": "c23",
+  "question": "这篇论文的讲话稿怎么写？",
+  "expected_routes": [
+   "thesis"
+  ],
+  "expected_route": "thesis",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "沾“讲话”但是论文写作"
+ },
+ {
+  "id": "c24",
+  "question": "什么是数据确权？",
+  "expected_routes": [
+   "course"
+  ],
+  "expected_route": "course",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "纯知识点，没有判例 / 讲话要求，不能组合"
+ },
+ {
+  "id": "c25",
+  "question": "推荐一部法庭题材的电影",
+  "expected_routes": [
+   "off_topic"
+  ],
+  "expected_route": "off_topic",
+  "expected_count": 1,
+  "expected_chapter": null,
+  "expected_complexity": "simple",
+  "note": "沾“法庭”但是闲聊"
+ }
+]

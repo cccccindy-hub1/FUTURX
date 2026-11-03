@@ -782,3 +782,150 @@ def test_sanitize_fullwidth_invalid_placeholder_and_ontology_tags():
     text, valid, invalid, onto = sanitize_citations("甲［S9］乙【S#】丙【本体】丁［de:fake］", {"S1": "de:x"})
     assert "S9" not in text and "S#" not in text and "de:fake" not in text and valid == []
     assert set(invalid) == {"S9", "de:fake"} and onto and "[本体]" not in text and "本体" not in text.replace("丙", "")   # 本体标记被去掉，但记录 uses_ontology
+
+
+# ---------------------------------------------------------------- 判例 / 名言路由：routes、count、chapter、旧 route 兼容
+
+def routes_llm(routes, count=1, chapter=None, cx="simple"):
+    return RouterLLM({"routes": routes, "complexity": cx, "count": count, "chapter": chapter, "reason": "t"})
+
+
+@pytest.mark.parametrize("routes", [["case"], ["quote"], ["course", "case"], ["course", "quote"], ["case", "quote"]])
+def test_llm_returns_routes_list_and_old_route_field_is_first(routes):
+    d = classify("任意问题", routes_llm(routes))
+    assert d.routes == routes and d.route == routes[0] and d.combined == (len(routes) > 1) and d.source == "llm"
+    assert d.to_dict()["route"] == routes[0] and d.to_dict()["routes"] == routes
+
+
+def test_old_single_route_json_still_works_and_gives_one_element_routes():
+    d = classify("q", RouterLLM({"route": "course", "complexity": "simple", "reason": "t"}))
+    assert (d.route, d.routes, d.count, d.chapter) == ("course", ["course"], 1, None)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (["course", "case", "quote"], ["course", "case"]),           # 最多 2 个
+    (["course", "course"], ["course"]),                           # 去重
+    (["thesis", "case"], ["thesis"]),                             # thesis 不参与组合
+    (["policy", "course"], ["policy"]), (["off_topic", "case"], ["off_topic"]),
+    (["case", "thesis"], ["case"]),                               # 非组合类混进来：不组合，保留可组合的
+    (["nonsense", "case"], ["case"]), ("quote", ["quote"])])
+def test_normalize_routes_enforces_combination_rules(raw, expected):
+    from rag.router import normalize_routes
+    assert normalize_routes(raw) == expected
+
+
+def test_normalize_routes_rejects_garbage():
+    from rag.router import normalize_routes
+    with pytest.raises(ValueError):
+        normalize_routes(["nonsense"])
+    with pytest.raises(ValueError):
+        normalize_routes([])
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 1), ("abc", 1), (0, 1), (-3, 1), (3, 3), ("4", 4), (9, 5), (5.9, 5)])
+def test_count_is_clamped_to_1_5(raw, expected):
+    d = classify("q", routes_llm(["case"], count=raw))
+    assert d.count == expected
+
+
+@pytest.mark.parametrize("raw,expected", [(6, 6), ("9", 9), (0, None), (11, None), (None, None), ("x", None)])
+def test_chapter_is_1_to_10_or_none_and_only_kept_for_case(raw, expected):
+    assert classify("q", routes_llm(["case"], chapter=raw)).chapter == expected
+    assert classify("q", routes_llm(["course", "case"], chapter=raw)).chapter == expected
+    assert classify("q", routes_llm(["course"], chapter=raw)).chapter is None             # 课程不带 chapter
+    assert classify("q", routes_llm(["quote"], count=3, chapter=raw)).chapter is None
+
+
+def test_count_ignored_for_non_case_quote_routes():
+    assert classify("q", routes_llm(["course"], count=4)).count == 1
+
+
+def test_combined_route_failure_falls_back_to_rules_with_same_shape():
+    d = classify("结合判例说明数据确权为什么难", RouterLLM(exc=TimeoutError("t")))
+    assert d.source == "rules" and d.routes == ["course", "case"] and d.route == "course" and d.llm_error == "TimeoutError"
+
+
+def test_router_prompt_lists_new_categories_and_output_format():
+    from rag.router import ROUTER_SYSTEM, CHAPTER_NAMES
+    for w in ("case", "quote", "routes", "count", "chapter", "最多 2 个", "组合", "off_topic、thesis、policy 只能单独出现"):
+        assert w in ROUTER_SYSTEM
+    assert all(f"{n} {name}" in ROUTER_SYSTEM for n, name in CHAPTER_NAMES.items())     # 提示词里给出 10 个章名
+
+
+# ---------------------------------------------------------------- 规则兜底：case / quote / 组合 / count / chapter / 列表
+
+@pytest.mark.parametrize("q,routes", [
+    ("举三个关于数据爬取的判例", ["case"]), ("微博诉云智联案是怎么判的", ["case"]), ("指导性案例262号讲了什么", ["case"]),
+    ("大数据搬家软件案的争议焦点是什么", ["case"]), ("（2021）浙8601民初309号案怎么判的", ["case"]),
+    ("总书记关于数据安全是怎么说的", ["quote"]), ("给我两条习近平关于人工智能的原话", ["quote"]), ("引用一句总书记谈数字经济的话", ["quote"]),
+    ("结合判例说明数据确权为什么难", ["course", "case"]), ("用总书记的讲话谈谈数据要素的作用", ["course", "quote"]),
+    ("结合判例和总书记的讲话谈谈数据安全", ["case", "quote"]),
+    ("论文里怎么引用判决书", ["thesis"]), ("这篇论文的讲话稿怎么写", ["thesis"]), ("案例分析法在论文里怎么用", ["thesis"]),
+    ("什么是数据确权", ["course"]), ("今天天气怎么样", ["off_topic"])])
+def test_rule_fallback_recognizes_case_quote_and_combinations(q, routes):
+    d = rule_route(q)
+    assert d.routes == routes and d.route == routes[0] and len(d.routes) <= 2 and d.source in ("rules", "rules_refuse")
+
+
+@pytest.mark.parametrize("q,n", [("举三个判例", 3), ("给我两条总书记的话", 2), ("来五个案例", 5), ("举一个判例", 1), ("有哪些判例", 1),
+                                  ("给我一条习近平关于人工智能的原话", 1), ("举两个关于隐私保护的案例", 2), ("要3个判例", 3)])
+def test_extract_count(q, n):
+    from rag.router import extract_count
+    assert extract_count(q) == n
+
+
+@pytest.mark.parametrize("q,ch", [("第六章有哪些判例", 6), ("第十章的判例", 10), ("第二章的案例", 2), ("第 3 章", 3), ("举个隐私保护的案例", 9),
+                                   ("数据爬取的判例", 6), ("数据确权的案例", 2), ("数据要素和数据安全的案例", None), ("随便举个案例", None)])
+def test_extract_chapter(q, ch):
+    from rag.router import extract_chapter
+    assert extract_chapter(q) == ch
+
+
+def test_case_list_question_detection():
+    from rag.router import is_case_list_question
+    assert is_case_list_question("第六章有哪些判例？") and is_case_list_question("第二章都有哪些案例") and is_case_list_question("判例列表")
+    assert not is_case_list_question("举三个第六章的判例") and not is_case_list_question("微博诉云智联案怎么判")
+
+
+def test_rule_fallback_count_and_chapter_for_case():
+    d = rule_route("举三个关于数据爬取的判例")
+    assert (d.routes, d.count, d.chapter) == (["case"], 3, 6)
+    d = rule_route("给我两条习近平关于人工智能的原话")
+    assert (d.routes, d.count, d.chapter) == (["quote"], 2, None)
+
+
+def test_old_forty_question_set_routes_unchanged_by_new_categories():
+    """新增 case / quote 不能改变既有 40 题的规则兜底结果（原本就判错的 r27、r36 保持不变，不新增判错）。"""
+    rows = json.load(open("rag/eval_data/router_eval.json", encoding="utf-8"))
+    bad = sorted(r["id"] for r in rows if rule_route(r["question"]).route != r["expected_route"])
+    assert bad == ["r27", "r36"]
+
+
+def test_new_router_eval_set_shape_and_rule_fallback_accuracy():
+    rows = json.load(open("rag/eval_data/router_eval_cases_quotes.json", encoding="utf-8"))
+    from collections import Counter
+    assert len(rows) == 25 and len({r["id"] for r in rows}) == 25
+    kinds = Counter("+".join(r["expected_routes"]) for r in rows)
+    assert kinds["case"] == 8 and kinds["quote"] == 6 and sum(v for k, v in kinds.items() if "+" in k) == 7 and kinds["thesis"] == 2
+    assert all(r["expected_route"] == r["expected_routes"][0] and len(r["expected_routes"]) <= 2 for r in rows)
+    wrong = [r["id"] for r in rows if rule_route(r["question"]).routes != r["expected_routes"]]
+    assert wrong == []                                                                  # 规则兜底在这 25 题上全对（不调用模型）
+    assert all(rule_route(r["question"]).count == r["expected_count"] for r in rows if {"case", "quote"} & set(r["expected_routes"]))
+
+
+def test_eval_router_summary_handles_new_classes_with_no_rows_and_combined_expectations():
+    from rag import eval_router as er
+    rows = [{"id": "1", "expected_route": "course", "expected_complexity": "simple", "pred": "course", "complexity": "simple", "error": "", "latency_s": 1.0},
+            {"id": "2", "expected_route": "case", "expected_complexity": "simple", "pred": "course", "complexity": "simple", "error": "", "latency_s": 2.0}]
+    s = er.summarize(rows)
+    assert s["per_class"]["quote"] == {"n": 0, "correct": 0, "failed": 0, "accuracy": None}          # 没有该类题目：不除零
+    assert s["per_class"]["case"]["accuracy"] == 0.0 and s["confusion"]["case->course"] == 1
+
+
+def test_eval_router_single_call_accepts_routes_and_old_route_format():
+    from rag import eval_router as er
+    new = er.single_call(RouterLLM({"routes": ["course", "case"], "complexity": "simple", "reason": "t"}), "q")
+    old = er.single_call(RouterLLM({"route": "thesis", "complexity": "simple", "reason": "t"}), "q")
+    assert (new["pred"], new["pred_routes"], new["error"]) == ("course", ["course", "case"], "")
+    assert (old["pred"], old["pred_routes"]) == ("thesis", ["thesis"])
+    assert er.single_call(RouterLLM({"routes": ["nonsense"]}), "q")["error"] == "ValueError"

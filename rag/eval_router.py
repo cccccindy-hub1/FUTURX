@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import config
 from .course.llm import parse_json_object
-from .router import ROUTER_SYSTEM, ROUTES, build_router_client
+from .router import ROUTER_SYSTEM, ROUTES, build_router_client, normalize_routes
 
 EVAL_PATH = Path(__file__).parent / "eval_data" / "router_eval.json"
 BJ = timezone(timedelta(hours=8))
@@ -36,10 +36,9 @@ def single_call(client, question: str) -> dict:
                                     {"role": "user", "content": question}],
                           model=config.ROUTER_MODEL, json_mode=True)
         obj = parse_json_object(res.content)
-        route = str(obj.get("route", "")).strip()
-        if route not in ROUTES:
-            raise ValueError("invalid route")
-        return {"pred": route, "complexity": str(obj.get("complexity", "")), "reason": str(obj.get("reason", ""))[:80],
+        routes = normalize_routes(obj.get("routes"), fallback=str(obj.get("route", "")).strip() or None)
+        route = routes[0]
+        return {"pred": route, "pred_routes": routes, "complexity": str(obj.get("complexity", "")), "reason": str(obj.get("reason", ""))[:80],
                 "latency_s": round(res.latency_s or time.perf_counter() - t0, 3), "error": ""}
     except Exception as e:  # noqa: BLE001 - 只记类型名
         return {"pred": None, "complexity": "", "reason": "", "latency_s": round(time.perf_counter() - t0, 3),
