@@ -9,7 +9,7 @@ const keyInput = document.getElementById('apikey');
 const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
 
-const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', off_topic: '拒答' };
+const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', exam: '试卷', off_topic: '拒答' };
 const KIND_LABELS = { course: '教材', case: '判例', quote: '讲话' };
 const KEY_STORE = 'futurx_api_key';
 
@@ -100,6 +100,29 @@ function sourceCard(i, s, ctx) {
 }
 
 /* 带序号的来源（课程 / 判例 / 名言）：[n] 路径；有 kind 且不止一种时按库分区 */
+// 课程回答后附的试卷库基础题（只有题型与题干）
+function practiceList(items) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sources numbered';
+  const h = document.createElement('div');
+  h.className = 'sources-kind';
+  h.textContent = '巩固练习';
+  wrap.appendChild(h);
+  items.forEach((it, i) => {
+    const row = document.createElement('div');
+    row.className = 'src-row';
+    const n = document.createElement('span');
+    n.className = 'src-n';
+    n.textContent = `${i + 1}.`;
+    const t = document.createElement('span');
+    t.className = 'src-row-path';
+    t.textContent = `【${it.qtype_cn || '题目'}】${it.stem || ''}`;
+    row.append(n, t);
+    wrap.appendChild(row);
+  });
+  return wrap;
+}
+
 function numberedSources(sources) {
   const wrap = document.createElement('div');
   wrap.className = 'sources numbered';
@@ -319,6 +342,7 @@ async function send() {
             return wrap;
           })());
       }
+      if (ev.practice && ev.practice.length) body.appendChild(practiceList(ev.practice));
       body.appendChild(meta());
       scrollBottom();
     } else if (ev.type === 'error') {
