@@ -102,6 +102,10 @@ ADAPTIVE_MAX_SUBQUESTIONS = max(1, min(3, int(os.environ.get("ADAPTIVE_MAX_SUBQU
 ADAPTIVE_MAX_ROUNDS = max(1, min(3, int(os.environ.get("ADAPTIVE_MAX_ROUNDS", "2"))))  # complex 检索总轮数硬上限
 ADAPTIVE_INSUFFICIENT_TEXT = os.environ.get("ADAPTIVE_INSUFFICIENT_TEXT") or "资料不足：现有论文指导资料中没有找到足以回答该问题的内容，建议换个问法或补充资料。"
 
+# ---- 试卷库（/auto/ask 的 exam 路由与课程回答后的基础题推荐）----
+EXAM_PRACTICE_MAX = max(0, min(3, int(os.environ.get("EXAM_PRACTICE_MAX", "3"))))   # 课程回答附带的基础题数，0 = 不附
+EXAM_NO_MATCH_TEXT = os.environ.get("EXAM_NO_MATCH_TEXT") or "试卷库中没有找到与该问题对应的题目，可以换个知识点或题型再试。"
+
 # ---- data_benchmark 评测（默认从 <项目根>/data_benchmark 读取）----
 BENCHMARK_DIR = Path(os.environ.get("BENCHMARK_DIR", ROOT / "data_benchmark"))
 BENCHMARK_SEED = int(os.environ.get("BENCHMARK_SEED", "42"))

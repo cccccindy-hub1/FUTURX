@@ -18,6 +18,14 @@ def test_answer_prompt_requires_points_for_list_and_relation_questions():
     assert "按需分点补充" not in s                     # 旧的「按需」写法会让模型只写一两句结论
 
 
+def test_answer_prompt_total_split_total_and_closing_question():
+    s = prompts.ANSWER_SYSTEM
+    assert "AI 李老师" in s
+    assert "“总—分—总”结构" in s and "收束要点" in s
+    assert "最后单独一行，写一个问句" in s and "不加引用编号" in s
+    assert "不写引言和总结段" not in s                 # 与「总分总」冲突的旧要求已去掉
+
+
 def test_chapter_titles_from_chunks():
     chunks = [_chunk("de:1102:ch06.1:000:a", ["第六章 数据市场", "第一节 x"], 6),
               _chunk("de:1102:ch06.1.1:000:b", ["第一节 x", "一、y"], 6),

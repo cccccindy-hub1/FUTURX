@@ -3,6 +3,9 @@
 - off_topic：固定拒答文案，不检索、不调用任何作答模型；
 - policy：政策检索尚未上线，返回占位（接口与路由已打通）；
 - course：走 rag.course.pipeline.ask（需要课程上下文与课程 LLM，未加载时返回 unavailable）；
+  试卷库已加载时，另附 practice：本题选中概念对应的 1–3 道【基础】题（只给题目 ID 与题干，不额外调用 LLM），
+  供前端追问「要不要来几道基础题」；
+- exam：走 rag.exam 试卷库检索（不调用作答模型），默认只给题目不给答案，问题里要答案 / 解析时才附上；
 - thesis：走 rag.adaptive.AdaptiveRAG（simple / complex 由路由给出）；
 - case：判例库（点名直达 / 章节优先 / 按案聚合；「第 X 章有哪些判例」列表模式不调用模型），作答 1 次；
 - quote：名言库（按讲话检索，模型只挑段落编号，程序原文照录），共 1 次挑段落调用；
@@ -47,7 +50,7 @@ QUOTE_UNAVAILABLE = "名言库服务未加载（需要先在服务器上建好�
 class UnifiedService:
     def __init__(self, *, rag=None, router_client=None, course_ctx=None, course_llm=None,
                  case_service=None, case_refs=None, case_llm=None, case_model=None,
-                 quote_service=None, quote_llm=None, quote_model=None):
+                 quote_service=None, quote_llm=None, quote_model=None, exam_bank=None):
         """case_service / quote_service：以判例库 / 名言库为目录的 RAGService（rag.query，store_dir / collection_name 可传参）；
         case_refs：判例目录（cases.jsonl 的行 -> rag.cases.retrieval.load_case_refs）；case_llm / quote_llm：作答 / 挑段落用的
         OpenAICompatClient（缺省沿用课程库的 course_llm）。没有传入对应服务时，该路由返回 unavailable，不影响其它库。"""
@@ -55,6 +58,7 @@ class UnifiedService:
         self.adaptive = AdaptiveRAG(rag) if rag is not None else None
         self.router_client = router_client
         self.course_ctx, self.course_llm = course_ctx, course_llm
+        self.exam = exam_bank                         # 试卷库（线上功能）：exam 路由与课程回答附带的基础题
         self.case_service, self.case_llm = case_service, case_llm or course_llm
         self.quote_service, self.quote_llm = quote_service, quote_llm or course_llm
         from .course import config as cc
@@ -99,6 +103,8 @@ class UnifiedService:
             out.update(status="not_available", answer=config.ROUTER_POLICY_TEXT)
         elif d.route == "course":
             self._course(question, out, trace)
+        elif d.route == "exam":
+            self._exam(question, out, trace)
         elif d.route == "case":
             self._case(question, d, out, trace)
         elif d.route == "quote":
@@ -138,6 +144,8 @@ class UnifiedService:
                     out.update(status="not_available", answer=config.ROUTER_POLICY_TEXT)
                 elif d.route == "course":
                     self._course(question, out, trace)        # 课程库未加载：返回 unavailable
+                elif d.route == "exam":
+                    self._exam(question, out, trace)
                 elif d.route == "case":
                     self._case(question, d, out, trace)       # 单库判例：不流式，结果放进 done
                 elif d.route == "quote":
@@ -149,7 +157,7 @@ class UnifiedService:
                 return
             trace["total_s"] = round(time.perf_counter() - t0, 4)
             out["trace"] = trace
-            yield {"type": "done", **{k: out.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources")},
+            yield {"type": "done", **{k: out.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
                    "trace": trace}
             return
 
@@ -193,7 +201,8 @@ class UnifiedService:
                     else:
                         status, text, sources = "insufficient", config.ADAPTIVE_INSUFFICIENT_TEXT, []
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
-                           "answer": text, "sources": sources, "trace": trace}
+                           "answer": text, "sources": sources,
+                           "practice": self._practice(res.get("selected_concepts") or []), "trace": trace}
                 else:
                     yield item
         finally:
@@ -349,9 +358,36 @@ class UnifiedService:
         grade = {v["chunk_id"]: v["grade"] for v in res.get("filtered", [])}
         out["course"] = {k: res.get(k) for k in ("selected_concepts", "fallback")}
         # 每个召回块的来源（ontology/bm25/both）与筛选等级，便于调试与评测
+        out["course"]["practice"] = self._practice(res.get("selected_concepts") or [])
         out["course"]["recalled"] = [{"chunk_id": r["chunk_id"], "source": r.get("source"), "grade": grade.get(r["chunk_id"]),
                                       "path": " › ".join(r["path"][-3:])} for r in res.get("recalled", [])]
 
+
+    def _practice(self, selected: list[dict]) -> list[dict]:
+        """课程选中概念 -> 试卷库 1–3 道基础题（选择 / 判断 / 名词解释）。试卷库未加载或无对应题时为空。"""
+        if self.exam is None or self.course_ctx is None:
+            return []
+        by_id = self.course_ctx.concepts.by_id
+        names = list(dict.fromkeys(by_id[s["concept_id"]].name for s in selected if s.get("concept_id") in by_id))
+        items = self.exam.by_concepts(names, config.EXAM_PRACTICE_MAX, basic_only=True)
+        return [{"question_id": it.q.question_id, "qtype_cn": it.q.qtype_cn, "stem": it.q.stem} for it in items]
+
+    def _exam(self, question, out, trace) -> None:
+        if self.exam is None:
+            out.update(status="unavailable", answer="试卷库未加载（需要 EXAM_TEACHER_DOC 与学生知识集合）。")
+            return
+        from .exam.store import format_items
+        t0 = time.perf_counter()
+        r = self.exam.search(question)
+        want = r["intent"]["want_answer"]
+        trace["exam"] = {"strategy": r["strategy"], "intent": r["intent"], "bm25_top": r.get("bm25_top"),
+                         "latency_s": round(time.perf_counter() - t0, 4)}
+        if r["status"] != "ok":
+            out.update(status="no_match", answer=config.EXAM_NO_MATCH_TEXT)
+            out["exam"] = {"questions": []}
+            return
+        out["answer"] = format_items(r["items"], include_answer=want)
+        out["exam"] = {"questions": [it.view(include_answer=want) for it in r["items"]]}
 
 @router.post("/auto/ask", dependencies=[Depends(require_api_key)])
 def auto_ask(req: AutoAskRequest, request: Request):

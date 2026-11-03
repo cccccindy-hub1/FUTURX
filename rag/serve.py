@@ -85,6 +85,27 @@ def load_course_backend():
         return None, None
 
 
+def load_exam_backend():
+    """启动时加载一次试卷库（解析题库 docx + 学生知识集合，约 2 秒，不调用 LLM）。
+
+    文件缺失或解析失败时返回 None，统一入口的 exam 路由降级为 unavailable、课程回答不附基础题。
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        from .exam import config as exam_config
+        from .exam.store import ExamBank
+
+        if not exam_config.EXAM_TEACHER_DOC.exists():
+            log.warning("试卷库未启用：EXAM_TEACHER_DOC 未配置或文件不存在，/auto/ask 的 exam 路由将返回 unavailable")
+            return None
+        return ExamBank.build()
+    except Exception as e:  # noqa: BLE001 - 试卷库问题不能拖垮其他知识库
+        log.warning("试卷库未启用：加载失败（%s），/auto/ask 的 exam 路由将返回 unavailable", type(e).__name__)
+        return None
+
+
 def load_case_quote_backends():
     """启动时加载判例库、名言库（各自独立的 Chroma 目录与集合，绝不读写论文库的）。
 
@@ -181,11 +202,17 @@ def build_app(**service_kwargs):
     from .unified import UnifiedService, router as unified_router
 
     course_ctx, course_llm = load_course_backend()
+    exam_bank = load_exam_backend()
     case_service, case_refs, quote_service = load_case_quote_backends()
     app.state.unified = UnifiedService(rag=svc, router_client=build_router_client(),
-                                       course_ctx=course_ctx, course_llm=course_llm,
+                                       course_ctx=course_ctx, course_llm=course_llm, exam_bank=exam_bank,
                                        case_service=case_service, case_refs=case_refs, quote_service=quote_service)
     app.include_router(unified_router)
+    if exam_bank is not None:
+        from .exam.api import router as exam_router
+
+        app.state.exam = exam_bank
+        app.include_router(exam_router)
 
     if web_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
