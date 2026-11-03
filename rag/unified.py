@@ -44,6 +44,7 @@ class _Cancelled(Exception):
 
 
 CASE_UNAVAILABLE = "判例库服务未加载（需要先在服务器上建好判例向量库 rag/case_store）。"
+PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
 QUOTE_UNAVAILABLE = "名言库服务未加载（需要先在服务器上建好名言向量库 rag/quote_store）。"
 
 
@@ -364,12 +365,16 @@ class UnifiedService:
 
 
     def _practice(self, selected: list[dict]) -> list[dict]:
-        """课程选中概念 -> 试卷库 1–3 道基础题（选择 / 判断 / 名词解释）。试卷库未加载或无对应题时为空。"""
+        """课程选中概念 -> 试卷库 1–3 道巩固练习（判断 / 名词解释，不含选择题）。试卷库未加载或没有符合的题时为空列表，
+        前端据此不显示巩固练习这一块。"""
         if self.exam is None or self.course_ctx is None:
             return []
         by_id = self.course_ctx.concepts.by_id
         names = list(dict.fromkeys(by_id[s["concept_id"]].name for s in selected if s.get("concept_id") in by_id))
-        items = self.exam.by_concepts(names, config.EXAM_PRACTICE_MAX, basic_only=True)
+        # 巩固练习只给判断题和名词解释：网页上不显示选择题的选项，学生没法作答，所以单选 / 多选等选择类题型一律排除。
+        # 只在这里限定题型；试卷库直接问题目（“给我第三章选择题”、/exam/*）走另一条路径，仍然照常返回选择题。
+        items = self.exam.by_concepts(names, config.EXAM_PRACTICE_MAX, qtypes=PRACTICE_QTYPES)
+        items = [it for it in items if it.q.qtype in PRACTICE_QTYPES]          # 再保险：即使上游题型过滤失效也不放选择题
         return [{"question_id": it.q.question_id, "qtype_cn": it.q.qtype_cn, "stem": it.q.stem} for it in items]
 
     def _exam(self, question, out, trace) -> None:

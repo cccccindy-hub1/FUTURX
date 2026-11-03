@@ -76,7 +76,7 @@ class Streaming(ScriptedLLM):
 class FakeExam:
     """最小的试卷库替身：与线上 ExamBank 的接口一致（search / by_concepts），不依赖题库文件。"""
 
-    def by_concepts(self, names, k, basic_only=True):
+    def by_concepts(self, names, k, *, chapter=None, qtypes=(), basic_only=False, exclude_ids=()):      # 与 ExamBank.by_concepts 同签名
         return []
 
     def search(self, q):

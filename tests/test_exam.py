@@ -310,3 +310,79 @@ def test_book_chapter_map_by_title_and_unmatched_chapter_links_cross_only(tmp_pa
                  number=1, stem="关于“数据资产”的说法", concepts=["数据资产"])
     link = link_question(q, idx, None)
     assert link.kp_ids == ["S1"] and link.method == "exact:cross"
+
+
+# ---------------------------------------------------------------- 巩固练习不含选择题（网页不显示选项，学生没法作答）
+
+class _Ctx2:
+    class concepts:                                                   # noqa: N801  最小的课程上下文替身
+        class _C:
+            def __init__(self, n):
+                self.name = n
+        by_id = {"C01-0001": _C("数据资产"), "C01-0002": _C("数据资源")}
+
+
+def _svc(bank):
+    svc = UnifiedService(exam_bank=bank)
+    svc.course_ctx = _Ctx2()
+    return svc
+
+
+def test_practice_never_contains_choice_questions_even_when_they_match_best(bank):
+    from rag.unified import PRACTICE_QTYPES
+    # 前提：题库里这个概念确实挂着选择题（否则这条测试什么都没验证）
+    names = ["数据资产", "数据资源"]
+    all_matched = bank.by_concepts(names, 10)
+    assert any(it.q.qtype == "choice" for it in all_matched)
+    got = _svc(bank)._practice([{"concept_id": "C01-0001"}, {"concept_id": "C01-0002"}])
+    assert got and all(g["qtype_cn"] in ("判断题", "名词解释") for g in got)
+    assert not any("选择" in g["qtype_cn"] for g in got) and PRACTICE_QTYPES == ("judge", "term")
+    ids = {g["question_id"] for g in got}
+    assert not (ids & {it.q.question_id for it in all_matched if it.q.qtype == "choice"})       # 一道选择题的 ID 都不在里面
+
+
+def test_practice_is_empty_when_no_judge_or_term_question_matches(bank):
+    """符合的题一道都没有时返回空列表（前端据此整块不显示巩固练习），而不是退回选择题凑数。"""
+    only_choice = ExamBank([it for it in bank.items if it.q.qtype == "choice"], bank.idx, bank.stats)
+    assert any(it.q.qtype == "choice" and "数据资产" in it.concepts for it in only_choice.items)
+    assert _svc(only_choice)._practice([{"concept_id": "C01-0001"}]) == []
+
+
+def test_practice_respects_max_count_and_keeps_stem_and_id_fields(bank, monkeypatch):
+    from rag import config as cfg
+    monkeypatch.setattr(cfg, "EXAM_PRACTICE_MAX", 1)
+    got = _svc(bank)._practice([{"concept_id": "C01-0001"}, {"concept_id": "C01-0002"}])
+    assert len(got) == 1 and set(got[0]) == {"question_id", "qtype_cn", "stem"}
+    monkeypatch.setattr(cfg, "EXAM_PRACTICE_MAX", 0)
+    assert _svc(bank)._practice([{"concept_id": "C01-0001"}]) == []
+
+
+def test_asking_for_choice_questions_directly_still_returns_choice_questions(bank):
+    """试卷库直接问题目不受影响：“给我选择题”照常返回选择题（含 /auto/ask 的 exam 路由与 /exam/* 接口）。"""
+    r = bank.search("给我第一章的选择题")
+    assert r["status"] == "ok" and r["items"] and all(it.q.qtype == "choice" for it in r["items"])
+    svc = UnifiedService(router_client=type("R", (), {"chat": lambda self, *a, **k: LLMResult(content=json.dumps({"route": "exam", "reason": "t"}))})(),
+                         exam_bank=bank)
+    out = svc.ask("给我第一章的选择题")
+    assert out["route"] == "exam" and out["status"] == "ok" and out["exam"]["questions"] and all(q["qtype"] == "choice" for q in out["exam"]["questions"])
+    assert "A." in out["answer"]                                                             # 选项照常给出
+    assert all(it.q.qtype == "choice" for it in bank.by_concepts(["数据资产"], 5, qtypes=("choice",)))
+
+
+def test_bank_level_basic_only_semantics_unchanged(bank):
+    """试卷库本身的“基础题”定义不动（含选择题）；只有课程回答附带的巩固练习另外排除选择题。"""
+    from rag.exam.bank import BASIC_QTYPES
+    assert BASIC_QTYPES == ("choice", "judge", "term")
+    assert any(it.q.qtype == "choice" for it in bank.by_concepts(["数据资产"], 10, basic_only=True))
+
+
+def test_practice_filters_choice_out_even_if_the_bank_ignores_the_qtypes_filter(bank):
+    """再保险：即使试卷库那一层的题型过滤失效（返回了选择题），巩固练习这一层仍然把选择题拿掉。"""
+    class Leaky:
+        def by_concepts(self, names, k, *, chapter=None, qtypes=(), basic_only=False, exclude_ids=()):
+            return bank.by_concepts(names, 10)                       # 无视 qtypes，原样返回含选择题的结果
+    assert any(it.q.qtype == "choice" for it in bank.by_concepts(["数据资产", "数据资源"], 10))
+    svc = UnifiedService(exam_bank=Leaky())
+    svc.course_ctx = _Ctx2()
+    got = svc._practice([{"concept_id": "C01-0001"}, {"concept_id": "C01-0002"}])
+    assert got and all(g["qtype_cn"] in ("判断题", "名词解释") for g in got)
