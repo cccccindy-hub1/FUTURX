@@ -1,29 +1,27 @@
-"""名言检索与作答：按整次讲话检索，模型只挑段落编号，程序原文照录。
+"""名言检索（agentic 自适应 RAG）：不用向量库、不用 bge-m3，启动时直接读原始 docx（见 QuoteIndex.load）。
 
-检索：以名言库为目录的 RAGService（一次讲话一块）做混合 + 重排，取前 count 次讲话；沿用 AdaptiveRAG 的置信度判断，
-最高分低于阈值时改写查询重查一次，仍然不够就返回 not_found（「合集中没有找到相关表述」），不调用挑段落的模型。
-
-作答（领导人讲话不能被模型改写）：
-- 模型只做一件事：在命中的讲话里挑出最相关的段落编号，输出 JSON {"picks":[{"id":"Q1","paragraphs":[2,3]}]}；
-- 程序原样输出这些段落，加出处：「……原文……」——2018 年，全国网络安全和信息化工作会议上的讲话；
-- 不加模型的解读；不调用模型生成任何一个字。越界的讲话编号 / 段落编号丢弃；模型挑不出来或 JSON 非法时，
-  退回每次讲话的第一段（程序决定，不重试）。
-每题调用次数：路由 1 + 挑段落 1，共 2 次（改写查询时再加 1 次）。
+1. 本地初筛（程序）：BM25 检索全部讲话段落，取最相关的 QUOTE_CANDIDATES（12）段作候选；
+2. 模型挑段（1 次调用，Flash、关闭思考）：只输出段落编号，最多 count 段；都不相关时输出一个改写检索词，
+   回到第 1 步重查，**只重查一次**；仍没有 → not_found（「合集中没有找到相关表述」），不再调用任何模型；
+3. 原文照录（程序）：被选中段落的文字由程序原样复制，加出处。模型不生成任何一个字。
+每题调用次数：路由 1 + 挑段 1 = 2 次（改写重查时 3 次）。
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 
-from ..course.llm import LLMClient, parse_json_object
+from ..course.llm import parse_json_object
 from . import config
 
 NOT_FOUND_TEXT = "合集中没有找到相关表述。"
 
-PICK_SYSTEM = """你是引文挑选器，不写任何文字，只从给定的讲话里挑出与问题最相关的段落。
-下面每次讲话以 [Q1]、[Q2]… 编号，其下每个段落以 (1)、(2)… 编号。
-为每次讲话挑出最能回答问题的 1–3 个段落（只挑编号，不要改写、不要概括）；某次讲话没有相关段落就不要列出它。
-只输出一个 JSON 对象：{"picks":[{"id":"Q1","paragraphs":[2,3]}]}"""
+PICK_SYSTEM = """你是引文挑选器，不写任何解释，只从候选段落里挑出能回答学生问题的段落。
+每个候选以 [编号] 开头，附讲话出处。请挑出最相关的段落，最多 {count} 个，按相关程度从高到低；只能用候选里出现过的编号，不要改写、不要概括。
+如果候选里没有一个直接相关，不要硬选：改为给出一个改写后的检索词 rewrite（换成更贴近讲话用语的关键词），picks 留空。
+只输出一个 JSON 对象：{{"picks": [编号, ...], "rewrite": ""}}。picks 非空时 rewrite 填空串。"""
+
+PICK_PARA_CHARS = 420
 
 
 @dataclass
@@ -50,126 +48,125 @@ def source_line(s: SpeechHit) -> str:
     return f"{s.year}年，{s.title}"
 
 
-class QuoteRetriever:
-    def __init__(self, svc, *, min_rerank_score: float | None = None, max_distance: float | None = None):
-        from ..adaptive import AdaptiveRAG
-        self.svc = svc
-        self._ad = AdaptiveRAG(svc, min_rerank_score=min_rerank_score, max_distance=max_distance)
+class QuoteIndex:
+    """名言库内存索引：讲话 + 全部段落的 BM25（一个段落一个检索单位）。"""
 
-    def _search(self, query: str, count: int, tm: dict):
-        t0 = time.perf_counter()
-        res = self.svc.retrieve_result(query, max(count, config.QUOTE_FETCH))
-        rerank = float(res.debug.get("rerank_s", 0.0))
-        tm["rerank_s"] += rerank
-        tm["retrieve_s"] += max(time.perf_counter() - t0 - rerank, 0.0)
-        ok, why = self._ad._confidence(res)
-        scores = res.debug.get("rerank_scores") or {}
-        hits: list[SpeechHit] = []
-        seen: set[str] = set()
-        for i, (cid, doc, meta) in enumerate(zip(res.ids, res.documents, res.metadatas)):
-            sid = meta.get("speech_id")
-            if not sid or sid in seen:
-                continue
-            seen.add(sid)
-            s = scores.get(cid)
-            if s is None:
-                d = res.distances[i] if i < len(res.distances) else 1.0
-                s = (1.0 - float(d)) if d else 1.0 / (i + 1)
-            hits.append(SpeechHit(sid, int(meta.get("year", 0)), meta.get("title", ""), meta.get("kind", ""),
-                                  _paragraphs(meta, doc), float(s)))
-        return hits, ok, why
+    def __init__(self, speeches: list[dict]):
+        from ..course.bm25 import BM25, tokenize
+        self._tok = tokenize
+        self.speeches = {sp["speech_id"]: sp for sp in speeches}
+        self.units: list[tuple[str, int]] = []          # (speech_id, 段落序号 1 起)
+        docs = []
+        for sp in speeches:
+            for i, para in enumerate(sp["paragraphs"], 1):
+                self.units.append((sp["speech_id"], i))
+                docs.append(tokenize(f"{sp['year']} {sp['title']} {para}"))
+        self._bm25 = BM25(docs) if docs else None
+        self.info: dict = {}
 
-    def retrieve(self, question: str, count: int = 1, *, rewrite=None) -> dict:
-        """返回 {"mode": search|not_found, "hits": [SpeechHit], "trace": {...}}。"""
-        count = max(1, min(5, int(count or 1)))
-        tm = {"retrieve_s": 0.0, "rerank_s": 0.0, "generate_s": 0.0, "aux_llm_s": 0.0}
-        t0 = time.perf_counter()
-        trace: dict = {"retrievals": [], "count": count}
-        hits, ok, why = self._search(question, count, tm)
-        trace["retrievals"].append({"query": question, "reliable": ok, "speeches": len(hits), **why})
-        if ok is False and rewrite is not None:                                   # 纠错：改写重查一次
-            t1 = time.perf_counter()
-            new_q = rewrite(question)
-            tm["aux_llm_s"] += time.perf_counter() - t1
-            if new_q and new_q != question:
-                trace["rewritten"] = new_q
-                hits, ok, why = self._search(new_q, count, tm)
-                trace["retrievals"].append({"query": new_q, "reliable": ok, "speeches": len(hits), **why})
-        found = bool(hits) and ok is not False
-        total = round(time.perf_counter() - t0, 4)
-        trace["timings"] = {**{k: round(v, 4) for k, v in tm.items()}, "total_s": total}
-        return {"mode": "search" if found else "not_found", "hits": hits[:count] if found else [], "trace": trace}
+    @classmethod
+    def load(cls, doc=None, *, use_cache: bool = True) -> "QuoteIndex | None":
+        from ..docscache import load_or_build
+        got = load_or_build(doc if doc is not None else config.QUOTE_DOC, "quotes", _speech_rows, version=PARSE_VERSION, use_cache=use_cache)
+        if got is None:
+            return None
+        idx = cls(got[0])
+        idx.info = got[1]
+        return idx
+
+    def speech_hit(self, speech_id: str) -> SpeechHit:
+        sp = self.speeches[speech_id]
+        return SpeechHit(speech_id, int(sp["year"]), sp["title"], sp["kind"], list(sp["paragraphs"]))
+
+    def candidates(self, query: str, limit: int | None = None) -> list[tuple[str, int, float]]:
+        if self._bm25 is None:
+            return []
+        limit = limit or config.QUOTE_CANDIDATES
+        return [(self.units[i][0], self.units[i][1], sc) for i, sc in self._bm25.top(self._tok(query), limit)]
 
 
-def _paragraphs(meta: dict, doc: str) -> list[str]:
-    """段落列表优先取元数据里的 JSON（建库时存入），否则从 [N] 标注的文本里切回来。"""
-    import json
-    import re
-    raw = meta.get("paragraphs_json")
-    if raw:
-        try:
-            v = json.loads(raw)
-            if isinstance(v, list) and all(isinstance(x, str) for x in v):
-                return v
-        except ValueError:
-            pass
-    parts = re.split(r"(?m)^\[(\d+)\]\s*", doc or "")
-    return [parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)]
+PARSE_VERSION = 1
 
 
-# ---------------------------------------------------------------- 挑段落（1 次 LLM 调用）
-
-def render_for_pick(hits: list[SpeechHit], first_n: int = 1) -> str:
+def _speech_rows(doc) -> list[dict]:
+    from .chunker import chunk_quotes
+    from .parser import parse_quotes
     out = []
-    for k, h in enumerate(hits, first_n):
-        paras = "\n".join(f"({i}) {p}" for i, p in enumerate(h.paragraphs, 1))
-        out.append(f"[Q{k}] {source_line(h)}（{h.kind}）\n{paras}")
-    return "\n\n".join(out)
+    for c in chunk_quotes(parse_quotes(doc)):
+        out.append({"speech_id": c.speech_id, "year": c.year, "n": c.n, "title": c.title, "kind": c.kind, "paragraphs": c.paragraphs})
+    return out
 
 
-def pick_paragraphs(question: str, hits: list[SpeechHit], llm: LLMClient, *, model: str, first_n: int = 1) -> tuple[list[QuotePick], dict]:
-    """一次调用，不重试。返回 (挑中的段落, 调试信息)。模型输出越界的编号一律丢弃；挑不出来就每次讲话取第一段。"""
-    info: dict = {"dropped": [], "fallback": ""}
-    n_of = {f"Q{k}": (k, h) for k, h in enumerate(hits, first_n)}
-    msgs = [{"role": "system", "content": PICK_SYSTEM},
-            {"role": "user", "content": f"问题：{question}\n\n{render_for_pick(hits, first_n)}"}]
-    picks: list[QuotePick] = []
+def pick_paragraphs(question: str, index: QuoteIndex, cands: list[tuple[str, int, float]], count: int, llm, *, model: str):
+    """一次调用。返回 (选中的 [(speech_id, 段落序号)], 改写词, 调试信息)。越界 / 重复编号丢弃；输出不可用 → 一个都没选。"""
+    info: dict = {"dropped": [], "error": ""}
+    lines, key = [], {}
+    for k, (sid, pi, _) in enumerate(cands, 1):
+        sp = index.speeches[sid]
+        lines.append(f"[{k}] {sp['year']}年，{sp['title']}\n{sp['paragraphs'][pi - 1][:PICK_PARA_CHARS]}")
+        key[str(k)] = (sid, pi)
+    msgs = [{"role": "system", "content": PICK_SYSTEM.format(count=count)},
+            {"role": "user", "content": f"学生问题：{question}\n\n候选段落：\n" + "\n\n".join(lines)}]
     try:
-        res = llm.chat("quote_pick", msgs, model=model, json_mode=True)
-        obj = parse_json_object(res.content)
-        raw = obj.get("picks")
-        if not isinstance(raw, list):
-            raise ValueError("no picks")
-        seen: set[str] = set()
-        for it in raw:
-            if not isinstance(it, dict):
-                continue
-            key = str(it.get("id", "")).strip().upper().lstrip("[").rstrip("]")
-            if key not in n_of or key in seen:
-                info["dropped"].append({"id": key, "reason": "unknown_or_duplicate_speech"})
-                continue
-            seen.add(key)
-            k, h = n_of[key]
-            idx: list[int] = []
-            for x in it.get("paragraphs") or []:
-                try:
-                    i = int(x)
-                except (TypeError, ValueError):
-                    continue
-                if 1 <= i <= len(h.paragraphs) and i not in idx:
-                    idx.append(i)
-                else:
-                    info["dropped"].append({"id": key, "paragraph": x, "reason": "out_of_range_or_duplicate"})
-            if idx:
-                picks.append(QuotePick(k, h, sorted(idx)[:3]))
+        obj = parse_json_object(llm.chat("quote_pick", msgs, model=model, json_mode=True).content)
     except Exception as e:  # noqa: BLE001 - 只记类型名
-        info["fallback"] = type(e).__name__
-        picks = []
-    if not picks:                                                   # 挑不出来：程序退回每次讲话第一段（不重试、不让模型生成）
-        info["fallback"] = info["fallback"] or "empty_picks"
-        picks = [QuotePick(k, h, [1]) for k, h in n_of.values() if h.paragraphs]
-    picks.sort(key=lambda p: p.n)
-    return picks, info
+        info["error"] = type(e).__name__
+        return [], "", info
+    picked: list[tuple[str, int]] = []
+    raw = obj.get("picks")
+    for x in raw if isinstance(raw, list) else []:
+        v = key.get(str(x).strip().lstrip("[").rstrip("]"))
+        if v is None or v in picked:
+            info["dropped"].append({"pick": str(x)[:20], "reason": "unknown_or_duplicate"})
+        elif len(picked) < count:
+            picked.append(v)
+    rewrite = str(obj.get("rewrite") or "").strip()[:60] if not picked else ""
+    return picked, rewrite, info
+
+
+def group_picks(index: QuoteIndex, picked: list[tuple[str, int]], first_n: int = 1) -> list[QuotePick]:
+    """按讲话归并（保持首次出现的顺序），同一讲话的段落按原文顺序排。Q 编号从 first_n 起。"""
+    order: list[str] = []
+    by: dict[str, list[int]] = {}
+    for sid, pi in picked:
+        if sid not in by:
+            order.append(sid)
+        by.setdefault(sid, []).append(pi)
+    return [QuotePick(first_n + k, index.speech_hit(sid), sorted(set(by[sid]))) for k, sid in enumerate(order)]
+
+
+class QuoteRetriever:
+    """index：QuoteIndex；llm：胜算云 OpenAICompatClient；model：挑段模型（Flash、关闭思考）。"""
+
+    def __init__(self, index: QuoteIndex, llm, *, model: str):
+        self.index, self.llm, self.model = index, llm, model
+
+    def retrieve(self, question: str, count: int = 1, *, first_n: int = 1) -> dict:
+        """返回 {"mode": search|not_found, "picks": [QuotePick], "trace": {...}}。"""
+        count = max(1, min(5, int(count or 1)))
+        t0 = time.perf_counter()
+        trace: dict = {"count": count, "rounds": [], "llm_calls": 0}
+        query = question
+        for round_no in (1, 2):
+            cands = self.index.candidates(query)
+            rd: dict = {"query": query, "candidates": len(cands)}
+            trace["rounds"].append(rd)
+            if not cands:
+                break
+            t1 = time.perf_counter()
+            picked, new_q, info = pick_paragraphs(question, self.index, cands, count, self.llm, model=self.model)
+            trace["llm_calls"] += 1
+            rd.update(pick_s=round(time.perf_counter() - t1, 4), picked=[f"{a}#{b}" for a, b in picked], rewrite=new_q, **info)
+            if picked:
+                trace["total_s"] = round(time.perf_counter() - t0, 4)
+                return {"mode": "search", "picks": group_picks(self.index, picked, first_n), "trace": trace}
+            if round_no == 1 and new_q and new_q != query:
+                trace["rewritten"] = new_q
+                query = new_q
+                continue
+            break
+        trace["total_s"] = round(time.perf_counter() - t0, 4)
+        return {"mode": "not_found", "picks": [], "trace": trace}
 
 
 # ---------------------------------------------------------------- 程序照录

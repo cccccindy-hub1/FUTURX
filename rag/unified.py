@@ -7,8 +7,8 @@
   供前端追问「要不要来几道基础题」；
 - exam：走 rag.exam 试卷库检索（不调用作答模型），默认只给题目不给答案，问题里要答案 / 解析时才附上；
 - thesis：走 rag.adaptive.AdaptiveRAG（simple / complex 由路由给出）；
-- case：判例库（点名直达 / 章节优先 / 按案聚合；「第 X 章有哪些判例」列表模式不调用模型），作答 1 次；
-- quote：名言库（按讲话检索，模型只挑段落编号，程序原文照录），共 1 次挑段落调用；
+- case：判例库（agentic：点名直达 / BM25 初筛 ≤12 案 / 模型选案 1 次 / 作答 1 次；「第 X 章有哪些判例」列表模式不调用模型）；
+- quote：名言库（BM25 初筛段落 / 模型挑段落编号 1 次，程序原文照录，不再调用模型）；
 - routes 有两个库（仅 course / case / quote 之间）：各库并行检索、各自筛选，只调**一次**作答（rag.combined）。
 单库判例、名言不流式，结果放进 done；组合问答只有一次作答，照常流式，materials 事件带库别 kind。
 返回里带 route（= routes[0]）/ routes / complexity / reason / router 耗时 / 各路径 trace，便于调试。
@@ -43,37 +43,35 @@ class _Cancelled(Exception):
     """客户端断开后用来中止 pipeline 回调链（内部使用，不对外暴露）。"""
 
 
-CASE_UNAVAILABLE = "判例库服务未加载（需要先在服务器上建好判例向量库 rag/case_store）。"
+CASE_UNAVAILABLE = "判例库未加载（服务器上缺少判例原始 docx，见 CASE_DOC）。"
 PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
-QUOTE_UNAVAILABLE = "名言库服务未加载（需要先在服务器上建好名言向量库 rag/quote_store）。"
+QUOTE_UNAVAILABLE = "名言库未加载（服务器上缺少名言合集 docx，见 QUOTE_DOC）。"
 
 
 class UnifiedService:
     def __init__(self, *, rag=None, router_client=None, course_ctx=None, course_llm=None,
-                 case_service=None, case_refs=None, case_llm=None, case_model=None,
-                 quote_service=None, quote_llm=None, quote_model=None, exam_bank=None):
-        """case_service / quote_service：以判例库 / 名言库为目录的 RAGService（rag.query，store_dir / collection_name 可传参）；
-        case_refs：判例目录（cases.jsonl 的行 -> rag.cases.retrieval.load_case_refs）；case_llm / quote_llm：作答 / 挑段落用的
-        OpenAICompatClient（缺省沿用课程库的 course_llm）。没有传入对应服务时，该路由返回 unavailable，不影响其它库。"""
+                 case_index=None, quote_index=None, lib_llm=None, pick_model=None, answer_model=None, exam_bank=None):
+        """case_index / quote_index：启动时从 docx 读入的内存索引（rag.cases.retrieval.CaseIndex / rag.quotes.retrieval.QuoteIndex），
+        不用向量库；lib_llm：判例 / 名言（以及后面的政策）选择与作答用的胜算云 OpenAICompatClient（缺省沿用课程库的 course_llm，绝不用论文库的 key）；
+        pick_model：选案 / 挑段模型（Flash、关闭思考）；answer_model：作答模型（Pro、思考 low）。没有传入索引时，该路由返回 unavailable，不影响其它库。"""
         self.rag = rag
         self.adaptive = AdaptiveRAG(rag) if rag is not None else None
         self.router_client = router_client
         self.course_ctx, self.course_llm = course_ctx, course_llm
         self.exam = exam_bank                         # 试卷库（线上功能）：exam 路由与课程回答附带的基础题
-        self.case_service, self.case_llm = case_service, case_llm or course_llm
-        self.quote_service, self.quote_llm = quote_service, quote_llm or course_llm
         from .course import config as cc
-        self.case_model = case_model or cc.COURSE_ANSWER_MODEL
-        self.quote_model = quote_model or cc.COURSE_SELECT_MODEL
-        self.case_retriever = None
-        self.case_refs = case_refs or []
-        if case_service is not None:
+        self.lib_llm = lib_llm or course_llm
+        self.pick_model = pick_model or cc.LIB_PICK_MODEL
+        self.answer_model = answer_model or cc.LIB_ANSWER_MODEL
+        self.case_index, self.quote_index = case_index, quote_index
+        self.case_refs = case_index.refs if case_index is not None else []
+        self.case_retriever = self.quote_retriever = None
+        if case_index is not None and self.lib_llm is not None:
             from .cases.retrieval import CaseRetriever
-            self.case_retriever = CaseRetriever(case_service, self.case_refs)
-        self.quote_retriever = None
-        if quote_service is not None:
+            self.case_retriever = CaseRetriever(case_index, self.lib_llm, model=self.pick_model)
+        if quote_index is not None and self.lib_llm is not None:
             from .quotes.retrieval import QuoteRetriever
-            self.quote_retriever = QuoteRetriever(quote_service)
+            self.quote_retriever = QuoteRetriever(quote_index, self.lib_llm, model=self.pick_model)
 
     # ---------------------------------------------------------------- 可用性
     def _available(self, routes: list[str]) -> list[str]:
@@ -82,9 +80,9 @@ class UnifiedService:
         for r in routes:
             if r == "course" and (self.course_ctx is None or self.course_llm is None):
                 bad.append(r)
-            elif r == "case" and (self.case_retriever is None or self.case_llm is None):
+            elif r == "case" and (self.case_retriever is None):
                 bad.append(r)
-            elif r == "quote" and (self.quote_retriever is None or self.quote_llm is None):
+            elif r == "quote" and (self.quote_retriever is None):
                 bad.append(r)
         return bad
 
@@ -211,7 +209,7 @@ class UnifiedService:
 
     # ---------------------------------------------------------------- 判例（单库，不流式）
     def _case(self, question, d, out, trace) -> None:
-        if self.case_retriever is None or self.case_llm is None:
+        if self.case_retriever is None:
             out.update(status="unavailable", answer=CASE_UNAVAILABLE)
             return
         from .cases.answer import answer_cases
@@ -224,34 +222,29 @@ class UnifiedService:
                        sources=[], list_mode=True)
             trace["case"] = {"mode": "list", "chapter": d.chapter, "llm_calls": 0, "total_s": round(time.perf_counter() - t0, 4)}
             return
-        rewrite = (lambda q: _rewrite_with(self, q)) if getattr(self.case_service, "llm", None) else None
-        got = self.case_retriever.retrieve(question, count=d.count, chapter=d.chapter, rewrite=rewrite)
+        got = self.case_retriever.retrieve(question, count=d.count, chapter=d.chapter)
         trace["case"] = {"mode": got["mode"], **got["trace"]}
         if not got["hits"]:
             out.update(status="insufficient", answer=NOT_FOUND_TEXT, sources=[])      # 没找到：不调用作答模型
-            trace["case"]["llm_calls"] = 0
+            trace["case"]["answer_calls"] = 0
             return
         t1 = time.perf_counter()
-        ans = answer_cases(question, got["hits"], self.case_llm, model=self.case_model)
-        trace["case"].update(answer_s=round(time.perf_counter() - t1, 4), llm_calls=1, dropped=ans.dropped)
+        ans = answer_cases(question, got["hits"], self.lib_llm, model=self.answer_model)
+        trace["case"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, dropped=ans.dropped)
         out.update(answer=ans.text, sources=ans.sources)
 
     # ---------------------------------------------------------------- 名言（单库，不流式，不调用作答模型）
     def _quote(self, question, d, out, trace) -> None:
-        if self.quote_retriever is None or self.quote_llm is None:
+        if self.quote_retriever is None:
             out.update(status="unavailable", answer=QUOTE_UNAVAILABLE)
             return
-        from .quotes.retrieval import NOT_FOUND_TEXT, pick_paragraphs, render_quote_answer, source_line
-        rewrite = (lambda q: _rewrite_with(self, q, self.quote_service)) if getattr(self.quote_service, "llm", None) else None
-        got = self.quote_retriever.retrieve(question, count=d.count, rewrite=rewrite)
+        from .quotes.retrieval import NOT_FOUND_TEXT, render_quote_answer, source_line
+        got = self.quote_retriever.retrieve(question, count=d.count)
         trace["quote"] = {"mode": got["mode"], **got["trace"]}
-        if not got["hits"]:
-            out.update(status="insufficient", answer=NOT_FOUND_TEXT, sources=[])        # 没找到：不调用挑段落模型
-            trace["quote"]["llm_calls"] = 0
+        picks = got["picks"]
+        if not picks:
+            out.update(status="insufficient", answer=NOT_FOUND_TEXT, sources=[])        # 没找到：不再调用任何模型
             return
-        t1 = time.perf_counter()
-        picks, info = pick_paragraphs(question, got["hits"], self.quote_llm, model=self.quote_model)
-        trace["quote"].update(pick_s=round(time.perf_counter() - t1, 4), llm_calls=1, pick=info)
         out.update(answer=render_quote_answer(picks, numbered=True),                    # 程序原文照录，不含任何模型文字
                    sources=[{"n": k, "kind": "quote", "chunk_id": p.speech.speech_id, "path": source_line(p.speech),
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
@@ -437,10 +430,3 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-def _rewrite_with(svc: "UnifiedService", q: str, store=None) -> str:
-    """检索纠错时改写查询：复用论文库的 enhance.rewrite_query（需要该服务有 OpenAI 兼容 llm）。"""
-    from .config import REWRITE_MODEL
-    from .enhance import rewrite_query
-    return rewrite_query(q, (store or svc.case_service).llm, REWRITE_MODEL)

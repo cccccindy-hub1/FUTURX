@@ -89,14 +89,12 @@ def test_two_services_have_independent_stores(fake_env, tmp_path):
     assert a.store_dir != b.store_dir and a.retriever.collection is not b.retriever.collection
 
 
-def test_new_stores_are_never_the_thesis_store_by_default():
-    from rag import config as base
+def test_case_and_quote_libraries_have_no_vector_store_config_at_all():
+    """判例库 / 名言库不再用向量库：配置里不应留下任何 Chroma 目录 / 集合名，更不能指向论文库。"""
     from rag.cases import config as cc
     from rag.quotes import config as qc
-    for d in (cc.CASE_STORE_DIR, qc.QUOTE_STORE_DIR):
-        assert d.name in ("case_store", "quote_store") and d != base.STORE_DIR and base.STORE_DIR not in d.parents
-    assert cc.CASE_COLLECTION == "data_law_cases" and qc.QUOTE_COLLECTION == "xi_digital_quotes"
-    assert cc.CASE_COLLECTION != base.COLLECTION_NAME and qc.QUOTE_COLLECTION != base.COLLECTION_NAME
+    for mod in (cc, qc):
+        assert not [n for n in dir(mod) if n.endswith(("_STORE_DIR", "_COLLECTION"))]
 
 
 def test_instance_built_without_init_falls_back_to_thesis_collection(monkeypatch):

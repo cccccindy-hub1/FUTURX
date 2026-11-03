@@ -20,10 +20,6 @@ CASE_BODY_MAX = int(os.environ.get("CASE_BODY_MAX", "1200"))                    
 
 CASE_CARD_FALLBACK_CHARS = CASE_CARD_MAX_CHARS      # 旧名，保留给已有引用
 
-# ---- 向量库（独立的 Chroma 目录与集合，绝不读写论文库的 rag/chroma_db）----
-CASE_STORE_DIR = Path(os.environ.get("CASE_STORE_DIR", RAG_DIR / "case_store"))
-CASE_COLLECTION = os.environ.get("CASE_COLLECTION", "data_law_cases")
-
 # ---- 检索 ----
-CASE_FETCH_CHUNKS = int(os.environ.get("CASE_FETCH_CHUNKS", "30"))          # 一次向量检索取多少个块（再按案聚合）
+CASE_CANDIDATES = int(os.environ.get("CASE_CANDIDATES", "12"))              # BM25 初筛最多取多少个候选案子交给模型选
 CASE_MAX_BODY_CHUNKS = int(os.environ.get("CASE_MAX_BODY_CHUNKS", "3"))     # 每案最多送几个正文块给作答（另有 1 张卡片）

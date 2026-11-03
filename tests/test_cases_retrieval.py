@@ -1,12 +1,15 @@
-"""判例检索：点名直达、章节优先、跨章补足、按案聚合、低分改写重查、列表模式。假服务，不依赖真实向量库 / 模型。"""
+"""判例检索（agentic）：点名直达、BM25 初筛 ≤12 案、章节优先 + 跨章补足、模型选案、改写只重查一次、列表模式。
+全部 mock：不读 docx、不用向量库、不用 bge-m3、不调用真实模型。"""
 from __future__ import annotations
+
+import json
 
 import pytest
 
 from rag.cases import config as cfg
-from rag.cases.retrieval import (CaseRetriever, NOT_FOUND_TEXT, build_aliases, find_named, list_chapter, load_case_refs,
+from rag.cases.retrieval import (CaseIndex, CaseRetriever, NOT_FOUND_TEXT, build_aliases, find_named, list_chapter, load_case_refs,
                                   render_case_list)
-from rag.retrieval import RetrievalResult
+from rag.course.llm import LLMResult
 
 ROWS = [
     {"case_id": "case:01", "seq": 1, "chapter": "第一章 数据要素", "chapter_no": 1, "title": "甲公司诉乙公司不正当竞争纠纷案",
@@ -23,58 +26,38 @@ ROWS = [
 REFS = load_case_refs(ROWS)
 
 
-def chunk(case_no, kind, text=None, heading="", chapter_no=None, score=0.9, part=1):
+KEYWORDS = {1: "数据要素 市场化", 2: "数据权属 确权", 3: "爬取 抓取 平台数据 竞争", 4: "爬取 公开数据 搬家软件", 5: "短视频 平台 竞争", 6: "数据库 技术秘密", 7: "隐私 个人信息"}
+
+
+def chunk(case_no, kind, text=None, heading="", part=0):
     row = next(r for r in ROWS if r["case_id"] == f"case:{case_no:02d}")
-    return {"id": f"case:{case_no:02d}:{kind}{part}", "doc": text or f"{row['title']}的{kind}文本", "score": score,
-            "meta": {"case_id": f"case:{case_no:02d}", "seq": case_no, "kind": kind, "heading": heading,
-                     "chapter_no": chapter_no or row["chapter_no"], "title": row["title"]}}
+    body = text or f"{KEYWORDS[case_no]} {kind}"
+    return {"chunk_id": f"case:{case_no:02d}:{kind}{part}", "case_id": f"case:{case_no:02d}", "seq": case_no, "chapter": row["chapter"],
+            "chapter_no": row["chapter_no"], "title": row["title"], "kind": kind, "part": part, "heading": heading,
+            "text": f"【{row['chapter']}】{row['title']}\n{body}"}
 
 
-class FakeCollection:
-    """get(where=...) 取某案全部块。"""
-
-    def __init__(self, chunks):
-        self.chunks = chunks
-
-    def get(self, where=None, include=None):
-        sel = [c for c in self.chunks if all(c["meta"].get(k) == v for k, v in (where or {}).items())]
-        return {"documents": [c["doc"] for c in sel], "metadatas": [c["meta"] for c in sel], "ids": [c["id"] for c in sel]}
+CHUNKS = [chunk(n, "card") for n in range(1, 8)] + [
+    chunk(3, "body", "基本案情 爬取 平台数据 抓取", "基本案情", 1), chunk(3, "body", "裁判理由 竞争 秩序", "裁判理由", 2),
+    chunk(3, "body", "无关的附带说明 其他内容", "附注", 3), chunk(3, "body", "另一段 爬取 抓取 技术手段", "技术", 4)]
+INDEX = CaseIndex(REFS, CHUNKS)
 
 
-class FakeSvc:
-    """retrieve_result：按 where 过滤后，返回预设的（已按分数排序的）块；记录每次调用的 query / where。"""
-    mode = "hybrid"
-    llm = None
+class PickLLM:
+    """脚本化选案模型：按调用次序返回 {"picks": [...], "rewrite": ...}；记录每次的消息。"""
 
-    def __init__(self, chunks, scripts=None):
-        self.chunks, self.where, self.calls = chunks, None, []
-        self.collection = FakeCollection(chunks)
-        self.scripts = list(scripts or [])         # 每次调用的“覆盖结果”：list[chunk]；用完后按默认行为
+    def __init__(self, *outs):
+        self.outs, self.calls = list(outs), []
 
-    def retrieve_result(self, query, top_k):
-        self.calls.append({"query": query, "where": self.where, "top_k": top_k})
-        pool = self.scripts.pop(0) if self.scripts else [c for c in self.chunks if all(c["meta"].get(k) == v for k, v in (self.where or {}).items())]
-        pool = sorted(pool, key=lambda c: -c["score"])[:top_k]
-        rs = {c["id"]: c["score"] for c in pool}
-        return RetrievalResult(ids=[c["id"] for c in pool], documents=[c["doc"] for c in pool], metadatas=[c["meta"] for c in pool],
-                               distances=[1 - c["score"] for c in pool], scores=[c["score"] for c in pool],
-                               debug={"rerank_scores": rs, "rerank_s": 0.0})
+    def chat(self, step, messages, *, model, tools=None, json_mode=False):
+        self.calls.append({"step": step, "messages": messages, "model": model, "json_mode": json_mode})
+        out = self.outs.pop(0)
+        return LLMResult(content=out if isinstance(out, str) else json.dumps(out, ensure_ascii=False))
 
 
-def retriever(chunks, scripts=None, min_score=0.3):
-    svc = FakeSvc(chunks, scripts)
-    return CaseRetriever(svc, REFS, min_rerank_score=min_score), svc
-
-
-CHUNKS = [
-    chunk(1, "card", score=0.9), chunk(1, "body", score=0.8, heading="裁判理由"),
-    chunk(2, "card", score=0.7), chunk(2, "body", score=0.6),
-    chunk(3, "card", score=0.95), chunk(3, "body", score=0.9, part=1, heading="基本案情"), chunk(3, "body", score=0.4, part=2, heading="裁判理由"),
-    chunk(4, "card", score=0.85), chunk(4, "body", score=0.5),
-    chunk(5, "card", score=0.5),
-    chunk(6, "card", score=0.45), chunk(6, "body", score=0.4),
-    chunk(7, "card", score=0.35),
-]
+def retr(*outs, index=INDEX):
+    llm = PickLLM(*outs)
+    return CaseRetriever(index, llm, model="flash"), llm
 
 
 # ---------------------------------------------------------------- 别名与点名
@@ -105,111 +88,147 @@ def test_boilerplate_and_truncated_fragments_never_become_aliases():
     assert "房源数据搬运" in al and not any(a.endswith(("纠纷上", "纠纷", "上诉")) for a in al) and "官方来源未披露" not in al
 
 
-# ---------------------------------------------------------------- 点名直达：不做向量检索
+# ---------------------------------------------------------------- 点名直达：不检索、不调用选案模型
 
-def test_named_case_is_fetched_directly_without_vector_search():
-    r, svc = retriever(CHUNKS)
+def test_named_case_is_fetched_directly_without_any_model_call():
+    r, llm = retr()
     out = r.retrieve("微博诉云智联案是怎么判的", count=1)
-    assert out["mode"] == "named" and svc.calls == []                          # 一次向量检索都没有
+    assert out["mode"] == "named" and llm.calls == [] and out["trace"]["llm_calls"] == 0
     h = out["hits"][0]
-    assert h.ref.seq == 3 and h.via == "named" and h.card.endswith("的card文本")                # 取到的是该案的卡片
-    assert len(h.bodies) == 2 and out["trace"]["named"] == ["case:03"]
+    assert h.ref.seq == 3 and h.via == "named" and "爬取" in h.card and len(h.bodies) == 3 and out["trace"]["named"] == ["case:03"]
 
 
 def test_named_respects_count_and_order():
-    r, svc = retriever(CHUNKS)
-    out = r.retrieve("比较大数据搬家软件案和云智联案", count=5)
-    assert [h.ref.seq for h in out["hits"]] == [4, 3] and svc.calls == []
+    r, llm = retr()
+    assert [h.ref.seq for h in r.retrieve("比较大数据搬家软件案和云智联案", count=5)["hits"]] == [4, 3] and llm.calls == []
     assert [h.ref.seq for h in r.retrieve("比较大数据搬家软件案和云智联案", count=1)["hits"]] == [4]
 
 
-# ---------------------------------------------------------------- 章节优先 / 跨章补足 / 按案聚合
+# ---------------------------------------------------------------- BM25 初筛 + 模型选案
 
-def test_chapter_filter_applied_first_and_cases_aggregated_by_max_score():
-    r, svc = retriever(CHUNKS)
-    out = r.retrieve("平台抓取数据的判例", count=2, chapter=6)
-    assert svc.calls[0]["where"] == {"chapter_no": 6}                          # 先在本章里检索
-    assert [h.ref.seq for h in out["hits"]] == [3, 4] and all(h.via == "search" for h in out["hits"])
-    assert out["hits"][0].score == 0.95                                        # 取该案块的最高分（卡片 0.95，而不是正文块的 0.9 / 0.4）
-    assert len(svc.calls) == 1                                                  # 本章够 2 个，不需要跨章
-
-
-def test_each_case_appears_once_even_if_many_chunks_hit():
-    r, _ = retriever(CHUNKS)
-    out = r.retrieve("平台抓取数据", count=5, chapter=6)
-    seqs = [h.ref.seq for h in out["hits"]]
-    assert len(seqs) == len(set(seqs))
-    h3 = [h for h in out["hits"] if h.ref.seq == 3][0]
-    assert len(h3.bodies) == 2 and h3.body_headings == ["基本案情", "裁判理由"]                              # 正文块按分数排序，最相关的在前
+def test_search_runs_bm25_then_exactly_one_pick_call_and_returns_the_picked_cases():
+    r, llm = retr({"picks": ["3"], "rewrite": ""})
+    out = r.retrieve("爬取平台数据的判例", count=1)
+    assert out["mode"] == "search" and [h.ref.seq for h in out["hits"]] == [3] and out["trace"]["llm_calls"] == 1
+    assert len(llm.calls) == 1 and llm.calls[0]["step"] == "case_pick" and llm.calls[0]["model"] == "flash" and llm.calls[0]["json_mode"] is True
+    assert out["hits"][0].via == "search" and out["hits"][0].card.startswith("【第六章")
 
 
-def test_max_body_chunks_per_case_is_limited(monkeypatch):
-    monkeypatch.setattr(cfg, "CASE_MAX_BODY_CHUNKS", 1)
-    r, _ = retriever(CHUNKS)
-    h = [x for x in r.retrieve("x", count=5, chapter=6)["hits"] if x.ref.seq == 3][0]
-    assert len(h.bodies) == 1 and h.body_headings == ["基本案情"]
+def test_pick_prompt_lists_only_bm25_candidates_with_their_cards():
+    r, llm = retr({"picks": ["3"], "rewrite": ""})
+    r.retrieve("爬取抓取的判例", count=2)
+    user = llm.calls[0]["messages"][1]["content"]
+    assert "[3] " in user and "[4] " in user and "爬取" in user                  # 含爬取的案子是候选
+    assert "[7] " not in user and "[1] " not in user                             # 与问题无关的案子不进候选
+    assert "最多 2 个" in llm.calls[0]["messages"][0]["content"]
 
 
-def test_not_enough_in_chapter_fills_from_other_chapters_and_marks_them():
-    r, svc = retriever(CHUNKS)
-    out = r.retrieve("判例", count=4, chapter=2)                                # 第二章只有 1 个案
-    assert [c["where"] for c in svc.calls] == [{"chapter_no": 2}, None]        # 本章不够 -> 再不限章检索一次
-    assert out["hits"][0].ref.seq == 2 and out["hits"][0].via == "search"
-    assert all(h.via == "search_other_chapter" for h in out["hits"][1:]) and len(out["hits"]) == 4
-    assert [h.ref.seq for h in out["hits"]][0] == 2                              # 本章结果排在前面
+def test_candidates_are_capped_by_config(monkeypatch):
+    monkeypatch.setattr(cfg, "CASE_CANDIDATES", 2)
+    assert len(INDEX.candidates("爬取 数据 竞争 平台 权属 隐私 技术秘密")) == 2
 
 
-def test_no_chapter_means_single_unfiltered_search():
-    r, svc = retriever(CHUNKS)
-    out = r.retrieve("判例", count=2)
-    assert len(svc.calls) == 1 and svc.calls[0]["where"] is None
-    assert [h.ref.seq for h in out["hits"]] == [3, 1]
+def test_picks_are_capped_at_count_and_unknown_or_duplicate_ids_are_dropped():
+    r, llm = retr({"picks": ["99", "3", "3", "4", "5"], "rewrite": ""})
+    out = r.retrieve("爬取平台数据竞争的判例", count=2)
+    assert [h.ref.seq for h in out["hits"]] == [3, 4]
+    assert len(out["trace"]["rounds"][0]["dropped"]) == 2
 
 
-def test_card_is_fetched_when_only_body_chunks_hit():
-    only_body = [chunk(4, "body", score=0.9, heading="裁判理由")]
-    r, _ = retriever(CHUNKS, scripts=[only_body])
-    h = r.retrieve("x", count=1)["hits"][0]
-    assert h.ref.seq == 4 and "card" in h.card and h.bodies                    # 命中的只有正文块：补取该案卡片
+def test_chapter_candidates_come_first_and_other_chapters_top_up_and_are_marked():
+    r, _ = retr({"picks": ["4", "3", "5"], "rewrite": ""})
+    ids, via = r._candidates("爬取 竞争 平台", 6)
+    assert set(ids) >= {"case:03", "case:04", "case:05"} and ids[0] in ("case:03", "case:04", "case:05")
+    out = r.retrieve("爬取 竞争 平台", count=3, chapter=6)
+    assert {h.ref.seq for h in out["hits"]} == {3, 4, 5} and all(h.via == "search" for h in out["hits"])      # 都在本章
+    r2, _ = retr({"picks": ["3", "4"], "rewrite": ""})
+    out2 = r2.retrieve("爬取 竞争 数据权属", count=3, chapter=2)                                              # 第 2 章只有案 2；案 3 / 4 靠跨章补足
+    assert {h.ref.seq: h.via for h in out2["hits"]} == {3: "search_other_chapter", 4: "search_other_chapter"}
 
 
-# ---------------------------------------------------------------- 纠错：低分改写重查，仍低则 not_found（不调作答）
-
-def test_low_confidence_triggers_one_rewrite_and_retry_then_succeeds():
-    low = [chunk(5, "card", score=0.1)]
-    good = [chunk(3, "card", score=0.9)]
-    r, svc = retriever(CHUNKS, scripts=[low, good])
-    rewrites = []
-    out = r.retrieve("模糊问题", count=1, rewrite=lambda q: (rewrites.append(q), "改写后的查询")[1])
-    assert rewrites == ["模糊问题"] and [c["query"] for c in svc.calls] == ["模糊问题", "改写后的查询"]
-    assert out["mode"] == "search" and out["hits"][0].ref.seq == 3 and out["trace"]["rewritten"] == "改写后的查询"
+def test_chapter_hits_sort_before_cross_chapter_ones():
+    r, _ = retr({"picks": ["3", "2"], "rewrite": ""})
+    out = r.retrieve("爬取 数据权属 确权", count=2, chapter=2)
+    assert [(h.ref.seq, h.via) for h in out["hits"]] == [(2, "search"), (3, "search_other_chapter")]
 
 
-def test_still_low_after_rewrite_returns_not_found_and_only_retries_once():
-    low = [chunk(5, "card", score=0.05)]
-    r, svc = retriever(CHUNKS, scripts=[low, low, low, low])
-    out = r.retrieve("无关问题", count=1, rewrite=lambda q: "改写")
-    assert out["mode"] == "not_found" and out["hits"] == []
-    assert len(svc.calls) == 2                                                  # 原查询 + 改写后各一次，不再多
-    assert NOT_FOUND_TEXT.startswith("判例库里没有找到")
+def test_bodies_are_the_most_relevant_chunks_limited_by_config(monkeypatch):
+    monkeypatch.setattr(cfg, "CASE_MAX_BODY_CHUNKS", 2)
+    r, _ = retr({"picks": ["3"], "rewrite": ""})
+    h = r.retrieve("爬取 抓取 平台数据", count=1)["hits"][0]
+    assert len(h.bodies) == 2 and all("爬取" in b for b in h.bodies) and not any("无关的附带说明" in b for b in h.bodies)
 
 
-def test_no_rewrite_available_means_not_found_without_extra_calls():
-    r, svc = retriever(CHUNKS, scripts=[[chunk(5, "card", score=0.05)]])
-    out = r.retrieve("无关问题", count=1, rewrite=None)
-    assert out["mode"] == "not_found" and len(svc.calls) == 1
+# ---------------------------------------------------------------- 都不相关：改写后只重查一次
+
+def test_none_relevant_rewrites_once_and_searches_again_then_succeeds():
+    r, llm = retr({"picks": [], "rewrite": "隐私 个人信息"}, {"picks": ["7"], "rewrite": ""})
+    out = r.retrieve("爬取平台数据的判例", count=1)
+    assert out["mode"] == "search" and [h.ref.seq for h in out["hits"]] == [7] and len(llm.calls) == 2
+    assert out["trace"]["rewritten"] == "隐私 个人信息" and [x["query"] for x in out["trace"]["rounds"]] == ["爬取平台数据的判例", "隐私 个人信息"]
+    assert "隐私" in llm.calls[1]["messages"][1]["content"] and "[7] " in llm.calls[1]["messages"][1]["content"]
+    assert "爬取平台数据的判例" in llm.calls[1]["messages"][1]["content"]           # 第二次仍以学生原问题为准
 
 
-def test_unchanged_rewrite_is_not_searched_again():
-    r, svc = retriever(CHUNKS, scripts=[[chunk(5, "card", score=0.05)]])
-    r.retrieve("问题", count=1, rewrite=lambda q: q)
-    assert len(svc.calls) == 1
+def test_still_none_after_rewrite_is_not_found_and_never_rewrites_twice():
+    r, llm = retr({"picks": [], "rewrite": "隐私 个人信息"}, {"picks": [], "rewrite": "再改写 抓取"}, {"picks": ["3"], "rewrite": ""})
+    out = r.retrieve("爬取平台数据的判例", count=1)
+    assert out["mode"] == "not_found" and out["hits"] == [] and len(llm.calls) == 2 and out["trace"]["llm_calls"] == 2
+    assert len(llm.outs) == 1                                                       # 第三个脚本没被用掉：只重查一次
 
 
-def test_reliable_first_search_never_calls_rewrite():
-    r, svc = retriever(CHUNKS)
-    r.retrieve("平台抓取数据", count=1, rewrite=lambda q: pytest.fail("不应改写"))
-    assert len(svc.calls) == 1
+def test_unchanged_or_empty_rewrite_is_not_searched_again():
+    r, llm = retr({"picks": [], "rewrite": "爬取平台数据的判例"})
+    assert r.retrieve("爬取平台数据的判例", count=1)["mode"] == "not_found" and len(llm.calls) == 1
+    r, llm = retr({"picks": [], "rewrite": ""})
+    assert r.retrieve("爬取平台数据的判例", count=1)["mode"] == "not_found" and len(llm.calls) == 1
+
+
+def test_no_bm25_candidates_means_not_found_without_calling_the_model():
+    r, llm = retr()
+    out = r.retrieve("ZZZ QQQ", count=1)
+    assert out["mode"] == "not_found" and llm.calls == [] and out["trace"]["llm_calls"] == 0
+
+
+@pytest.mark.parametrize("bad", ["不是JSON", "[]", '{"picks": "3"}', '{"picks": [null, {}]}'])
+def test_unusable_model_output_is_not_found_not_a_crash_and_not_retried(bad):
+    r, llm = retr(bad)
+    out = r.retrieve("爬取平台数据的判例", count=1)
+    assert out["mode"] == "not_found" and len(llm.calls) == 1
+
+
+def test_model_error_is_recorded_by_type_name_only():
+    class Down:
+        def chat(self, *a, **k):
+            raise TimeoutError("key=SECRET")
+    out = CaseRetriever(INDEX, Down(), model="m").retrieve("爬取平台数据的判例", count=1)
+    assert out["mode"] == "not_found" and out["trace"]["rounds"][0]["error"] == "TimeoutError" and "SECRET" not in json.dumps(out["trace"])
+
+
+def test_empty_index_is_safe():
+    r, llm = retr(index=CaseIndex(REFS, []))
+    assert r.retrieve("爬取", count=1)["mode"] == "not_found" and llm.calls == []
+
+
+# ---------------------------------------------------------------- 加载：docx 缺失跳过；解析结果走 JSON 缓存
+
+def test_load_returns_none_when_the_docx_is_missing(tmp_path):
+    assert CaseIndex.load(tmp_path / "不存在.docx") is None
+
+
+def test_load_parses_once_then_reuses_the_cache_and_reparses_when_the_source_changes(tmp_path, monkeypatch):
+    import rag.cases.retrieval as mod
+    from rag import docscache
+    monkeypatch.setattr(docscache, "cache_path", lambda doc, kind: tmp_path / f"{kind}.json")
+    doc = tmp_path / "cases.docx"
+    doc.write_bytes(b"v1")
+    built = []
+    monkeypatch.setattr(mod, "_chunk_rows", lambda d: built.append(1) or {"refs": [{k: v for k, v in r.items()} for r in ROWS], "chunks": CHUNKS})
+    a = CaseIndex.load(doc)
+    b = CaseIndex.load(doc)
+    assert len(built) == 1 and a.info["source"] == "parsed" and b.info["source"] == "cache" and len(b.refs) == 7 and len(b.chunks) == len(CHUNKS)
+    doc.write_bytes(b"version-2")                                                      # 大小变了 -> 缓存作废
+    assert CaseIndex.load(doc).info["source"] == "parsed" and len(built) == 2
 
 
 # ---------------------------------------------------------------- 列表模式：不检索、不调模型

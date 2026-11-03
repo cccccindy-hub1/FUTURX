@@ -106,42 +106,30 @@ def load_exam_backend():
         return None
 
 
-def load_case_quote_backends():
-    """启动时加载判例库、名言库（各自独立的 Chroma 目录与集合，绝不读写论文库的）。
+def load_doc_libraries():
+    """启动时直接读原始 docx 建内存索引（不用向量库、不用 bge-m3；解析结果按 docx 的 mtime+size 缓存成 JSON）。
 
-    返回 (case_service, case_refs, quote_service)。向量库目录不存在 / 集合未建 / 判例目录 cases.jsonl 缺失时对应项为 None，
-    统一入口的 case / quote 路由降级为 unavailable，不影响论文、课程路由启动。日志只记异常类型名。
+    返回 (case_index, quote_index)。docx 不存在 / 解析失败时对应项为 None，统一入口的 case / quote 路由降级为 unavailable，
+    不影响其它路由启动。日志只记异常类型名。
     """
-    import json
     import logging
 
     log = logging.getLogger(__name__)
-    from .cases import config as cc
-    from .quotes import config as qc
-    from .query import RAGService
-
-    case_service = case_refs = quote_service = None
-    if cc.CASE_STORE_DIR.is_dir():
+    out = []
+    for name, loader, label in (("case", "rag.cases.retrieval:CaseIndex", "判例库"), ("quote", "rag.quotes.retrieval:QuoteIndex", "名言库")):
+        mod, cls = loader.split(":")
         try:
-            from .cases.retrieval import load_case_refs
-
-            rows = [json.loads(l) for l in (cc.CASE_CACHE_DIR / "cases.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-            case_refs = load_case_refs(rows)
-            case_service = RAGService(mode="hybrid", store_dir=cc.CASE_STORE_DIR, collection_name=cc.CASE_COLLECTION)
-        except Exception as e:  # noqa: BLE001 - 判例库问题不能拖垮其它库
-            log.warning("判例库未启用：加载失败（%s），/auto/ask 的 case 路由将返回 unavailable", type(e).__name__)
-            case_service = case_refs = None
-    else:
-        log.warning("判例库未启用：向量库目录不存在，case 路由将返回 unavailable")
-    if qc.QUOTE_STORE_DIR.is_dir():
-        try:
-            quote_service = RAGService(mode="hybrid", store_dir=qc.QUOTE_STORE_DIR, collection_name=qc.QUOTE_COLLECTION)
-        except Exception as e:  # noqa: BLE001
-            log.warning("名言库未启用：加载失败（%s），/auto/ask 的 quote 路由将返回 unavailable", type(e).__name__)
-            quote_service = None
-    else:
-        log.warning("名言库未启用：向量库目录不存在，quote 路由将返回 unavailable")
-    return case_service, case_refs, quote_service
+            import importlib
+            idx = getattr(importlib.import_module(mod), cls).load()
+            if idx is None:
+                log.warning("%s未启用：原始 docx 不存在，%s 路由将返回 unavailable", label, name)
+            else:
+                log.info("%s已加载（%s，%.1fs）", label, idx.info.get("source"), idx.info.get("seconds", 0))
+            out.append(idx)
+        except Exception as e:  # noqa: BLE001 - 单个库的问题不能拖垮其它库
+            log.warning("%s未启用：加载失败（%s），%s 路由将返回 unavailable", label, type(e).__name__, name)
+            out.append(None)
+    return tuple(out)
 
 
 def build_app(**service_kwargs):
@@ -203,10 +191,10 @@ def build_app(**service_kwargs):
 
     course_ctx, course_llm = load_course_backend()
     exam_bank = load_exam_backend()
-    case_service, case_refs, quote_service = load_case_quote_backends()
+    case_index, quote_index = load_doc_libraries()
     app.state.unified = UnifiedService(rag=svc, router_client=build_router_client(),
                                        course_ctx=course_ctx, course_llm=course_llm, exam_bank=exam_bank,
-                                       case_service=case_service, case_refs=case_refs, quote_service=quote_service)
+                                       case_index=case_index, quote_index=quote_index)
     app.include_router(unified_router)
     if exam_bank is not None:
         from .exam.api import router as exam_router

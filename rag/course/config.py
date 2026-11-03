@@ -62,10 +62,20 @@ SINK_THRESHOLD = float(os.environ.get("COURSE_SINK_THRESHOLD", "0.6"))          
 # 15→10：评测集 24 个参考块中，10 块与 15 块保留的一样多（19 个），8 块会丢 1 个；输入变短，作答更快
 COURSE_ANSWER_MAX_CHUNKS = int(os.environ.get("COURSE_ANSWER_MAX_CHUNKS", "10"))
 # 各步骤的思考模式（胜算云 reasoning 参数）：disabled / low / medium / high；留空则不发送，用模型默认
+# 判例库 / 名言库 / 政策库（agentic 自适应 RAG）的模型分工，全部走胜算云（与课程库同一个 OpenAICompatClient，不用论文库的 LLM_API_KEY）：
+# - 选案 / 挑段 / 选块（轻量判断）：Flash，关闭思考；- 判例作答 / 政策作答：Pro，思考 low。temperature 一律 0（客户端固定）。
+LIB_PICK_MODEL = os.environ.get("LIB_PICK_MODEL") or os.environ.get("COURSE_FILTER_MODEL") or "deepseek/deepseek-v4-flash"
+LIB_ANSWER_MODEL = os.environ.get("LIB_ANSWER_MODEL") or COURSE_ANSWER_MODEL
 COURSE_REASONING = {
     "select": os.environ.get("COURSE_SELECT_REASONING", "disabled").strip(),
     "filter": os.environ.get("COURSE_FILTER_REASONING", "disabled").strip(),
     "answer": os.environ.get("COURSE_ANSWER_REASONING", "low").strip(),
+    # 新三库各步骤的思考模式（按 step 名取值，见 OpenAICompatClient.reasoning_for）
+    "case_pick": os.environ.get("LIB_PICK_REASONING", "disabled").strip(),
+    "quote_pick": os.environ.get("LIB_PICK_REASONING", "disabled").strip(),
+    "policy_pick": os.environ.get("LIB_PICK_REASONING", "disabled").strip(),
+    "case_answer": os.environ.get("LIB_ANSWER_REASONING", "low").strip(),
+    "policy_answer": os.environ.get("LIB_ANSWER_REASONING", "low").strip(),
 }
 # HTTP 接口（rag.course.api）单个问题的字符上限，防止超长输入放大 LLM 费用
 COURSE_QUESTION_MAX_CHARS = int(os.environ.get("COURSE_QUESTION_MAX_CHARS", "500"))

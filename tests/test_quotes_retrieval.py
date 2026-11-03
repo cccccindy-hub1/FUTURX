@@ -1,4 +1,4 @@
-"""名言检索与作答：按讲话检索、纠错、模型只挑段落编号、程序原文照录。假服务 + 假 LLM，不依赖真实向量库 / 模型。"""
+"""名言检索（agentic）：BM25 初筛段落、模型只挑段落编号、改写只重查一次、程序原文照录。mock，不读 docx、不用向量库、不调用真实模型。"""
 from __future__ import annotations
 
 import json
@@ -6,142 +6,132 @@ import json
 import pytest
 
 from rag.course.llm import LLMResult
-from rag.quotes.retrieval import (NOT_FOUND_TEXT, PICK_SYSTEM, QuotePick, QuoteRetriever, SpeechHit, pick_paragraphs,
-                                  render_for_pick, render_quote_answer, source_line)
-from rag.retrieval import RetrievalResult
+from rag.quotes import config as cfg
+from rag.quotes.retrieval import (NOT_FOUND_TEXT, PICK_SYSTEM, QuoteIndex, QuotePick, QuoteRetriever, SpeechHit, group_picks,
+                                  pick_paragraphs, render_quote_answer, source_line)
 
 SPEECHES = {
     "quote:2018:01": ("全国网络安全和信息化工作会议上的讲话", "讲话", 2018, ["第一段：没有网络安全就没有国家安全。", "第二段：要加快数据资源整合。", "第三段：要强化关键信息基础设施保护。"]),
     "quote:2022:01": ("习近平.不断做强做优做大我国数字经济", "文章", 2022, ["数字经济是继农业经济、工业经济之后的主要经济形态。"]),
     "quote:2026:03": ("向世界数据组织成立致贺信", "贺信", 2026, ["数据是新型生产要素。", "愿同各方一道推动数据开放共享。"]),
 }
-
-
-def mk_chunk(sid, score):
-    title, kind, year, paras = SPEECHES[sid]
-    return {"id": f"{sid}:abc", "doc": "\n".join(f"[{i}] {p}" for i, p in enumerate(paras, 1)), "score": score,
-            "meta": {"speech_id": sid, "year": year, "title": title, "kind": kind, "paragraphs_json": json.dumps(paras, ensure_ascii=False)}}
-
-
-class FakeSvc:
-    mode = "hybrid"
-    llm = None
-
-    def __init__(self, scripts):
-        self.scripts, self.calls = list(scripts), []
-
-    def retrieve_result(self, query, top_k):
-        self.calls.append((query, top_k))
-        pool = sorted(self.scripts.pop(0), key=lambda c: -c["score"])
-        return RetrievalResult(ids=[c["id"] for c in pool], documents=[c["doc"] for c in pool], metadatas=[c["meta"] for c in pool],
-                               distances=[1 - c["score"] for c in pool], scores=[c["score"] for c in pool],
-                               debug={"rerank_scores": {c["id"]: c["score"] for c in pool}, "rerank_s": 0.0})
+INDEX = QuoteIndex([{"speech_id": sid, "year": y, "n": 1, "title": t, "kind": k, "paragraphs": p} for sid, (t, k, y, p) in SPEECHES.items()])
 
 
 class LLM:
-    def __init__(self, reply=None, exc=None):
-        self.reply, self.exc, self.calls = reply, exc, []
+    """脚本化挑段模型：每次调用按次序返回一个 {"picks": [...], "rewrite": ...}。"""
+
+    def __init__(self, *outs, exc=None):
+        self.outs, self.exc, self.calls = list(outs), exc, []
 
     def chat(self, step, messages, *, model, tools=None, json_mode=False):
-        self.calls.append({"step": step, "messages": messages, "json_mode": json_mode})
+        self.calls.append({"step": step, "messages": messages, "model": model, "json_mode": json_mode})
         if self.exc:
             raise self.exc
-        return LLMResult(content=self.reply if isinstance(self.reply, str) else json.dumps(self.reply, ensure_ascii=False))
+        out = self.outs.pop(0)
+        return LLMResult(content=out if isinstance(out, str) else json.dumps(out, ensure_ascii=False))
 
 
 def hits_for(*sids):
-    out = []
-    for sid in sids:
-        t, k, y, p = SPEECHES[sid]
-        out.append(SpeechHit(sid, y, t, k, p, 0.9))
-    return out
+    return [INDEX.speech_hit(sid) for sid in sids]
 
 
-# ---------------------------------------------------------------- 检索：按整次讲话，取前 count 次
-
-def test_retrieves_whole_speeches_ranked_and_limited_to_count():
-    svc = FakeSvc([[mk_chunk("quote:2018:01", 0.9), mk_chunk("quote:2022:01", 0.7), mk_chunk("quote:2026:03", 0.5)]])
-    out = QuoteRetriever(svc, min_rerank_score=0.3).retrieve("总书记谈数据安全", count=2)
-    assert out["mode"] == "search" and [h.speech_id for h in out["hits"]] == ["quote:2018:01", "quote:2022:01"]
-    assert out["hits"][0].paragraphs == SPEECHES["quote:2018:01"][3] and out["hits"][0].year == 2018 and len(svc.calls) == 1
+def retr(*outs, **kw):
+    llm = LLM(*outs, **kw)
+    return QuoteRetriever(INDEX, llm, model="flash"), llm
 
 
-def test_same_speech_returned_once_and_paragraphs_recovered_from_numbered_text_when_no_json():
-    c = mk_chunk("quote:2018:01", 0.9)
-    del c["meta"]["paragraphs_json"]
-    dup = dict(c, id="dup")
-    svc = FakeSvc([[c, dup]])
-    hits = QuoteRetriever(svc, min_rerank_score=0.3).retrieve("q", count=5)["hits"]
-    assert len(hits) == 1 and hits[0].paragraphs == SPEECHES["quote:2018:01"][3]          # 从 [N] 标注的文本切回原段落
+# ---------------------------------------------------------------- 初筛 + 挑段
+
+def test_bm25_candidates_are_paragraph_level_and_capped(monkeypatch):
+    c = INDEX.candidates("数据 开放 共享")
+    assert c[0][:2] == ("quote:2026:03", 2) and all(isinstance(x[1], int) for x in c)
+    monkeypatch.setattr(cfg, "QUOTE_CANDIDATES", 1)
+    assert len(INDEX.candidates("数据 开放 共享 网络安全")) == 1
 
 
-def test_low_confidence_rewrites_once_then_not_found_without_picking():
-    low = [mk_chunk("quote:2026:03", 0.05)]
-    svc = FakeSvc([low, low, low])
-    out = QuoteRetriever(svc, min_rerank_score=0.3).retrieve("无关问题", count=1, rewrite=lambda q: "改写后")
-    assert out["mode"] == "not_found" and out["hits"] == [] and [c[0] for c in svc.calls] == ["无关问题", "改写后"]
-    assert NOT_FOUND_TEXT == "合集中没有找到相关表述。"
+def test_search_makes_exactly_one_pick_call_and_returns_verbatim_paragraphs():
+    class Peek(LLM):
+        def chat(self, step, messages, *, model, tools=None, json_mode=False):
+            self.outs = [{"picks": [number_of_msgs(messages, "开放共享")], "rewrite": ""}]
+            return super().chat(step, messages, model=model, json_mode=json_mode)
+
+    def number_of_msgs(messages, text):
+        import re
+        return next(int(k) for k, t in re.findall(r"^\[(\d+)\] .*\n(.*)$", messages[1]["content"], flags=re.M) if text in t)
+    llm = Peek()
+    out = QuoteRetriever(INDEX, llm, model="flash").retrieve("数据开放共享", count=1)
+    assert out["mode"] == "search" and len(llm.calls) == 1 and out["trace"]["llm_calls"] == 1
+    assert llm.calls[0]["step"] == "quote_pick" and llm.calls[0]["model"] == "flash" and llm.calls[0]["json_mode"] is True
+    p = out["picks"][0]
+    assert (p.n, p.speech.speech_id, p.indices) == (1, "quote:2026:03", [2]) and p.texts() == ["愿同各方一道推动数据开放共享。"]
 
 
-def test_rewrite_recovers_when_second_search_is_reliable():
-    svc = FakeSvc([[mk_chunk("quote:2026:03", 0.05)], [mk_chunk("quote:2018:01", 0.9)]])
-    out = QuoteRetriever(svc, min_rerank_score=0.3).retrieve("模糊", count=1, rewrite=lambda q: "清晰的查询")
-    assert out["mode"] == "search" and out["hits"][0].speech_id == "quote:2018:01" and out["trace"]["rewritten"] == "清晰的查询"
+def test_pick_prompt_has_numbered_candidates_with_source_and_the_count_limit():
+    r, llm = retr({"picks": [], "rewrite": ""})
+    r.retrieve("数据开放共享", count=3)
+    sysm, user = (m["content"] for m in llm.calls[0]["messages"])
+    assert "最多 3 个" in sysm and "rewrite" in sysm and "数据开放共享" in user
+    assert "[1] 2026年，向世界数据组织成立致贺信\n愿同各方一道推动数据开放共享。" in user
 
 
-def test_reliable_search_never_rewrites():
-    svc = FakeSvc([[mk_chunk("quote:2018:01", 0.9)]])
-    QuoteRetriever(svc, min_rerank_score=0.3).retrieve("q", rewrite=lambda q: pytest.fail("不应改写"))
-    assert len(svc.calls) == 1
+def test_picks_capped_at_count_and_unknown_or_duplicate_ids_dropped():
+    r, llm = retr({"picks": [1, 1, 99, 2, 3], "rewrite": ""})
+    got = r.retrieve("数据 开放 共享 资源 整合", count=2)
+    assert len(got["picks"]) >= 1 and sum(len(p.indices) for p in got["picks"]) == 2
+    assert len(got["trace"]["rounds"][0]["dropped"]) == 2
 
 
-# ---------------------------------------------------------------- 挑段落：1 次调用，只出编号
-
-def test_pick_prompt_shows_numbered_speeches_and_paragraphs_and_asks_for_ids_only():
-    msgs_text = render_for_pick(hits_for("quote:2018:01", "quote:2026:03"))
-    assert "[Q1] 2018年，全国网络安全和信息化工作会议上的讲话（讲话）" in msgs_text and "(2) 第二段：要加快数据资源整合。" in msgs_text and "[Q2] 2026年" in msgs_text
-    assert "不要改写" in PICK_SYSTEM and "只挑编号" in PICK_SYSTEM and "只输出一个 JSON" in PICK_SYSTEM
+def test_same_speech_paragraphs_are_grouped_in_original_order_and_q_numbers_start_at_first_n():
+    picks = group_picks(INDEX, [("quote:2018:01", 3), ("quote:2026:03", 1), ("quote:2018:01", 1)], first_n=3)
+    assert [(p.n, p.speech.speech_id, p.indices) for p in picks] == [(3, "quote:2018:01", [1, 3]), (4, "quote:2026:03", [1])]
 
 
-def test_pick_makes_exactly_one_call_and_returns_chosen_paragraphs():
-    llm = LLM({"picks": [{"id": "Q1", "paragraphs": [2, 3]}, {"id": "Q2", "paragraphs": [1]}]})
-    picks, info = pick_paragraphs("数据安全", hits_for("quote:2018:01", "quote:2026:03"), llm, model="m")
-    assert len(llm.calls) == 1 and llm.calls[0]["step"] == "quote_pick" and llm.calls[0]["json_mode"] is True
-    assert [(p.n, p.indices) for p in picks] == [(1, [2, 3]), (2, [1])] and info["fallback"] == ""
-    assert picks[0].texts() == ["第二段：要加快数据资源整合。", "第三段：要强化关键信息基础设施保护。"]
+# ---------------------------------------------------------------- 都不相关：改写后只重查一次
+
+def test_none_relevant_rewrites_once_then_picks_from_the_new_search():
+    r, llm = retr({"picks": [], "rewrite": "数字经济 主要经济形态"}, {"picks": [1], "rewrite": ""})
+    out = r.retrieve("数据开放共享", count=1)
+    assert out["mode"] == "search" and len(llm.calls) == 2 and out["trace"]["rewritten"] == "数字经济 主要经济形态"
+    assert [x["query"] for x in out["trace"]["rounds"]] == ["数据开放共享", "数字经济 主要经济形态"] and out["picks"][0].speech.speech_id == "quote:2022:01"
+    assert "数据开放共享" in llm.calls[1]["messages"][1]["content"]
 
 
-def test_out_of_range_ids_and_paragraphs_are_dropped_and_recorded():
-    llm = LLM({"picks": [{"id": "Q1", "paragraphs": [2, 9, 0, "x", 2]}, {"id": "Q7", "paragraphs": [1]}, {"id": "Q1", "paragraphs": [1]}]})
-    picks, info = pick_paragraphs("q", hits_for("quote:2018:01"), llm, model="m")
-    assert [(p.n, p.indices) for p in picks] == [(1, [2])]
-    reasons = {(d["id"], d["reason"]) for d in info["dropped"]}
-    assert ("Q7", "unknown_or_duplicate_speech") in reasons and ("Q1", "unknown_or_duplicate_speech") in reasons and ("Q1", "out_of_range_or_duplicate") in reasons
+def test_still_none_after_rewrite_is_not_found_and_never_rewrites_twice():
+    r, llm = retr({"picks": [], "rewrite": "数字经济"}, {"picks": [], "rewrite": "再改"}, {"picks": [1], "rewrite": ""})
+    out = r.retrieve("数据开放共享", count=1)
+    assert out["mode"] == "not_found" and out["picks"] == [] and len(llm.calls) == 2 and len(llm.outs) == 1
 
 
-@pytest.mark.parametrize("bad", [LLM("这不是 JSON"), LLM({"picks": []}), LLM({"picks": [{"id": "Q1", "paragraphs": [99]}]}), LLM(exc=TimeoutError("t")), LLM({"nope": 1})])
-def test_unusable_model_output_falls_back_to_first_paragraph_without_retry(bad):
-    picks, info = pick_paragraphs("q", hits_for("quote:2018:01", "quote:2022:01"), bad, model="m")
-    assert len(bad.calls) == 1 and info["fallback"]                                       # 不重试
-    assert [(p.n, p.indices) for p in picks] == [(1, [1]), (2, [1])]                       # 退回每次讲话第一段（程序决定，模型不生成任何字）
+def test_unchanged_or_empty_rewrite_is_not_searched_again():
+    for rw in ("数据开放共享", ""):
+        r, llm = retr({"picks": [], "rewrite": rw})
+        assert r.retrieve("数据开放共享", count=1)["mode"] == "not_found" and len(llm.calls) == 1
 
 
-def test_pick_at_most_three_paragraphs_per_speech_and_sorted():
-    llm = LLM({"picks": [{"id": "Q1", "paragraphs": [3, 1, 2, 2]}]})
-    picks, _ = pick_paragraphs("q", hits_for("quote:2018:01"), llm, model="m")
-    assert picks[0].indices == [1, 2, 3]
+def test_no_candidates_means_not_found_without_calling_the_model():
+    r, llm = retr()
+    assert r.retrieve("ZZZ QQQ", count=1)["mode"] == "not_found" and llm.calls == []
 
 
-def test_more_than_three_picked_paragraphs_are_capped_at_three_keeping_the_earliest():
-    long = SpeechHit("quote:x", 2020, "长讲话", "讲话", [f"第{i}段原文。" for i in range(1, 7)], 0.9)
-    picks, _ = pick_paragraphs("q", [long], LLM({"picks": [{"id": "Q1", "paragraphs": [6, 5, 4, 3, 2, 1]}]}), model="m")
-    assert picks[0].indices == [1, 2, 3]                                                  # 最多 3 段，按原文顺序保留靠前的
+@pytest.mark.parametrize("bad", ["不是JSON", "[]", '{"picks": "1"}', '{"picks": [null, {}]}'])
+def test_unusable_model_output_is_not_found_and_not_retried(bad):
+    r, llm = retr(bad)
+    assert r.retrieve("数据开放共享", count=1)["mode"] == "not_found" and len(llm.calls) == 1
 
 
-def test_first_n_offsets_q_numbers_for_combined_questions():
-    llm = LLM({"picks": [{"id": "Q3", "paragraphs": [1]}]})
-    picks, _ = pick_paragraphs("q", hits_for("quote:2022:01"), llm, model="m", first_n=3)
-    assert picks[0].n == 3 and "[Q3]" in llm.calls[0]["messages"][1]["content"]
+def test_model_error_is_recorded_by_type_name_only():
+    r, _ = retr(exc=TimeoutError("key=SECRET"))
+    out = r.retrieve("数据开放共享", count=1)
+    assert out["mode"] == "not_found" and out["trace"]["rounds"][0]["error"] == "TimeoutError" and "SECRET" not in json.dumps(out["trace"])
+
+
+def test_empty_index_and_missing_docx_are_safe(tmp_path):
+    assert QuoteIndex([]).candidates("数据") == [] and QuoteIndex.load(tmp_path / "没有.docx") is None
+
+
+def test_pick_prompt_text_forbids_rewriting():
+    assert "不要改写" in PICK_SYSTEM and "不要概括" in PICK_SYSTEM
 
 
 # ---------------------------------------------------------------- 程序照录：原文逐字，带出处

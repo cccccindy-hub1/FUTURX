@@ -33,16 +33,12 @@ def single_mode(request, monkeypatch):
 
 
 class Boom:
-    """判例 / 名言服务的替身：被碰到就失败——纯课程 / 试卷 / 论文 / 拒答题不应触发它们。"""
-    mode = "hybrid"
-    llm = None
-    collection = None
+    """判例 / 名言索引的替身：被碰到就失败——纯课程 / 试卷 / 论文 / 拒答题不应触发它们（检索、选案、取材都不行）。"""
+    refs = []
+    by_id = {}
 
     def __getattr__(self, name):
-        raise AssertionError(f"这类问题不应访问判例 / 名言服务（访问了 {name}）")
-
-    def retrieve_result(self, *a, **k):
-        raise AssertionError("这类问题不应检索判例 / 名言库")
+        raise AssertionError(f"这类问题不应访问判例 / 名言库（访问了 {name}）")
 
 
 def route_client(routes, count=1, chapter=None):
@@ -100,7 +96,7 @@ def strip_times(x):
 def make(ctx_, with_new_libs, route, course_llm=None, exam=None):
     kw = dict(router_client=route, course_ctx=ctx_, course_llm=course_llm, exam_bank=exam)
     if with_new_libs:
-        kw.update(case_service=Boom(), case_refs=[], quote_service=Boom())
+        kw.update(case_index=Boom(), quote_index=Boom())
     svc = UnifiedService(**kw)
     svc.adaptive = Adaptive()
     if with_new_libs:                                    # 构造时 CaseRetriever / QuoteRetriever 已建好；它们的检索入口同样不许被调用

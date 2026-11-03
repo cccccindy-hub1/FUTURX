@@ -11,12 +11,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from rag import combined
-from rag.cases.retrieval import CaseHit, CaseRef, load_case_refs
+from rag.cases.retrieval import CaseHit, CaseIndex, CaseRef, load_case_refs
 from rag.combined import (Materials, answer_combined, build_refs, quote_appendix, render_materials, scrub_fabricated_quotes,
                           tidy_after_removal)
 from rag.course import config
 from rag.course.llm import LLMResult
-from rag.quotes.retrieval import QuotePick, SpeechHit
+from rag.quotes.retrieval import QuoteIndex, QuotePick, SpeechHit
 from rag.retrieval import RetrievalResult
 from rag.router import RouteDecision
 from rag.unified import UnifiedService, router as unified_router
@@ -51,46 +51,22 @@ def route_llm(routes, count=1, chapter=None):
     return R()
 
 
-class FakeStore:
-    """假的 RAGService：按 where 过滤；cards / bodies 预置；llm=None（不触发改写）。"""
-    mode = "hybrid"
-    llm = None
+def case_index():
+    """内存里的小判例索引（不读 docx、不用向量库）：2 个案子，各有卡片，案 3 另有一个正文块。"""
+    from rag.cases.retrieval import CaseIndex
 
-    def __init__(self, chunks):
-        self.chunks, self.where, self.calls = chunks, None, []
-
-        class Col:
-            def __init__(s, outer):
-                s.o = outer
-
-            def get(s, where=None, include=None):
-                sel = [c for c in s.o.chunks if all(c["meta"].get(k) == v for k, v in (where or {}).items())]
-                return {"documents": [c["doc"] for c in sel], "metadatas": [c["meta"] for c in sel], "ids": [c["id"] for c in sel]}
-        self.collection = Col(self)
-
-    def retrieve_result(self, query, top_k):
-        self.calls.append((query, self.where))
-        pool = [c for c in self.chunks if all(c["meta"].get(k) == v for k, v in (self.where or {}).items())]
-        pool = sorted(pool, key=lambda c: -c["score"])[:top_k]
-        return RetrievalResult(ids=[c["id"] for c in pool], documents=[c["doc"] for c in pool], metadatas=[c["meta"] for c in pool],
-                               distances=[1 - c["score"] for c in pool], scores=[c["score"] for c in pool],
-                               debug={"rerank_scores": {c["id"]: c["score"] for c in pool}, "rerank_s": 0.0})
-
-
-def case_store():
-    def ch(n, kind, text, score, heading=""):
+    def ch(n, kind, text, heading="", part=0):
         row = next(r for r in ROWS if r["seq"] == n)
-        return {"id": f"case:{n:02d}:{kind}", "doc": text, "score": score,
-                "meta": {"case_id": f"case:{n:02d}", "seq": n, "kind": kind, "heading": heading, "chapter_no": row["chapter_no"], "title": row["title"]}}
-    return FakeStore([ch(3, "card", "【第六章 数据市场】北京微梦创科诉云智联\n裁判要旨：平台对其数据享有经营利益。", 0.95),
-                      ch(3, "body", "基本案情：云智联抓取了微博平台数据。", 0.9, "基本案情"),
-                      ch(7, "card", "【第二章 数据权属】大数据搬家软件案\n裁判要旨：公开数据也受保护。", 0.7)])
+        return {"chunk_id": f"case:{n:02d}:{kind}{part}", "case_id": f"case:{n:02d}", "seq": n, "chapter": row["chapter"], "chapter_no": row["chapter_no"],
+                "title": row["title"], "kind": kind, "part": part, "heading": heading, "text": text}
+    return CaseIndex(REFS, [ch(3, "card", "【第六章 数据市场】北京微梦创科诉云智联\n裁判要旨：平台对其数据享有经营利益。爬取数据构成不正当竞争，是数据确权的典型判例。"),
+                            ch(3, "body", "基本案情：云智联抓取了微博平台数据。", "基本案情", 1),
+                            ch(7, "card", "【第二章 数据权属】大数据搬家软件案\n裁判要旨：公开数据也受保护。")])
 
 
-def quote_store():
-    return FakeStore([{"id": "quote:2018:01:x", "doc": "\n".join(f"[{i}] {p}" for i, p in enumerate(SPEECH.paragraphs, 1)), "score": 0.9,
-                       "meta": {"speech_id": SPEECH.speech_id, "year": 2018, "title": SPEECH.title, "kind": "讲话",
-                                "paragraphs_json": json.dumps(SPEECH.paragraphs, ensure_ascii=False)}}])
+def quote_index():
+    from rag.quotes.retrieval import QuoteIndex
+    return QuoteIndex([{"speech_id": SPEECH.speech_id, "year": 2018, "n": 1, "title": SPEECH.title, "kind": "讲话", "paragraphs": SPEECH.paragraphs}])
 
 
 class Recorder(ScriptedLLM):
@@ -111,13 +87,22 @@ def filt(step, msgs):
 def case_answer_json(): return jtxt({"cases": [{"id": "C1", "facts": "云智联抓取数据[C1]。", "holding": "构成不正当竞争[C1]。", "relation": "说明确权难[C1]。"}]})
 
 
-def quote_pick_json(): return jtxt({"picks": [{"id": "Q1", "paragraphs": [1]}]})
+def case_pick_json(*seqs): return jtxt({"picks": [str(s) for s in seqs], "rewrite": ""})
+
+
+def quote_pick_json(*phrases):
+    """按内容挑候选段落：候选里含任一短语的都选（默认第一段）。候选编号由检索顺序决定，测试不依赖它。"""
+    phrases = phrases or ("没有网络安全",)
+
+    def run(step, msgs):
+        cands = re.findall(r"^\[(\d+)\] .*\n(.*)$", msgs[1]["content"], flags=re.M)
+        return jtxt({"picks": [int(k) for k, text in cands if any(ph in text for ph in phrases)], "rewrite": ""})
+    return run
 
 
 def svc_with(llm, routes, *, case=True, quote=True, count=1, chapter=None):
     return UnifiedService(router_client=route_llm(routes, count, chapter), course_ctx=_CTX["ctx"], course_llm=llm,
-                          case_service=case_store() if case else None, case_refs=REFS,
-                          quote_service=quote_store() if quote else None)
+                          case_index=case_index() if case else None, quote_index=quote_index() if quote else None)
 
 
 _CTX: dict = {}
@@ -278,11 +263,11 @@ def test_combined_prompt_requires_single_answer_and_forbids_writing_speech_conte
 # ---------------------------------------------------------------- 统一入口：组合问答只调一次作答；课程 + 判例 = 4 次
 
 def test_course_plus_case_is_exactly_four_llm_calls_with_one_answer(cctx):
-    llm = Recorder([pick(), filt, LLMResult(content="知识点讲解[S1]。判例印证[C1]。")])
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="知识点讲解[S1]。判例印证[C1]。")]})
     svc = svc_with(llm, ["course", "case"])
     out = svc.ask("结合判例说明数据确权为什么难")
-    assert llm.steps() == ["select", "filter", "answer"] and svc.router_client.calls == 1
-    assert svc.router_client.calls + len(llm.calls) == 4                                  # 路由 1 + 选概念 1 + 筛选 1 + 作答 1
+    assert sorted(llm.steps()) == ["answer", "case_pick", "filter", "select"] and svc.router_client.calls == 1
+    assert svc.router_client.calls + len(llm.calls) == 5                                  # 路由 1 + 选概念 1 + 筛选 1 + 选案 1 + 作答 1
     assert out["routes"] == ["course", "case"] and out["route"] == "course" and out["status"] == "ok"
     assert [s["kind"] for s in out["sources"]] == ["course", "case"] and "[1]" in out["answer"] and "[2]" in out["answer"]
     assert "case:03" not in out["answer"] and "【讲话原文】" not in out["answer"]
@@ -294,7 +279,7 @@ def test_course_plus_quote_adds_exactly_one_pick_call(cctx):
     # 并行：挑段落与课程的选概念 / 筛选并发，调用顺序不固定，所以用按 step 取脚本的实现
     llm = StepLLM({"select": [pick()], "filter": [filt], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="知识点[S1]。总书记指出[Q1]。")]})
     svc = svc_with(llm, ["course", "quote"])
-    out = svc.ask("用总书记的讲话谈谈数据要素的作用")
+    out = svc.ask("用总书记的讲话谈谈数据要素与网络安全的作用")
     assert sorted(llm.steps()) == ["answer", "filter", "quote_pick", "select"] and svc.router_client.calls + len(llm.calls) == 5      # 课程 + 名言 = 路由 1 + 4
     assert llm.steps().count("answer") == 1                                               # 只有一次作答
     assert out["answer"].endswith("——2018年，全国网络安全和信息化工作会议上的讲话") and [s["kind"] for s in out["sources"]] == ["course", "quote"]
@@ -318,15 +303,15 @@ class StepLLM:
 
 
 def test_case_plus_quote_makes_pick_and_one_answer_without_course(cctx):
-    llm = StepLLM({"quote_pick": [quote_pick_json()], "answer": [LLMResult(content="判例讲了数据权益[C1]。总书记强调[Q1]。")]})
+    llm = StepLLM({"case_pick": [case_pick_json(3)], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="判例讲了数据权益[C1]。总书记强调[Q1]。")]})
     svc = svc_with(llm, ["case", "quote"])
-    out = svc.ask("结合判例和总书记的讲话谈谈数据安全")
-    assert sorted(llm.steps()) == ["answer", "quote_pick"] and [s["kind"] for s in out["sources"]] == ["case", "quote"]
+    out = svc.ask("结合判例和总书记的讲话谈谈网络安全")
+    assert sorted(llm.steps()) == ["answer", "case_pick", "quote_pick"] and [s["kind"] for s in out["sources"]] == ["case", "quote"]
     assert out["trace"]["combined"]["sections"] == ["case", "quote"]
 
 
 def test_materials_given_to_the_answer_model_are_partitioned(cctx):
-    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="x[S1][C1]")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="x[S1][C1]")]})
     svc = svc_with(llm, ["course", "case"])
     svc.ask("结合判例说明数据确权为什么难")
     user = next(c for c in llm.calls if c["step"] == "answer")["messages"][1]["content"]
@@ -335,7 +320,7 @@ def test_materials_given_to_the_answer_model_are_partitioned(cctx):
 
 
 def test_each_library_is_filtered_independently_and_timed(cctx):
-    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="x[S1][C1]")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="x[S1][C1]")]})
     out = svc_with(llm, ["course", "case"]).ask("结合判例说明数据确权为什么难")
     c = out["trace"]["combined"]
     assert c["course"]["kept"] >= 1 and c["course"]["trace"]["totals"]["calls"] == 2        # 课程库自己的 select + filter，不含作答
@@ -355,15 +340,15 @@ def test_libraries_run_in_parallel_threads(cctx, monkeypatch):
         return run
     monkeypatch.setattr(combined, "_case_material", wrap(orig_case))
     monkeypatch.setattr(combined, "_course_material", wrap(orig_course))
-    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="x[S1][C1]")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="x[S1][C1]")]})
     out = svc_with(llm, ["course", "case"]).ask("结合判例说明数据确权为什么难")
     assert out["status"] == "ok" and not barrier.broken
 
 
 def test_one_library_empty_still_answers_from_the_other_and_reports_missing(cctx):
-    empty_case = FakeStore([])
+    empty_case = CaseIndex(REFS, [])
     llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="只有教材[S1]。")]})
-    svc = UnifiedService(router_client=route_llm(["course", "case"]), course_ctx=cctx, course_llm=llm, case_service=empty_case, case_refs=REFS)
+    svc = UnifiedService(router_client=route_llm(["course", "case"]), course_ctx=cctx, course_llm=llm, case_index=empty_case)
     out = svc.ask("结合判例说明数据确权为什么难")
     assert out["status"] == "ok" and [s["kind"] for s in out["sources"]] == ["course"] and out["trace"]["combined"]["missing"] == ["case"]
 
@@ -371,8 +356,8 @@ def test_one_library_empty_still_answers_from_the_other_and_reports_missing(cctx
 def test_all_libraries_empty_means_insufficient_and_no_answer_call(cctx):
     llm = StepLLM({"select": [LLMResult(content="乱码")], "filter": []})
     svc = UnifiedService(router_client=route_llm(["case", "quote"]), course_ctx=cctx, course_llm=llm,
-                         case_service=FakeStore([]), case_refs=REFS, quote_service=FakeStore([]))
-    out = svc.ask("结合判例和总书记的讲话谈谈数据安全")
+                         case_index=CaseIndex(REFS, []), quote_index=QuoteIndex([]))
+    out = svc.ask("结合判例和总书记的讲话谈谈网络安全")
     assert out["status"] == "insufficient" and "answer" not in llm.steps() and out["sources"] == []
 
 
@@ -385,43 +370,43 @@ def test_combined_with_unloaded_library_returns_unavailable_without_any_call(cct
 # ================================================================ 单库判例 / 名言（统一入口）
 
 def test_single_case_route_one_answer_call_no_stream(cctx):
-    llm = StepLLM({"case_answer": [case_answer_json()]})
+    llm = StepLLM({"case_pick": [case_pick_json(3)], "case_answer": [case_answer_json()]})
     svc = svc_with(llm, ["case"], count=1, chapter=6)
     out = svc.ask("举一个关于数据爬取的判例")
-    assert llm.steps() == ["case_answer"] and svc.router_client.calls == 1 and svc.router_client.calls + len(llm.calls) == 2    # 路由 1 + 作答 1
+    assert llm.steps() == ["case_pick", "case_answer"] and svc.router_client.calls == 1 and svc.router_client.calls + len(llm.calls) == 3    # 路由 1 + 选案 1 + 作答 1
     assert out["route"] == "case" and out["routes"] == ["case"] and out["count"] == 1 and out["chapter"] == 6 and out["status"] == "ok"
     assert out["answer"].startswith("【第六章 数据市场】北京微梦创科诉云智联不正当竞争纠纷案\n案号：（2020）京73民终2980号") and "[1]" in out["answer"]
     assert out["sources"][0]["kind"] == "case" and out["sources"][0]["case_number"] == "（2020）京73民终2980号"
-    assert out["trace"]["case"]["llm_calls"] == 1 and out["trace"]["case"]["mode"] in ("search", "named")
+    assert out["trace"]["case"]["answer_calls"] == 1 and out["trace"]["case"]["llm_calls"] == 1 and out["trace"]["case"]["mode"] == "search"
 
 
 def test_single_case_named_goes_straight_to_the_case_without_vector_search(cctx):
     llm = StepLLM({"case_answer": [case_answer_json()]})
     svc = svc_with(llm, ["case"])
     out = svc.ask("微博诉云智联案是怎么判的")
-    assert out["trace"]["case"]["mode"] == "named" and svc.case_service.calls == []        # 点名直达：一次向量检索都没有
+    assert out["trace"]["case"]["mode"] == "named" and llm.steps() == ["case_answer"]        # 点名直达：不检索、不调用选案模型
 
 
 def test_case_list_mode_calls_no_model_and_no_retrieval(cctx):
     llm = StepLLM({})
     svc = svc_with(llm, ["case"], chapter=6)
     out = svc.ask("第六章有哪些判例？")
-    assert llm.calls == [] and svc.case_service.calls == [] and svc.router_client.calls == 1
+    assert llm.calls == [] and svc.router_client.calls == 1
     assert out["status"] == "ok" and out["answer"].startswith("第六章 数据市场共有 1 个判例：") and "1. 北京微梦创科" in out["answer"]
     assert out["trace"]["case"]["mode"] == "list" and out["trace"]["case"]["llm_calls"] == 0
 
 
 def test_case_not_found_does_not_call_the_answer_model(cctx):
     llm = StepLLM({})
-    svc = UnifiedService(router_client=route_llm(["case"]), course_ctx=cctx, course_llm=llm, case_service=FakeStore([]), case_refs=REFS)
+    svc = UnifiedService(router_client=route_llm(["case"]), course_ctx=cctx, course_llm=llm, case_index=CaseIndex(REFS, []))
     out = svc.ask("一个完全无关的判例问题")
     assert llm.calls == [] and out["status"] == "insufficient" and out["answer"].startswith("判例库里没有找到") and out["sources"] == []
 
 
 def test_single_quote_route_is_verbatim_with_one_pick_call_and_no_answer_model(cctx):
-    llm = StepLLM({"quote_pick": [jtxt({"picks": [{"id": "Q1", "paragraphs": [1, 2]}]})]})
-    svc = svc_with(llm, ["quote"])
-    out = svc.ask("总书记关于数据安全是怎么说的")
+    llm = StepLLM({"quote_pick": [quote_pick_json("没有网络安全", "资源整合")]})
+    svc = svc_with(llm, ["quote"], count=2)
+    out = svc.ask("总书记关于网络安全与数据资源整合是怎么说的")
     assert llm.steps() == ["quote_pick"] and svc.router_client.calls + len(llm.calls) == 2         # 路由 1 + 挑段落 1，不调用作答模型
     assert out["answer"] == ("「" + SPEECH.paragraphs[0] + "\n" + SPEECH.paragraphs[1] + "」[1]\n——2018年，全国网络安全和信息化工作会议上的讲话")
     assert out["sources"] == [{"n": 1, "kind": "quote", "chunk_id": "quote:2018:01", "path": "2018年，全国网络安全和信息化工作会议上的讲话",
@@ -430,7 +415,7 @@ def test_single_quote_route_is_verbatim_with_one_pick_call_and_no_answer_model(c
 
 def test_quote_not_found_says_so_and_skips_the_pick_call(cctx):
     llm = StepLLM({})
-    svc = UnifiedService(router_client=route_llm(["quote"]), course_ctx=cctx, course_llm=llm, quote_service=FakeStore([]))
+    svc = UnifiedService(router_client=route_llm(["quote"]), course_ctx=cctx, course_llm=llm, quote_index=QuoteIndex([]))
     out = svc.ask("一个合集里没有的话题")
     assert llm.calls == [] and out["status"] == "insufficient" and out["answer"] == "合集中没有找到相关表述。"
 
@@ -508,7 +493,7 @@ class StreamStep(StepLLM):
 
 
 def test_auto_ask_http_returns_routes_count_chapter_and_sources(cctx):
-    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="知识点[S1]。判例[C1]。")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="知识点[S1]。判例[C1]。")]})
     r = _app(svc_with(llm, ["course", "case"], count=2, chapter=2)).post("/auto/ask", json={"question": "结合判例说明数据确权为什么难"})
     body = r.json()
     assert r.status_code == 200 and body["routes"] == ["course", "case"] and body["route"] == "course" and body["count"] == 2 and body["chapter"] == 2
@@ -516,7 +501,7 @@ def test_auto_ask_http_returns_routes_count_chapter_and_sources(cctx):
 
 
 def test_sse_single_case_is_not_streamed_result_in_done(cctx):
-    llm = StepLLM({"case_answer": [case_answer_json()]})
+    llm = StepLLM({"case_pick": [case_pick_json(3)], "case_answer": [case_answer_json()]})
     ev = _events(_app(svc_with(llm, ["case"])).post("/auto/ask/stream", json={"question": "举一个关于数据爬取的判例"}))
     kinds = [e["type"] for e in ev]
     assert kinds == ["route", "done"] and ev[0]["routes"] == ["case"] and "delta" not in kinds and "materials" not in kinds
@@ -525,7 +510,7 @@ def test_sse_single_case_is_not_streamed_result_in_done(cctx):
 
 def test_sse_single_quote_is_not_streamed_result_in_done(cctx):
     llm = StepLLM({"quote_pick": [quote_pick_json()]})
-    ev = _events(_app(svc_with(llm, ["quote"])).post("/auto/ask/stream", json={"question": "总书记关于数据安全是怎么说的"}))
+    ev = _events(_app(svc_with(llm, ["quote"])).post("/auto/ask/stream", json={"question": "总书记关于网络安全与数据资源整合是怎么说的"}))
     assert [e["type"] for e in ev] == ["route", "done"] and ev[-1]["answer"].startswith("「" + SPEECH.paragraphs[0] + "」")
     assert ev[-1]["sources"][0]["kind"] == "quote"
 
@@ -538,8 +523,8 @@ def test_sse_case_list_mode_has_no_model_calls(cctx):
 
 def test_sse_combined_streams_the_single_answer_with_kind_in_materials(cctx):
     pieces = ["数据确权难在权属不清[S", "1]。判例印证[C", "1]。总书记强调[Q", "1]。"]
-    llm = StreamStep({"select": [pick()], "filter": [filt], "answer": [None]}, pieces)
-    svc = svc_with(llm, ["course", "case", ][:2])
+    llm = StreamStep({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [None]}, pieces)
+    svc = svc_with(llm, ["course", "case"])
     ev = _events(_app(svc).post("/auto/ask/stream", json={"question": "结合判例说明数据确权为什么难"}))
     kinds = [e["type"] for e in ev]
     assert kinds[0] == "route" and ev[0]["routes"] == ["course", "case"] and kinds[-1] == "done" and kinds.count("done") == 1 and "error" not in kinds
@@ -557,7 +542,7 @@ def test_sse_combined_streams_the_single_answer_with_kind_in_materials(cctx):
 def test_sse_combined_with_quote_streams_and_done_carries_verbatim_appendix(cctx):
     pieces = ["知识点[S1]。", "总书记指出「没有网络安全就没有国家安全」[Q", "1]。"]
     llm = StreamStep({"select": [pick()], "filter": [filt], "quote_pick": [quote_pick_json()], "answer": [None]}, pieces)
-    ev = _events(_app(svc_with(llm, ["course", "quote"])).post("/auto/ask/stream", json={"question": "用总书记的讲话谈谈数据要素的作用"}))
+    ev = _events(_app(svc_with(llm, ["course", "quote"])).post("/auto/ask/stream", json={"question": "用总书记的讲话谈谈数据要素与网络安全的作用"}))
     done = ev[-1]
     assert done["type"] == "done" and done["answer"].endswith("——2018年，全国网络安全和信息化工作会议上的讲话")
     assert "【讲话原文】\n「" + SPEECH.paragraphs[0] + "」" in done["answer"] and [s["kind"] for s in done["sources"]] == ["course", "quote"]
@@ -570,7 +555,7 @@ def test_sse_combined_error_in_a_library_is_an_error_event_with_type_name_only(c
             if step == "select":
                 raise RuntimeError("upstream key=SECRET-KEY detail")
             return super().chat(step, messages, model=model, **k)
-    llm = Boom({"filter": [filt], "answer": [None]}, ["x"])
+    llm = Boom({"filter": [filt], "case_pick": [case_pick_json(3)], "answer": [None]}, ["x"])
     r = _app(svc_with(llm, ["course", "case"])).post("/auto/ask/stream", json={"question": "结合判例说明数据确权为什么难"})
     ev = _events(r)
     assert ev[-1] == {"type": "error", "error": "RuntimeError"} and "done" not in [e["type"] for e in ev]

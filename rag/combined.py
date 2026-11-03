@@ -263,30 +263,16 @@ def _course_material(svc, question: str, on_event=None) -> tuple[dict, dict]:
 
 def _case_material(svc, question: str, count: int, chapter: int | None) -> dict:
     t0 = time.perf_counter()
-    rewrite = (lambda q: _rewrite(svc, q)) if getattr(svc.case_service, "llm", None) else None
-    out = svc.case_retriever.retrieve(question, count=count, chapter=chapter, rewrite=rewrite)
+    out = svc.case_retriever.retrieve(question, count=count, chapter=chapter)
     out["trace"]["retrieve_s"] = round(time.perf_counter() - t0, 4)
     return out
 
 
 def _quote_material(svc, question: str, count: int, first_n: int = 1) -> dict:
-    from .quotes.retrieval import pick_paragraphs
     t0 = time.perf_counter()
-    rewrite = (lambda q: _rewrite(svc, q, svc.quote_service)) if getattr(svc.quote_service, "llm", None) else None
-    out = svc.quote_retriever.retrieve(question, count=count, rewrite=rewrite)
-    t1 = time.perf_counter()
-    picks, info = ([], {})
-    if out["hits"]:
-        picks, info = pick_paragraphs(question, out["hits"], svc.quote_llm, model=svc.quote_model, first_n=first_n)
-    out.update(picks=picks, pick_info=info)
-    out["trace"]["retrieve_s"], out["trace"]["pick_s"] = round(t1 - t0, 4), round(time.perf_counter() - t1, 4)
+    out = svc.quote_retriever.retrieve(question, count=count, first_n=first_n)
+    out["trace"]["retrieve_s"] = round(time.perf_counter() - t0, 4)
     return out
-
-
-def _rewrite(svc, q: str, store=None) -> str:
-    from .config import REWRITE_MODEL
-    from .enhance import rewrite_query
-    return rewrite_query(q, (store or svc.case_service).llm, REWRITE_MODEL)
 
 
 def gather_materials(svc, question: str, decision, *, on_event=None) -> Materials:
@@ -325,7 +311,7 @@ def gather_materials(svc, question: str, decision, *, on_event=None) -> Material
     if "quote" in results:
         out = results["quote"]
         m.quote_picks = out["picks"]
-        m.traces["quote"] = {"mode": out["mode"], "pick": out["pick_info"], **out["trace"]}
+        m.traces["quote"] = {"mode": out["mode"], **out["trace"]}
         if not out["picks"]:
             m.empty.append("quote")
     m.traces["wall_s"] = wall
