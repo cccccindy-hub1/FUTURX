@@ -14,6 +14,8 @@ CASE_DOC = Path(os.environ.get("CASE_DOC", RAG_DIR / "case_data" / "数据法典
 CASE_CACHE_DIR = Path(os.environ.get("CASE_CACHE_DIR", RAG_DIR / "case_cache"))
 
 # ---- 切块 ----
-CASE_CARD_FALLBACK_CHARS = int(os.environ.get("CASE_CARD_FALLBACK_CHARS", "800"))   # 没有要点类小节时，卡片取「本院认为」等约这么多字
+CASE_CARD_MAX_CHARS = int(os.environ.get("CASE_CARD_MAX_CHARS", os.environ.get("CASE_CARD_FALLBACK_CHARS", "800")))   # 卡片正文句末截断上限（卡片头不计）；兼容旧变量名
 CASE_BODY_MIN = int(os.environ.get("CASE_BODY_MIN", "800"))                          # 正文块字数下限（太短的小节与相邻小节合并）
 CASE_BODY_MAX = int(os.environ.get("CASE_BODY_MAX", "1200"))                         # 正文块字数上限（超出按段落 / 句子拆开）
+
+CASE_CARD_FALLBACK_CHARS = CASE_CARD_MAX_CHARS      # 旧名，保留给已有引用

@@ -1,7 +1,9 @@
 """判例切块：每案两类块，都带「案名 + 章节标签」前缀，检索命中后能归到判例。
 
-- 判例卡片（card，每案 1 块）：案名、章节标签、案号/法院/日期等元数据，加「裁判要点 / 裁判要旨 / 典型意义」；
-  没有这几节的案子（多为判决书全文），取以「本院认为」开头的段落约 CASE_CARD_FALLBACK_CHARS 字；
+- 判例卡片（card，每案 1 块）：案名、章节标签、案号/法院/日期等元数据（卡片头，不计字数），加「裁判要点 / 裁判要旨 / 典型意义」；
+  卡片正文一律在句末截断到 CASE_CARD_MAX_CHARS（800）字以内。要点、典型意义的完整原文不依赖卡片：它们本来就是案内的小节，
+  完整地留在正文块里（有测试守住这一点）；
+  没有这几节的案子（多为判决书全文），取以「本院认为」开头的段落约 CASE_CARD_MAX_CHARS 字；
   找不到「本院认为」再取「判决如下」之前最后约这么多字；仍找不到就取正文开头。
   card_source 记录卡片取自哪里：points（要点类小节）/ court_opinion（本院认为）/ before_judgment（判决如下之前）/ lead（正文开头）。
 - 正文块（body）：按小标题切，每块 CASE_BODY_MIN–CASE_BODY_MAX 字；太短的小节与相邻小节合并，太长的按段落（必要时按句）拆开。
@@ -146,13 +148,35 @@ def _cut(text: str, n: int) -> str:
     return cut[: m + 1] if m >= int(n * 0.6) else cut
 
 
+def _cut_sections(secs: list[tuple[str, str]], n: int) -> str:
+    """要点类小节合并后在句末截断到 n 字以内（标题「裁判要点：」也计入这 n 字，卡片头不计）。
+    每个小节至少保留一句，按顺序依次分配剩余字数，后面的小节不会被前面的挤没。"""
+    full = "\n".join(f"{t}：{x}" for t, x in secs)
+    if len(full) <= n:
+        return full
+    out, left = [], n
+    for i, (t, x) in enumerate(secs):
+        share = max(left // (len(secs) - i), len(t) + 1 + 40)       # 每节至少给标题 + 约 40 字
+        piece = _cut(f"{t}：{x}", min(share, left))
+        out.append(piece)
+        left -= len(piece) + 1
+        if left <= 0:
+            break
+    return _hard_limit("\n".join(out), n)
+
+
+def _hard_limit(text: str, n: int) -> str:
+    """最后一道保险：任何情况下不超过 n 字（句末截断失败时才会硬切）。"""
+    return text if len(text) <= n else _cut(text, n) if len(_cut(text, n)) <= n else text[:n]
+
+
 def build_card(c: ParsedCase) -> CaseChunk:
     secs = _point_sections(c)
     if secs:
-        body = "\n".join(f"{t}：{x}" for t, x in secs)
+        body = _cut_sections(secs, config.CASE_CARD_MAX_CHARS)
         source = "points"
     else:
-        body, source = _fallback_excerpt(c, config.CASE_CARD_FALLBACK_CHARS)
+        body, source = _fallback_excerpt(c, config.CASE_CARD_MAX_CHARS)
     head = [case_prefix(c)]
     ml = _meta_line(c)
     if ml:

@@ -152,13 +152,13 @@ def test_card_falls_back_to_court_opinion_paragraph_start(case_doc):
     c2 = cards[2]
     assert c2.card_source == "court_opinion"
     assert "本院认为，合同合法有效" in c2.text and "原告诉称" not in c2.text    # 从「本院认为」那一段开始，不含前面的诉称
-    assert c2.body_chars <= case_cfg.CASE_CARD_FALLBACK_CHARS + 120
+    assert c2.body_chars <= case_cfg.CASE_CARD_MAX_CHARS
 
 
 def test_card_falls_back_to_text_before_judgment_when_no_court_opinion(case_doc):
     c3 = {k.seq: k for k in _chunks(case_doc)[1] if k.kind == "card"}[3]
     assert c3.card_source == "before_judgment"
-    assert c3.body_chars <= case_cfg.CASE_CARD_FALLBACK_CHARS and "判决如下" not in c3.text    # 取「判决如下」之前的约 800 字
+    assert c3.body_chars <= case_cfg.CASE_CARD_MAX_CHARS and "判决如下" not in c3.text    # 取「判决如下」之前的约 800 字
 
 
 def test_card_last_resort_is_lead_of_body():
@@ -193,6 +193,66 @@ def test_points_section_ends_at_next_heading_or_bracket_marker():
     c.blocks = [Block("body", "[裁判要旨]"), Block("body", "要旨正文一。"), Block("body", "要旨正文二。"),
                 Block("body", "[相关法条]"), Block("body", "法条内容不能进要点。")]
     assert cc._point_sections(c) == [("裁判要旨", "要旨正文一。\n要旨正文二。")]
+
+
+@pytest.mark.parametrize("n_points", [1, 2, 4])
+def test_card_body_is_cut_at_sentence_end_within_limit_even_for_long_points(n_points):
+    """要点再长，卡片正文也一律在句末截断到 CASE_CARD_MAX_CHARS 以内（卡片头不计）；每个要点小节都有份，不被前面的挤没。"""
+    from rag.cases.parser import Block, ParsedCase
+    c = ParsedCase(seq=9, chapter="第二章 数据权属", chapter_no=2, title="长要点案", meta={"case_number": "（2024）京01民终1号", "court": "某法院"})
+    names = ["裁判要点", "裁判要旨", "典型意义", "要旨"][:n_points]
+    for nm in names:
+        c.blocks += [Block("subheading", nm), Block("body", (f"{nm}的第一句话。" * 4 + "收尾一句。") * 12)]
+    k = cc.build_card(c)
+    assert k.card_source == "points" and k.body_chars <= case_cfg.CASE_CARD_MAX_CHARS
+    body = k.text.split("\n", 2)[2]
+    assert len(body) == k.body_chars and body.rstrip().endswith(("。", "；", "！", "？"))             # 句末截断
+    assert all(f"{nm}：" in body for nm in names)                                                       # 每个小节都留了标题和开头
+    assert k.text.startswith("【第二章 数据权属】长要点案\n案号：（2024）京01民终1号") and "审理法院：某法院" in k.text   # 卡片头不计字数、完整保留
+
+
+def test_full_point_text_is_still_in_body_chunks_even_when_card_is_truncated():
+    """卡片被截断后，要点 / 典型意义的完整原文必须仍在正文块里。"""
+    from rag.cases.parser import Block, ParsedCase
+    import re
+    c = ParsedCase(seq=10, chapter="第二章 数据权属", chapter_no=2, title="要点只在卡片的案")
+    long_point = "要点原文第{}句，内容不能丢。" 
+    pts = [long_point.format(i) for i in range(1, 150)]
+    c.blocks = [Block("subheading", "裁判要旨"), *[Block("body", p) for p in pts], Block("subheading", "基本案情"), Block("body", "案情。" * 20)]
+    ch = cc.chunk_cases([c])
+    card = [k for k in ch if k.kind == "card"][0]
+    bodies = "".join(k.text.split("\n", 1)[1] for k in ch if k.kind == "body")
+    norm = lambda t: re.sub(r"\s+", "", t)
+    assert card.body_chars <= case_cfg.CASE_CARD_MAX_CHARS and "要点原文第149句" not in card.text    # 卡片确实被截断了
+    assert all(norm(p) in norm(bodies) for p in pts)                                                   # 但全部要点原文都在正文块里
+
+
+def test_every_point_paragraph_of_every_case_is_in_some_body_chunk(case_doc):
+    import re
+    cs, ch = _chunks(case_doc)
+    norm = lambda t: re.sub(r"\s+", "", t)
+    for c in cs:
+        bodies = norm("".join(k.text.split("\n", 1)[1] for k in ch if k.seq == c.seq and k.kind == "body"))
+        for _, text in cc._point_sections(c):
+            assert all(norm(p) in bodies for p in text.split("\n") if norm(p))
+
+
+@pytest.mark.skipif(not __import__("pathlib").Path("/Users/yizhimianyang/Desktop/NJU_ra/11.2update/数据法典型判例库（十章分类完整版）.docx").is_file(),
+                    reason="真实判例库 docx 不在本机")
+def test_real_doc_cards_within_limit_and_all_points_covered():
+    """真实资料上的核对（只在本机有文件时运行）：卡片正文最长 <= 800，35 个要点小节的原文都被正文块覆盖。"""
+    import re
+    cs = parse_cases("/Users/yizhimianyang/Desktop/NJU_ra/11.2update/数据法典型判例库（十章分类完整版）.docx")
+    ch = cc.chunk_cases(cs)
+    assert len(cs) == 47 and max(k.body_chars for k in ch if k.kind == "card") <= 800
+    norm = lambda t: re.sub(r"\s+", "", t)
+    n = 0
+    for c in cs:
+        bodies = norm("".join(k.text.split("\n", 1)[1] for k in ch if k.seq == c.seq and k.kind == "body"))
+        for _, text in cc._point_sections(c):
+            n += 1
+            assert all(norm(p) in bodies for p in text.split("\n") if norm(p)), c.seq
+    assert n == 35
 
 
 # ---------------------------------------------------------------- 判例切块：正文块
