@@ -85,19 +85,6 @@ def load_course_backend():
         return None, None
 
 
-def load_thesis_backend(**service_kwargs):
-    """启动时加载论文 RAG；向量库或集合缺失时返回 None，统一入口的 thesis 路由降级为 unavailable，
-    课程库照常可用。日志只记异常类型名。"""
-    import logging
-
-    try:
-        return RAGService(**service_kwargs)
-    except Exception as e:  # noqa: BLE001 - 论文库缺失不能拖垮课程库
-        logging.getLogger(__name__).warning("论文库未启用：加载失败（%s），/ask 与 thesis 路由将返回 unavailable",
-                                            type(e).__name__)
-        return None
-
-
 def load_exam_backend():
     """启动时加载一次试卷库（解析题库 docx + 学生知识集合，约 2 秒，不调用 LLM）。
 
@@ -130,7 +117,7 @@ def build_app(**service_kwargs):
     from .api import router as openai_router
     from .concurrency import RequestConcurrencyMiddleware
 
-    svc = load_thesis_backend(**service_kwargs)
+    svc = RAGService(**service_kwargs)
     app = FastAPI(title="FUTURX RAG 查询服务")
     app.state.service = svc
     app.add_middleware(RequestConcurrencyMiddleware, max_requests=MAX_CONCURRENT_REQUESTS)
@@ -141,20 +128,14 @@ def build_app(**service_kwargs):
         return {"status": "ok"}
 
     # 同源网页直接调用；浏览器端无法安全保存密钥，因此 /ask 不鉴权（仅 /v1/* 校验）。
-    def require_thesis():
-        if svc is None:
-            raise HTTPException(status_code=503, detail="论文指导服务未加载")
-
     @app.post("/ask")
     def ask(req: AskRequest):
-        require_thesis()
         ans, sources, docs = svc.answer(req.question, req.top_k)
         return {"answer": ans, "sources": sources, "contexts": docs}
 
     @app.post("/ask/stream")
     def ask_stream(req: AskRequest):
         """SSE 流式问答：先推 sources，再逐段推 delta，避免前端长时间空等。"""
-        require_thesis()
         try:
             docs, sources, deltas = svc.open_stream(req.question, req.top_k)
         except RuntimeError as e:
