@@ -78,12 +78,15 @@ def _empty_result(question: str, trace: Trace) -> dict:
 
 def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, active_concepts=(),
         strategy: str = DEFAULT_STRATEGY, dry_run: bool = False, select: list[tuple[str, str]] | None = None,
-        max_chars: int | None = None, on_event=None) -> dict:
+        max_chars: int | None = None, on_event=None, answer: bool = True) -> dict:
     """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。
 
     on_event(dict)：流式输出用的回调（rag.unified 的 /auto/ask/stream）。依次收到
     stage=select / filter 的进度、作答正文的 delta 片段（学生可见文本：[S#] 已实时改成按首次出现编号的 [n]），
-    以及每块第一次被引用时的 materials（n、chunk_id、章节路径）；不给时行为与原来完全一样。"""
+    以及每块第一次被引用时的 materials（n、chunk_id、章节路径）；不给时行为与原来完全一样。
+
+    answer=False：只做选概念 → 召回 → 筛选，不调用作答模型；筛选后的作答材料放在结果的 "kept"（Recalled 列表）、
+    "relations"、"concept_names" 里，由跨库组合问答（rag.combined）拿去与判例 / 讲话材料一起交给**一次**作答。"""
     emit = on_event or (lambda _e: None)
     max_chars = max_chars or config.COURSE_RECALL_MAX_CHARS
     trace = Trace()
@@ -158,6 +161,10 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
 
     # Step 4
     relations = ctx.index.relations_among([s.concept_id for s in sr.selected])
+    if not answer:                                          # 组合问答：材料交给上层，不在这里作答
+        res["kept"], res["relations"], res["capped"] = kept, relations, capped
+        res["concept_names"] = [ctx.index.concepts[x.concept_id].name for x in sr.selected if x.concept_id in ctx.index.concepts]
+        return res
     ar = answer_question(question, kept, relations, traced, titles=ctx.chapter_titles,
                          on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None,
                          on_source=(lambda e: emit({"type": "materials", "n": e["n"], "chunk_id": e["chunk_id"],
