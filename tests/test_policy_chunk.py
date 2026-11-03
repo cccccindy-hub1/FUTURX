@@ -9,7 +9,6 @@ import pytest
 from rag.policy import chunker as policy
 from rag.policy import config
 from rag.policy.chunker import build_policy_set, policy_stats
-from rag.policy.cli import export_policy
 
 from tests.test_course_chunk import _p, _tbl, _write
 
@@ -292,32 +291,36 @@ def test_chunk_ids_unique_and_stable(tmp_path):
     assert ids[0].startswith("pol:1.2:001:")
 
 
-def test_export_writes_jsonl_stats_and_review(tmp_path):
-    pytest.importorskip("openpyxl")
-    src = _write(tmp_path, [_p("第1篇 国家立法", "Heading1"), *_law(), *_opinion()])
-    out = tmp_path / "policy"
-    summary = export_policy(src, out)
-    assert summary["docs"] == 2 and summary["duplicate_chunk_ids"] == 0
-    rows = [json.loads(x) for x in (out / "chunks.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == summary["chunks"] and {"chunk_id", "embed_text", "indexed", "flags"} <= set(rows[0])
-    assert "lines" not in json.loads((out / "docs.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    from openpyxl import load_workbook
-    wb = load_workbook(out / "review.xlsx", read_only=True)
-    assert wb.sheetnames == ["统计", "政策文件", "切块"]
-    assert wb["切块"].max_row == summary["chunks"] + 1
-
-
 def test_stats_counts(tmp_path):
     st = policy_stats(_build(tmp_path, [*_law(), *_opinion()]))
     assert st["not_indexed"] == {"boilerplate": 1, "title_only": 1}   # 第六条施行日期；法律前言只有名称和通过日期
     assert st["indexed"] == st["chunks"] - 2 and st["over_max"] == 0
 
 
-def test_cli_requires_existing_doc(tmp_path, monkeypatch):
-    monkeypatch.setattr("sys.argv", ["rag.policy", "chunk", "--doc", str(tmp_path / "missing.docx")])
+def test_cli_requires_existing_doc(tmp_path, capsys):
     from rag.policy import cli
-    with pytest.raises(SystemExit, match="政策汇编文件不存在"):
-        cli.main()
+    assert cli.main(["--dry-run", "--doc", str(tmp_path / "missing.docx")]) == 2
+    assert "政策汇编文件不存在" in capsys.readouterr().err
+
+
+def test_cli_dry_run_prints_chunk_count_article_count_and_region_distribution_and_writes_nothing(tmp_path, capsys):
+    from rag.policy import cli
+    src = _write(tmp_path, [_p("第1篇 国家立法", "Heading1"), *_law(), _p("第4篇 上海市数据相关政策", "Heading1"), *_opinion()], "汇编.docx")
+    before = sorted(p.name for p in tmp_path.iterdir())
+    assert cli.main(["--dry-run", "--doc", str(src)]) == 0
+    out = capsys.readouterr().out
+    assert "块总数：" in out and "条款块：" in out and "各地区块数：" in out and "国家" in out and "上海" in out
+    assert sorted(p.name for p in tmp_path.iterdir()) == before                 # 干跑不写任何文件
+
+
+def test_cli_export_writes_jsonl_and_refuses_a_non_empty_directory(tmp_path):
+    from rag.policy import cli
+    src = _write(tmp_path, [_p("第1篇 国家立法", "Heading1"), *_law()], "汇编.docx")
+    out = tmp_path / "out"
+    assert cli.main(["export", "--doc", str(src), "--out", str(out)]) == 0
+    chunks = [json.loads(x) for x in (out / "chunks.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert chunks and {"chunk_id", "text", "region", "draft", "article"} <= set(chunks[0]) and (out / "stats.json").is_file()
+    assert cli.main(["export", "--doc", str(src), "--out", str(out)]) == 2        # 非空目录：拒绝覆盖
 
 
 def test_module_has_no_python_docx_dependency():
