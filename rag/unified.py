@@ -60,6 +60,7 @@ class UnifiedService:
         self.router_client = router_client
         self.course_ctx, self.course_llm = course_ctx, course_llm
         self.exam = exam_bank                         # 试卷库（线上功能）：exam 路由与课程回答附带的基础题
+        self._stems = None                            # 题干预匹配索引（解题先查题库），首次使用时建
         from .course import config as cc
         self.lib_llm = lib_llm or course_llm
         self.pick_model = pick_model or cc.LIB_PICK_MODEL
@@ -95,7 +96,14 @@ class UnifiedService:
     def ask(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
+        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        if solved is not None:
+            solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
+            return solved
+        solve = self._solve_flag(question)
         d: RouteDecision = classify(question, self.router_client)
+        if solve:
+            d = self._solve_route(d)
         out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                "answer": None, "sources": [], "status": "ok"}
         trace: dict[str, Any] = {"router": d.to_dict()}
@@ -107,7 +115,7 @@ class UnifiedService:
         elif d.route == "policy":
             self._policy(question, out, trace)
         elif d.route == "course":
-            self._course(question, out, trace)
+            self._course(question, out, trace, solve=solve)
         elif d.route == "exam":
             self._exam(question, out, trace)
         elif d.route == "case":
@@ -130,7 +138,18 @@ class UnifiedService:
         生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。"""
         question = question.strip()
         t0 = time.perf_counter()
+        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        if solved is not None:
+            solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
+            yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
+                   "reason": solved["reason"], "router_s": 0.0}
+            yield {"type": "done", **{k: solved.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
+                   "trace": solved["trace"]}
+            return
+        solve = self._solve_flag(question)
         d: RouteDecision = classify(question, self.router_client)
+        if solve:
+            d = self._solve_route(d)
         yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
                "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
         if d.combined and not self._available(d.routes):
@@ -148,7 +167,7 @@ class UnifiedService:
                 elif d.route == "policy":
                     self._policy(question, out, trace)    # 单库政策：不流式，结果放进 done
                 elif d.route == "course":
-                    self._course(question, out, trace)        # 课程库未加载：返回 unavailable
+                    self._course(question, out, trace, solve=solve)        # 课程库未加载：返回 unavailable
                 elif d.route == "exam":
                     self._exam(question, out, trace)
                 elif d.route == "case":
@@ -178,7 +197,7 @@ class UnifiedService:
 
         def run() -> None:
             try:
-                q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm, on_event=on_event)))
+                q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm, on_event=on_event, solve=solve)))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -360,12 +379,12 @@ class UnifiedService:
         out.update(status=r["status"], answer=r["answer"], sources=r["sources"])
         out["contexts"] = r["contexts"]
 
-    def _course(self, question, out, trace) -> None:
+    def _course(self, question, out, trace, solve: bool = False) -> None:
         if self.course_ctx is None or self.course_llm is None:
             out.update(status="unavailable", answer="课程问答服务未加载（需要教材/本体数据与 COURSE_LLM_* 配置）。")
             return
         from .course.pipeline import ask, result_to_json
-        res = result_to_json(ask(question, ctx=self.course_ctx, llm=self.course_llm))
+        res = result_to_json(ask(question, ctx=self.course_ctx, llm=self.course_llm, solve=solve))
         trace["course"] = res.pop("trace", None)
         ans = res.get("answer")
         if ans:
@@ -380,6 +399,42 @@ class UnifiedService:
                                       "path": " › ".join(r["path"][-3:])} for r in res.get("recalled", [])]
 
 
+    # ---------------------------------------------------------------- 解题：先查题库
+    def _solve_flag(self, question: str) -> bool:
+        """带具体题干的解题问题（没命中题库时才会走到这里）：课程作答的提示词因此追加“先给结论”一条。"""
+        from .exam.solve import is_solve_question
+        return is_solve_question(question)
+
+    @staticmethod
+    def _solve_route(d: RouteDecision) -> RouteDecision:
+        """路由把带具体题干的解题问题判成 exam（找题）时改送课程库；其它路由（课程、判例……）保持原样。"""
+        if d.route == "exam":
+            d.routes, d.route, d.reason = ["course"], "course", (d.reason + "；带具体题干的解题，改送课程库")[:80]
+        return d
+
+    def _prematch(self, question: str) -> dict[str, Any] | None:
+        """解题预匹配（在路由之前）：问题去掉外壳后题干 ≥12 字，与题库题干完全包含或相似度 ≥0.9 → 直接给题目 + 答案 + 解析。
+        耗时 ms 级，写进 trace.prematch；命中时 0 次模型调用（连路由也不调）。没命中返回 None，走原来的路由。"""
+        if self.exam is None:
+            return None
+        from .exam.solve import StemMatcher, is_solve_question
+        if not is_solve_question(question):
+            return None
+        if self._stems is None:
+            self._stems = StemMatcher(self.exam.items)
+        m = self._stems.match(question)
+        info = {k: m[k] for k in ("hit", "similarity", "how", "stem_chars", "candidates", "ms")}
+        if m["hit"] is None:
+            return None
+        from .exam.store import format_items
+        it = self.exam.items[m["hit"]]
+        views = [it.view(include_answer=True)]
+        views[0]["solve"] = True
+        info["hit"] = it.q.question_id
+        return {"route": "exam", "routes": ["exam"], "complexity": "simple", "reason": "题库命中，直接给答案", "count": 1, "chapter": None,
+                "status": "ok", "answer": format_items([it], include_answer=True), "sources": [], "exam": {"questions": views, "solve": True},
+                "trace": {"prematch": info, "llm_calls": 0}}
+
     def _practice(self, selected: list[dict]) -> list[dict]:
         """课程选中概念 -> 试卷库 1–3 道巩固练习（判断 / 名词解释，不含选择题）。试卷库未加载或没有符合的题时为空列表，
         前端据此不显示巩固练习这一块。"""
@@ -391,7 +446,9 @@ class UnifiedService:
         # 只在这里限定题型；试卷库直接问题目（“给我第三章选择题”、/exam/*）走另一条路径，仍然照常返回选择题。
         items = self.exam.by_concepts(names, config.EXAM_PRACTICE_MAX, qtypes=PRACTICE_QTYPES)
         items = [it for it in items if it.q.qtype in PRACTICE_QTYPES]          # 再保险：即使上游题型过滤失效也不放选择题
-        return [{"question_id": it.q.question_id, "qtype_cn": it.q.qtype_cn, "stem": it.q.stem} for it in items]
+        # 答案、评分要点与解析由程序原样带出（网页默认折叠），不经过模型
+        return [{"question_id": it.q.question_id, "qtype_cn": it.q.qtype_cn, "stem": it.q.stem,
+                 "answer": it.q.answer, "analysis": it.q.analysis} for it in items]
 
     def _exam(self, question, out, trace) -> None:
         if self.exam is None:
@@ -400,15 +457,15 @@ class UnifiedService:
         from .exam.store import format_items
         t0 = time.perf_counter()
         r = self.exam.search(question)
-        want = r["intent"]["want_answer"]
         trace["exam"] = {"strategy": r["strategy"], "intent": r["intent"], "bm25_top": r.get("bm25_top"),
                          "latency_s": round(time.perf_counter() - t0, 4)}
         if r["status"] != "ok":
             out.update(status="no_match", answer=config.EXAM_NO_MATCH_TEXT)
             out["exam"] = {"questions": []}
             return
-        out["answer"] = format_items(r["items"], include_answer=want)
-        out["exam"] = {"questions": [it.view(include_answer=want) for it in r["items"]]}
+        # 答案始终随题带出（网页默认折叠）；正文只排题干与选项，答案放在 exam.questions[*].answer / analysis
+        out["answer"] = format_items(r["items"], include_answer=False)
+        out["exam"] = {"questions": [it.view(include_answer=True) for it in r["items"]]}
 
 @router.post("/auto/ask", dependencies=[Depends(require_api_key)])
 def auto_ask(req: AutoAskRequest, request: Request):

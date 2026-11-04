@@ -100,27 +100,69 @@ function sourceCard(i, s, ctx) {
 }
 
 /* 带序号的来源（课程 / 判例 / 名言）：[n] 路径；有 kind 且不止一种时按库分区 */
-// 课程回答后附的试卷库基础题（只有题型与题干）
-function practiceList(items) {
+// 一道题：题干 + 选项（选择题）+ 默认收起的“查看答案”（答案与评分要点 / 解析由后端原样给出，不经过模型）
+function questionBlock(it, i, withMeta) {
+  const box = document.createElement('div');
+  box.className = 'exam-q';
+  const head = document.createElement('div');
+  head.className = 'src-row';
+  const n = document.createElement('span');
+  n.className = 'src-n';
+  n.textContent = `${i + 1}.`;
+  const t = document.createElement('span');
+  t.className = 'src-row-path';
+  const meta = withMeta && it.chapter ? `·第${it.chapter}章${it.chapter_title ? ' ' + it.chapter_title : ''}` : '';
+  t.textContent = `【${it.qtype_cn || '题目'}${meta}】${it.stem || ''}`;
+  head.append(n, t);
+  box.appendChild(head);
+  const opts = it.options && typeof it.options === 'object' ? Object.entries(it.options) : [];
+  if (opts.length) {
+    const ul = document.createElement('div');
+    ul.className = 'exam-options';
+    opts.forEach(([k, v]) => {
+      const o = document.createElement('div');
+      o.className = 'exam-option';
+      o.textContent = `${k}. ${v}`;
+      ul.appendChild(o);
+    });
+    box.appendChild(ul);
+  }
+  if (it.answer || it.analysis) {
+    const d = document.createElement('details');
+    d.className = 'exam-answer';
+    const sum = document.createElement('summary');
+    sum.textContent = '查看答案';
+    d.appendChild(sum);
+    const add = (label, text) => {
+      if (!text) return;
+      const p = document.createElement('div');
+      p.className = 'exam-answer-row';
+      p.textContent = `${label}${text}`;
+      d.appendChild(p);
+    };
+    add('参考答案：', it.answer);
+    add('评分要点与解析：', it.analysis);
+    box.appendChild(d);
+  }
+  return box;
+}
+
+function examList(items, title, withMeta) {
   const wrap = document.createElement('div');
-  wrap.className = 'sources numbered';
-  const h = document.createElement('div');
-  h.className = 'sources-kind';
-  h.textContent = '巩固练习';
-  wrap.appendChild(h);
-  items.forEach((it, i) => {
-    const row = document.createElement('div');
-    row.className = 'src-row';
-    const n = document.createElement('span');
-    n.className = 'src-n';
-    n.textContent = `${i + 1}.`;
-    const t = document.createElement('span');
-    t.className = 'src-row-path';
-    t.textContent = `【${it.qtype_cn || '题目'}】${it.stem || ''}`;
-    row.append(n, t);
-    wrap.appendChild(row);
-  });
+  wrap.className = 'sources numbered exam-list';
+  if (title) {
+    const h = document.createElement('div');
+    h.className = 'sources-kind';
+    h.textContent = title;
+    wrap.appendChild(h);
+  }
+  items.forEach((it, i) => wrap.appendChild(questionBlock(it, i, withMeta)));
   return wrap;
+}
+
+// 课程回答后附的试卷库基础题（判断题 / 名词解释，答案默认折叠）
+function practiceList(items) {
+  return examList(items, '巩固练习', false);
 }
 
 function numberedSources(sources) {
@@ -326,9 +368,12 @@ async function send() {
       if (frame) { cancelAnimationFrame(frame); frame = null; }
       const sources = ev.sources || [];
       sources.forEach((s) => { if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || ''); });
-      text = ev.answer || '（没有返回内容）';
+      const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
+      // 试卷库结果：题目、选项和默认折叠的答案由下面的结构化列表渲染，气泡里只留一句提示，避免题干重复显示
+      text = examQs.length ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
       if (ev.status && ev.status !== 'ok') bubble.classList.add('note');
       paint();
+      if (examQs.length) body.appendChild(examList(examQs, '', true));
       if (sources.length) {
         body.appendChild(sources[0].n !== undefined ? numberedSources(sources)
           : (() => {

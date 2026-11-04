@@ -78,7 +78,7 @@ def _empty_result(question: str, trace: Trace) -> dict:
 
 def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, active_concepts=(),
         strategy: str = DEFAULT_STRATEGY, dry_run: bool = False, select: list[tuple[str, str]] | None = None,
-        max_chars: int | None = None, on_event=None, answer: bool = True) -> dict:
+        max_chars: int | None = None, on_event=None, answer: bool = True, solve: bool = False) -> dict:
     """dry_run=True：不调用任何 LLM（llm 可为 None）；选中概念由 select=[(id, role)] 手动指定。
 
     on_event(dict)：流式输出用的回调（rag.unified 的 /auto/ask/stream）。依次收到
@@ -165,7 +165,7 @@ def ask(question: str, *, ctx: CourseContext, llm: LLMClient | None = None, acti
         res["kept"], res["relations"], res["capped"] = kept, relations, capped
         res["concept_names"] = [ctx.index.concepts[x.concept_id].name for x in sr.selected if x.concept_id in ctx.index.concepts]
         return res
-    ar = answer_question(question, kept, relations, traced, titles=ctx.chapter_titles,
+    ar = answer_question(question, kept, relations, traced, titles=ctx.chapter_titles, solve=solve,
                          on_delta=(lambda t: emit({"type": "delta", "text": t})) if on_event else None,
                          on_source=(lambda e: emit({"type": "materials", "n": e["n"], "chunk_id": e["chunk_id"],
                                                     "path": e["path"]})) if on_event else None)

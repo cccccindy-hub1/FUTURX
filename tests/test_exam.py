@@ -231,9 +231,10 @@ def test_unified_exam_route_without_and_with_answers(bank):
     out = svc.ask("出1道数据资产的选择题")
     assert out["route"] == "exam" and out["status"] == "ok"
     q = out["exam"]["questions"][0]
-    assert q["qtype"] == "choice" and "answer" not in q and "参考答案" not in out["answer"]
+    assert q["qtype"] == "choice" and q["answer"] and "参考答案" not in out["answer"]       # 答案始终随题带出（网页默认折叠），正文只排题干与选项
     out = svc.ask("第一章选择题第1题的答案是什么")
-    assert out["exam"]["questions"][0]["answer"] == "A" and "【参考答案】A" in out["answer"]
+    assert out["exam"]["questions"][0]["answer"] == "A" and "参考答案" not in out["answer"]       # 答案始终在结构化字段里（网页折叠），不拼进正文
+    assert "A. " in out["answer"] and out["exam"]["questions"][0]["options"]["A"]              # 选择题的选项在题目下
     assert out["trace"]["exam"]["strategy"] == "number"
 
 
@@ -352,7 +353,7 @@ def test_practice_respects_max_count_and_keeps_stem_and_id_fields(bank, monkeypa
     from rag import config as cfg
     monkeypatch.setattr(cfg, "EXAM_PRACTICE_MAX", 1)
     got = _svc(bank)._practice([{"concept_id": "C01-0001"}, {"concept_id": "C01-0002"}])
-    assert len(got) == 1 and set(got[0]) == {"question_id", "qtype_cn", "stem"}
+    assert len(got) == 1 and set(got[0]) == {"question_id", "qtype_cn", "stem", "answer", "analysis"}
     monkeypatch.setattr(cfg, "EXAM_PRACTICE_MAX", 0)
     assert _svc(bank)._practice([{"concept_id": "C01-0001"}]) == []
 
