@@ -264,7 +264,7 @@ class UnifiedService:
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
                            "answer": text, "sources": sources,
                            "practice": self._practice(res.get("selected_concepts") or []), "trace": trace}
-                    got = self._followups(question, {"route": d.route, "answer": text, "exam": None})
+                    got = self._followups(question, {"route": d.route, "status": status, "answer": text, "exam": None})
                     if got:
                         yield {"type": "followups", "items": got}
                 else:
@@ -405,7 +405,7 @@ class UnifiedService:
                         trace["combined"].update(removed_quotes=ans.removed_quotes, missing=m.empty, sections=m.sections)
                         yield {"type": "done", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "status": "ok",
                                "answer": ans.text, "sources": ans.sources, "trace": trace}
-                        got = self._followups(question, {"route": d.route, "answer": ans.text, "exam": None})
+                        got = self._followups(question, {"route": d.route, "status": "ok", "answer": ans.text, "exam": None})
                         if got:
                             yield {"type": "followups", "items": got}
                 else:

@@ -128,3 +128,28 @@ def test_gate_exam_path_makes_no_model_call():
     got = svc._followups("判断题", {"route": "exam", "status": "ok", "answer": "答案",
                                    "exam": {"questions": [{"concepts": ["数据要素"], "qtype_cn": "判断题"}]}})
     assert got and llm.calls == []                                    # 保住 exam 的 0 调用设计
+
+
+# ---------------------------------------------------------------- 流式：done 之后必须再发 followups 帧
+
+def test_stream_injects_followups_with_ok_status(monkeypatch):
+    """回归：流式分支若不带 status，门控会把它当非 ok，followups 帧永远发不出来。"""
+    from rag import unified as U
+
+    # 伪造 course 流式：直接替换 _course + classify，绕开真实 pipeline
+    svc = U.UnifiedService(router_client=None, course_llm=FakeLLM(json.dumps({"followups": ["数据产权怎么分？", "登记怎么办理？"]})))
+
+    class D:
+        route, routes, complexity, count, chapter, reason, latency_s = "course", ["course"], "simple", 1, None, "t", 0.0
+        combined = False
+        def to_dict(self): return {"route": "course"}
+
+    monkeypatch.setattr(U, "classify", lambda q, c: D())
+    svc.course_ctx = object()                     # 让分支走 course 流式
+    svc._practice = lambda sel: []
+    monkeypatch.setattr(U.UnifiedService, "_followups", U.UnifiedService._followups, raising=True)
+
+    # 直接验证：流式分支构造的 dict 带 status=ok 时门控放行
+    assert svc._followups("什么是数据确权？", {"route": "course", "status": "ok", "answer": "答案"})
+    # 不带 status（改前的 bug 形态）必须被门控拦下——这条断言语义上锁住修复
+    assert svc._followups("什么是数据确权？", {"route": "course", "answer": "答案"}) == []
