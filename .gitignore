@@ -57,3 +57,16 @@ rag/case_data/
 rag/quote_data/
 rag/case_store/
 rag/quote_store/
+
+# ---- 评测数据：eval_data 只跟踪输入题库；评测产物一律不入库 ----
+# 新增输入文件时在此追加 ! 行
+rag/eval_data/*
+!rag/eval_data/testset.json
+!rag/eval_data/router_eval.json
+!rag/eval_data/router_eval_cases_quotes.json
+!rag/eval_data/router_eval_policy.json
+!rag/eval_data/course_recall_gold.json
+
+# ---- 日志与空库备份 ----
+*.log
+rag/chroma_db.empty_bak/
