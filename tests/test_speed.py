@@ -39,6 +39,25 @@ SPEED_SEED = int(os.environ.get('SPEED_SEED', str(BENCHMARK_SEED)))
 SPEED_REPORT_PATH = Path(os.environ.get('SPEED_REPORT_PATH', ROOT / 'speed_test_report.txt'))
 
 
+def _api_key() -> str:
+    """从项目根 .env 读 API_KEYS 的第一个 key（运行时取值，不硬编码）。
+
+    /ask 与 /ask/stream 于 2026-11-05 补上鉴权依赖；本脚本起的是真实子进程 server，
+    它会读到部署机 .env 里的 API_KEYS，因此请求必须带 Authorization。读不到时返回空串。
+    """
+    try:
+        for line in (ROOT / '.env').read_text(encoding='utf-8').splitlines():
+            if line.startswith('API_KEYS='):
+                keys = line.split('=', 1)[1].strip()
+                return keys.split(',')[0].strip() if keys else ''
+    except OSError:
+        pass
+    return ''
+
+
+SPEED_API_KEY = _api_key()
+
+
 def _pick_prompts(n: int, seed: int) -> list:
     items = build_items(load_raw())
     return random.Random(seed).sample(items, min(n, len(items)))
@@ -89,7 +108,10 @@ def _http_request(base_url: str, index: int, item) -> dict:
     try:
         body = json.dumps({'question': item.question}, ensure_ascii=False).encode('utf-8')
         request = urllib.request.Request(base_url + '/ask', data=body,
-                                         headers={'Content-Type': 'application/json'}, method='POST')
+                                         headers={'Content-Type': 'application/json',
+                                                  **({'Authorization': 'Bearer ' + SPEED_API_KEY}
+                                                     if SPEED_API_KEY else {})},
+                                         method='POST')
         # This is loopback traffic; do not route it through environment proxies.
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(request, timeout=max(180, LLM_TIMEOUT * 3)) as response:

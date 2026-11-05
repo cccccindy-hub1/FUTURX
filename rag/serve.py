@@ -137,10 +137,11 @@ def build_app(**service_kwargs):
     """构造 FastAPI 应用（模型与向量库在启动时加载一次）。"""
     from pathlib import Path
 
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.responses import FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 
+    from .api import require_api_key
     from .api import router as openai_router
     from .concurrency import RequestConcurrencyMiddleware
 
@@ -154,13 +155,15 @@ def build_app(**service_kwargs):
     def health():
         return {"status": "ok"}
 
-    # 同源网页直接调用；浏览器端无法安全保存密钥，因此 /ask 不鉴权（仅 /v1/* 校验）。
-    @app.post("/ask")
+    # 2026-11-05 收紧：原先"浏览器无法保存密钥所以 /ask 不鉴权"的理由已不成立——前端 app.js 早已在
+    # 请求头带 Authorization: Bearer <key>（key 由页面输入后存 localStorage）。服务改为对外监听后，
+    # 不鉴权等于开放 LLM 免费调用入口，故 /ask 与 /ask/stream 补上与 /auto/ask 相同的鉴权依赖。
+    @app.post("/ask", dependencies=[Depends(require_api_key)])
     def ask(req: AskRequest):
         ans, sources, docs = svc.answer(req.question, req.top_k)
         return {"answer": ans, "sources": sources, "contexts": docs}
 
-    @app.post("/ask/stream")
+    @app.post("/ask/stream", dependencies=[Depends(require_api_key)])
     def ask_stream(req: AskRequest):
         """SSE 流式问答：先推 sources，再逐段推 delta，避免前端长时间空等。"""
         try:

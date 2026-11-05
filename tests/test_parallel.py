@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier, Event, Lock, RLock, local
 from types import SimpleNamespace
 
@@ -19,6 +20,25 @@ def _body(path, question):
         return {'messages': [{'role': 'user', 'content': question}],
                 'stream': path.endswith('/stream')}
     return {'question': question}
+
+
+def _auth_headers():
+    """从项目根 .env 读 API_KEYS 的第一个 key，运行时取值，不硬编码。
+
+    conftest 的 autouse fixture 会把 rag.api.API_KEYS 清空，让本文件的无鉴权用例照常跑通；
+    但 /ask 与 /ask/stream 已于 2026-11-05 补鉴权依赖，请求带真实 key 才与线上一致。
+    读不到时返回空 dict，请求不带 Authorization（等价于改动前的行为）。
+    """
+    env = Path(__file__).resolve().parent.parent / '.env'
+    try:
+        for line in env.read_text(encoding='utf-8').splitlines():
+            if line.startswith('API_KEYS='):
+                keys = line.split('=', 1)[1].strip()
+                key = keys.split(',')[0].strip() if keys else ''
+                return {'Authorization': 'Bearer ' + key} if key else {}
+    except OSError:
+        pass
+    return {}
 
 
 @pytest.mark.parametrize('path,stream', [('/ask', False), ('/ask/stream', True),
@@ -46,7 +66,7 @@ def test_http_answers_overlap_and_stay_separate(monkeypatch, path, stream):
             body = _body(path, q)
             if path.startswith('/v1/'):
                 body['stream'] = stream
-            return client.post(path, json=body)
+            return client.post(path, json=body, headers=_auth_headers())
         futures = [pool.submit(send, q) for q in ['request_alpha', 'request_beta']]
         for q, future in zip(['request_alpha', 'request_beta'], futures):
             response = future.result(timeout=10)
@@ -79,18 +99,19 @@ def test_limit_held_until_response_finishes_and_health_stays_available(monkeypat
     monkeypatch.setattr(serve, 'MAX_CONCURRENT_REQUESTS', 1)
     with TestClient(serve.build_app()) as client, ThreadPoolExecutor(1) as pool:
         path = '/ask/stream' if stream else '/ask'
-        first = pool.submit(client.post, path, json={'question': 'first'})
+        headers = _auth_headers()
+        first = pool.submit(client.post, path, json={'question': 'first'}, headers=headers)
         try:
             assert started.wait(5)
             assert client.get('/health').status_code == 200
-            busy = client.post('/ask', json={'question': 'overload'})
+            busy = client.post('/ask', json={'question': 'overload'}, headers=headers)
             assert busy.status_code == 503
             assert busy.headers['retry-after'] == '1'
             assert busy.json()['error']['code'] == 'server_busy'
         finally:
             release.set()
         assert first.result(timeout=5).status_code == 200
-        assert client.post('/ask', json={'question': 'after'}).status_code == 200
+        assert client.post('/ask', json={'question': 'after'}, headers=headers).status_code == 200
 
 
 @pytest.mark.parametrize('failure', ['exception', 'cancel'])
