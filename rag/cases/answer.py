@@ -20,13 +20,17 @@ from ..course.llm import LLMClient
 from .retrieval import CaseHit
 
 CASE_ANSWER_SYSTEM = """你是《数据要素》课程的判例讲解助教。只依据下面给出的判例材料写，不使用材料之外的知识，不要编造案号、法院、日期、金额。
-材料按 [C1]、[C2]… 编号，每个编号是一个判例。对每个判例只写下面三项，每项一两句话到两三句话，精炼、不复述原文：
-基本案情：……
-裁判要点：……
-与你的问题的关系：……
+材料按 [C1]、[C2]… 编号，每个编号是一个判例。整个回答采用“总—分—总”结构：
+- lead：开头一句总起，直接回答学生问题，可用一句话概括这些判例的共同裁判立场；不超过 60 字；
+- 每个判例写下面三项，每项一两句话到两三句话，精炼、不复述原文：
+  基本案情：……
+  裁判要点：……
+  与你的问题的关系：……
+- close：结尾一句收束，点出这些判例对回答该问题的意义；不超过 60 字，不得重复 lead 或任何判例原句。
 判例的标题、案号、法院、日期由系统另行填写，你不要写。每项里的论断后面用该判例的编号标注依据，如 [C1]。
-不要写总结段，不要写没有具体原因的套话式免责。
-输出严格 JSON：{"cases":[{"id":"C1","facts":"…","holding":"…","relation":"…"}]}，每个判例一项，id 必须是材料里出现过的编号。"""
+不要写没有具体原因的套话式免责。
+输出严格 JSON：{"lead":"…","cases":[{"id":"C1","facts":"…","holding":"…","relation":"…"}],"close":"…"}，
+每个判例一项，id 必须是材料里出现过的编号。"""
 
 CASE_ANSWER_USER = "学生问题：{question}\n\n判例材料：\n{materials}"
 
@@ -83,8 +87,12 @@ def answer_cases(question: str, hits: list[CaseHit], llm: LLMClient, *, model: s
     by_ref = {f"C{k}": (k, h) for k, h in enumerate(hits, 1)}
     out = CaseAnswer()
     items: dict[str, dict] = {}
+    lead, close = "", ""
     try:
         obj = parse_json_object(res.content)
+        if isinstance(obj, dict):
+            lead = str(obj.get("lead") or "").strip()
+            close = str(obj.get("close") or "").strip()
         for it in obj.get("cases") or []:
             key = str(it.get("id", "")).strip().upper().lstrip("[").rstrip("]") if isinstance(it, dict) else ""
             if key in by_ref and key not in items:
@@ -108,7 +116,14 @@ def answer_cases(question: str, hits: list[CaseHit], llm: LLMClient, *, model: s
                 if body:
                     lines.append(f"{label}：" + _rewrite_c_markers(body, rw))
         blocks.append("\n".join(lines))
-    out.text = "\n\n".join(blocks)
+    # lead → 三项式 → close；lead / close 是模型写的整句，也要过一遍 [C#]→[n] 改写。
+    # 字段缺失（旧缓存 / 模型未给）时优雅降级：只省略该段，不影响正文。
+    body = "\n\n".join(blocks)
+    parts = []
+    for piece in (lead, body, close):
+        if piece:
+            parts.append(_rewrite_c_markers(piece, rw) if piece is not body else piece)
+    out.text = "\n\n".join(parts)
     out.parsed = [{"id": k, "ok": k in items} for k in by_ref]
     out.sources = [{"n": rw.numbers[cid], "kind": "case", "chunk_id": cid, "path": source_path(h),
                     "title": h.ref.title, "case_number": h.ref.meta.get("case_number", ""),

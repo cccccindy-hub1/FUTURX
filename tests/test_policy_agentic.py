@@ -312,9 +312,13 @@ def test_out_of_range_markers_are_dropped_and_only_cited_chunks_are_sources(inde
 
 
 def test_answer_prompt_requires_total_part_total_closing_question_and_forbids_rewritten_quotes():
+    from rag import prompt_rules as rules
     s = pr.ANSWER_SYSTEM
-    for w in ("总—分—总", "最后单独一行，写一个问句", "不加引用编号", "逐字摘录", "征求意见稿", "文件名和条号"):
+    assert rules.ANSWER_STRUCTURE in s and rules.COURSE_SAMPLES in s      # 结构与样例引用同一常量
+    for w in ("总—分—总", "逐字摘录", "征求意见稿", "文件名和条号"):
         assert w in s
+    # 结尾问句已移交 followups 管道
+    assert "最后单独一行，写一个问句" not in s and "不加引用编号" not in s
 
 
 def test_streaming_answer_matches_final_body_with_split_markers(index):
@@ -369,27 +373,31 @@ def svc_for(llm, routes, index, **kw):
 
 
 def test_single_policy_search_costs_route_plus_pick_plus_answer(index):
-    llm = Steps({"policy_pick": [LLMResult(content=json.dumps({"picks": [1], "rewrite": ""}))], "policy_answer": [LLMResult(content="办法规定了开放原则[P1]。")]})
+    llm = Steps({"policy_pick": [LLMResult(content=json.dumps({"picks": [1], "rewrite": ""}))], "policy_answer": [LLMResult(content="办法规定了开放原则[P1]。")],
+                 "followup": [jtxt({"followups": ["还有哪些相关规定？", "这条规定怎么落地？"]})]})
     svc = svc_for(llm, ["policy"], index)
     out = svc.ask("上海有哪些公共数据开放的规定")
-    assert llm.steps() == ["policy_pick", "policy_answer"] and svc.router_client.calls + len(llm.calls) == 3          # 普通问题 3 次
+    core = [x for x in llm.steps() if x != "followup"]
+    assert core == ["policy_pick", "policy_answer"] and svc.router_client.calls + len(core) == 3          # 普通问题 3 次
     assert out["route"] == "policy" and out["status"] == "ok" and out["answer"].endswith(pr.CLOSING_NOTE) and out["sources"][0]["kind"] == "policy"
     assert llm.calls[0]["model"] == svc.pick_model and llm.calls[1]["model"] == svc.answer_model and svc.pick_model != svc.answer_model
 
 
 def test_named_article_costs_route_plus_answer_only(index):
-    llm = Steps({"policy_answer": [LLMResult(content="第二十一条建立分类分级制度[P1]。")]})
+    llm = Steps({"policy_answer": [LLMResult(content="第二十一条建立分类分级制度[P1]。")], "followup": [jtxt({"followups": ["还有哪些相关规定？", "这条规定怎么落地？"]})]})
     svc = svc_for(llm, ["policy"], index)
     out = svc.ask("数据安全法第二十一条规定了什么")
-    assert llm.steps() == ["policy_answer"] and svc.router_client.calls + len(llm.calls) == 2 and out["trace"]["policy"]["mode"] == "named_article"
+    core = [x for x in llm.steps() if x != "followup"]
+    assert core == ["policy_answer"] and svc.router_client.calls + len(core) == 2 and out["trace"]["policy"]["mode"] == "named_article"
 
 
 def test_rewrite_retry_costs_four_calls(index):
     llm = Steps({"policy_pick": [LLMResult(content=json.dumps({"picks": [], "rewrite": "数据分类分级 保护"})), LLMResult(content=json.dumps({"picks": [1], "rewrite": ""}))],
-                 "policy_answer": [LLMResult(content="规定了[P1]。")]})
+                 "policy_answer": [LLMResult(content="规定了[P1]。")], "followup": [jtxt({"followups": ["还有哪些相关规定？", "这条规定怎么落地？"]})]})
     svc = svc_for(llm, ["policy"], index)
     svc.ask("公共数据开放的原则")
-    assert svc.router_client.calls + len(llm.calls) == 4
+    core = [x for x in llm.steps() if x != "followup"]
+    assert svc.router_client.calls + len(core) == 4                      # 路由 1 + 选块 2 + 作答 1
 
 
 def test_not_found_says_so_and_never_calls_the_answer_model(index):
@@ -435,10 +443,11 @@ def _filt(step, msgs):
 def test_course_plus_policy_combined_has_a_policy_zone_and_partitioned_sources(cctx, index):
     llm = Steps({"select": [jtxt({"question_concepts": ["C01-0001"], "related_concepts": ["C01-0003"], "reason": "r"})], "filter": [_filt],
                  "policy_pick": [LLMResult(content=json.dumps({"picks": [1], "rewrite": ""}))],
-                 "answer": [LLMResult(content="知识点[S1]。条文印证[P1]。你想了解更多吗？")]})
+                 "answer": [LLMResult(content="知识点[S1]。条文印证[P1]。")], "followup": [jtxt({"followups": ["还有哪些相关规定？", "这条规定怎么落地？"]})]})
     svc = svc_for(llm, ["course", "policy"], index, ctx=cctx)
     out = svc.ask("结合政策法规说明数据确权为什么难")
-    assert sorted(llm.steps()) == ["answer", "filter", "policy_pick", "select"] and svc.router_client.calls + len(llm.calls) == 5
+    core = [x for x in llm.steps() if x != "followup"]
+    assert sorted(core) == ["answer", "filter", "policy_pick", "select"] and svc.router_client.calls + len(core) == 5
     assert [s["kind"] for s in out["sources"]] == ["course", "policy"] and "[1]" in out["answer"] and "[2]" in out["answer"] and "[P1]" not in out["answer"]
     user = next(c for c in llm.calls if c["step"] == "answer")["messages"][1]["content"]
     assert user.index("【教材材料】") < user.index("【政策条文】") and "[P1]" in user and out["answer"].endswith(pr.CLOSING_NOTE)

@@ -99,6 +99,7 @@ class UnifiedService:
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
+            solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
             return solved
         solve = self._solve_flag(question)
         d: RouteDecision = classify(question, self.router_client)
@@ -126,7 +127,37 @@ class UnifiedService:
             self._thesis(question, top_k, d.complexity, out, trace)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
         out["trace"] = trace
+        out["followups"] = self._followups(question, out)
         return out
+
+    # ---------------------------------------------------------------- 追问（需求3）
+    _SKIP_FOLLOWUP = ("off_topic", "quote")           # 拒答无追问；讲话原文照录，不附追问
+
+    def _followups(self, question: str, out: dict[str, Any]) -> list[str]:
+        """按路由决定追问来源：exam 命中题库走零调用模板，其余走一次小调用。
+
+        门控：仅 status == "ok" 且 answer 非空时生成。off_topic / quote / unavailable /
+        insufficient / refused / 其它非 ok 状态一律返回空，且不发起任何模型调用。
+        任何异常都静默返回空列表，不影响主答案。
+        """
+        if out.get("status") != "ok":
+            return []
+        answer = (out.get("answer") or "").strip()
+        if not answer:
+            return []
+        if out.get("route") in self._SKIP_FOLLOWUP:
+            return []
+        try:
+            from .followups import exam_followups, make_followups
+            ex = out.get("exam") or {}
+            questions = ex.get("questions") or []
+            if out.get("route") == "exam" and len(questions) == 1:
+                got = exam_followups(questions[0])
+                if got:
+                    return got
+            return make_followups(question, answer, out.get("route") or "", self.lib_llm)
+        except Exception:  # noqa: BLE001 - 追问失败不影响主答案
+            return []
 
     def ask_stream(self, question: str, top_k: int | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
@@ -145,6 +176,9 @@ class UnifiedService:
                    "reason": solved["reason"], "router_s": 0.0}
             yield {"type": "done", **{k: solved.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
                    "trace": solved["trace"]}
+            got = self._followups(question, solved)                # exam 命中题库：零调用模板
+            if got:
+                yield {"type": "followups", "items": got}
             return
         solve = self._solve_flag(question)
         d: RouteDecision = classify(question, self.router_client)
@@ -183,6 +217,9 @@ class UnifiedService:
             out["trace"] = trace
             yield {"type": "done", **{k: out.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
                    "trace": trace}
+            got = self._followups(question, out)                   # done 先发，追问后到；失败静默省略
+            if got:
+                yield {"type": "followups", "items": got}
             return
 
         from .course.pipeline import ask, result_to_json
@@ -227,6 +264,9 @@ class UnifiedService:
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
                            "answer": text, "sources": sources,
                            "practice": self._practice(res.get("selected_concepts") or []), "trace": trace}
+                    got = self._followups(question, {"route": d.route, "answer": text, "exam": None})
+                    if got:
+                        yield {"type": "followups", "items": got}
                 else:
                     yield item
         finally:
@@ -365,6 +405,9 @@ class UnifiedService:
                         trace["combined"].update(removed_quotes=ans.removed_quotes, missing=m.empty, sections=m.sections)
                         yield {"type": "done", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "status": "ok",
                                "answer": ans.text, "sources": ans.sources, "trace": trace}
+                        got = self._followups(question, {"route": d.route, "answer": ans.text, "exam": None})
+                        if got:
+                            yield {"type": "followups", "items": got}
                 else:
                     yield item
         finally:

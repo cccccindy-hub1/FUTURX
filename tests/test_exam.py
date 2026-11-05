@@ -240,8 +240,9 @@ def test_unified_exam_route_without_and_with_answers(bank):
 
 def test_unified_exam_route_streams_into_done(bank):
     evs = list(UnifiedService(router_client=_RouterLLM("exam"), exam_bank=bank).ask_stream("出1道数据资产的选择题"))
-    assert [e["type"] for e in evs] == ["route", "done"]
-    done = evs[-1]
+    types = [e["type"] for e in evs]
+    assert types[:2] == ["route", "done"] and all(t == "followups" for t in types[2:])   # 追问在 done 之后追加
+    done = evs[1]
     assert done["route"] == "exam" and done["status"] == "ok"
     assert done["exam"]["questions"][0]["qtype"] == "choice" and done["answer"]
 

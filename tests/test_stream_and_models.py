@@ -458,10 +458,14 @@ def test_filter_model_env_only_affects_filter_step(ctx, monkeypatch):
         rec.append((step, model)), LLMResult(content=json.dumps({"route": "course", "complexity": "simple", "reason": "t"})))[1]})()
     out = UnifiedService(router_client=router, course_ctx=ctx, course_llm=course_llm).ask("什么是数据要素")
     assert out["status"] == "ok"
-    assert dict(course_llm.models) == {"select": "deepseek/deepseek-v4-pro", "filter": "deepseek/deepseek-v4-flash",
-                                       "answer": "deepseek/deepseek-v4-pro"}
+    # 追问走 filter 同档模型（LIB_PICK_MODEL），不计入作答管道
+    core = [(s, m) for s, m in course_llm.models if s != "followup"]
+    assert dict(core) == {"select": "deepseek/deepseek-v4-pro", "filter": "deepseek/deepseek-v4-flash",
+                          "answer": "deepseek/deepseek-v4-pro"}
+    follow = [m for s, m in course_llm.models if s == "followup"]
+    assert all(m == config.LIB_PICK_MODEL for m in follow)                                   # 追问用小模型
     assert rec == [("route", "deepseek/deepseek-v4-pro")]                                    # 路由仍是 pro
-    assert len(course_llm.models) + len(rec) == 4                                            # 总调用数仍为 4
+    assert len(core) + len(rec) == 4                                                          # 作答管道仍为 4
 
 
 def test_filter_model_defaults_to_course_model_and_answer_reasoning_stays_low():

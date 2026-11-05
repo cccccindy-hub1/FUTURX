@@ -146,8 +146,11 @@ def test_term_question_hits_the_bank():
 def test_stream_hit_is_route_then_done_with_no_calls_and_exam_payload():
     s, router = svc("course")
     ev = list(s.ask_stream(f"判断这道题是否正确：{JUDGE}"))
-    assert [e["type"] for e in ev] == ["route", "done"] and ev[0]["routes"] == ["exam"] and router.calls == []
-    assert ev[-1]["exam"]["questions"][0]["answer"] == "正确" and ev[-1]["exam"]["solve"] and ev[-1]["trace"]["prematch"]["ms"] < 50
+    types = [e["type"] for e in ev]
+    assert types[:2] == ["route", "done"] and ev[0]["routes"] == ["exam"] and router.calls == []
+    # 预匹配仍然 0 次模型调用；followups 是纯程序模板（exam_followups），不发事件以外的调用
+    assert all(t == "followups" for t in types[2:])
+    assert ev[1]["exam"]["questions"][0]["answer"] == "正确" and ev[1]["exam"]["solve"] and ev[1]["trace"]["prematch"]["ms"] < 50
 
 
 def test_without_an_exam_bank_nothing_is_prematched_and_the_router_runs():
@@ -210,7 +213,12 @@ def test_ordinary_course_question_has_no_hint_and_the_prompt_is_verbatim(course)
 
 def test_course_answer_prompt_without_solve_is_byte_identical_to_before():
     from rag.course import prompts
-    assert prompts.ANSWER_SYSTEM.endswith("不要引用材料中没有的编号，不要原样写出占位符 “[S#]”。") and prompts.ANSWER_SOLVE_HINT.startswith("\n- 这是一道具体的题目")
+    from rag import prompt_rules as rules
+    # 结构条款与样例改为引用常量后，结尾是样例二；改为断言常量被完整拼接（而非写死旧措辞）
+    assert prompts.ANSWER_SYSTEM.endswith(rules.COURSE_SAMPLES)
+    assert rules.ANSWER_STRUCTURE in prompts.ANSWER_SYSTEM
+    assert "不要引用材料中没有的编号，不要原样写出占位符 “[S#]”。" in prompts.ANSWER_SYSTEM
+    assert prompts.ANSWER_SOLVE_HINT.startswith("\n- 这是一道具体的题目")
 
 
 # ---------------------------------------------------------------- 找题行为不变；答案始终带上；选择题带选项

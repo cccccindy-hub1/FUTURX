@@ -149,7 +149,8 @@ def _full_script(ctx):
         refs = re.findall(r"^\[(S\d+)\]", user, flags=re.M)
         return jtxt({"verdicts": [{"id": r, "grade": "direct" if i == 0 else "background", "reason": "r"} for i, r in enumerate(refs)]})
     return [pick(), verdict_all, LLMResult(content="数据要素是参与价值创造的数据资源[S1]；其依赖数据权属[本体]。",
-                                            prompt_tokens=100, completion_tokens=20)]
+                                            prompt_tokens=100, completion_tokens=20),
+            jtxt({"followups": ["数据要素和数据资源有什么区别？", "数据权属为什么重要？"]})]
 
 
 def test_single_mode_course_path_is_exactly_four_llm_calls_including_router(ctx):
@@ -159,8 +160,11 @@ def test_single_mode_course_path_is_exactly_four_llm_calls_including_router(ctx)
     out = UnifiedService(router_client=router, course_ctx=ctx, course_llm=course_llm).ask("什么是数据要素")
     assert out["route"] == "course" and out["status"] == "ok" and out["answer"]
     steps = [c["step"] for c in course_llm.calls]
-    assert steps == ["select", "filter", "answer"] and router.calls == 1
-    assert router.calls + len(course_llm.calls) == 4                                      # 路由 1 + 选概念 1 + 筛选 1 + 作答 1
+    # 追问是答案之后的独立小调用，不计入“作答管道”的 3 步预算
+    core = [s for s in steps if s != "followup"]
+    assert core == ["select", "filter", "answer"] and router.calls == 1
+    assert router.calls + len(core) == 4                                                  # 路由 1 + 选概念 1 + 筛选 1 + 作答 1
+    assert steps.count("followup") == 1 and out["followups"]                              # 追问确实在 happy path 上出现
     tr = out["trace"]["course"]
     assert tr["totals"]["calls"] == 3 and set(tr["totals"]["by_step"]) == {"select", "filter", "answer"}
     assert all(v["calls"] == 1 for v in tr["totals"]["by_step"].values())               # 每环节恰好一次

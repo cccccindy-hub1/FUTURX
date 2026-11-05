@@ -263,24 +263,29 @@ def test_combined_prompt_requires_single_answer_and_forbids_writing_speech_conte
 # ---------------------------------------------------------------- 统一入口：组合问答只调一次作答；课程 + 判例 = 4 次
 
 def test_course_plus_case_is_exactly_four_llm_calls_with_one_answer(cctx):
-    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="知识点讲解[S1]。判例印证[C1]。")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "case_pick": [case_pick_json(3)], "answer": [LLMResult(content="知识点讲解[S1]。判例印证[C1]。")],
+                   "followup": [jtxt({"followups": ["数据确权还有哪些难点？", "判例能推广到哪些场景？"]})]})
     svc = svc_with(llm, ["course", "case"])
     out = svc.ask("结合判例说明数据确权为什么难")
-    assert sorted(llm.steps()) == ["answer", "case_pick", "filter", "select"] and svc.router_client.calls == 1
-    assert svc.router_client.calls + len(llm.calls) == 5                                  # 路由 1 + 选概念 1 + 筛选 1 + 选案 1 + 作答 1
+    core = [s for s in llm.steps() if s != "followup"]
+    assert sorted(core) == ["answer", "case_pick", "filter", "select"] and svc.router_client.calls == 1
+    assert svc.router_client.calls + len(core) == 5                                       # 路由 1 + 选概念 1 + 筛选 1 + 选案 1 + 作答 1
     assert out["routes"] == ["course", "case"] and out["route"] == "course" and out["status"] == "ok"
     assert [s["kind"] for s in out["sources"]] == ["course", "case"] and "[1]" in out["answer"] and "[2]" in out["answer"]
     assert "case:03" not in out["answer"] and "【讲话原文】" not in out["answer"]
     assert out["trace"]["combined"]["sections"] == ["course", "case"] and "course" in out["trace"]["combined"] and "case" in out["trace"]["combined"]
+    assert llm.steps().count("followup") == 1 and out["followups"]                       # 追问在 happy path 上确实出现
 
 
 def test_course_plus_quote_adds_exactly_one_pick_call(cctx):
     llm = Recorder([pick(), filt, jtxt({"picks": [{"id": "Q1", "paragraphs": [1]}]}), LLMResult(content="知识点[S1]。总书记指出[Q1]。")])
     # 并行：挑段落与课程的选概念 / 筛选并发，调用顺序不固定，所以用按 step 取脚本的实现
-    llm = StepLLM({"select": [pick()], "filter": [filt], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="知识点[S1]。总书记指出[Q1]。")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="知识点[S1]。总书记指出[Q1]。")],
+                   "followup": [jtxt({"followups": ["总书记还讲过哪些数据要素？", "讲话如何落到政策上？"]})]})
     svc = svc_with(llm, ["course", "quote"])
     out = svc.ask("用总书记的讲话谈谈数据要素与网络安全的作用")
-    assert sorted(llm.steps()) == ["answer", "filter", "quote_pick", "select"] and svc.router_client.calls + len(llm.calls) == 5      # 课程 + 名言 = 路由 1 + 4
+    core = [s for s in llm.steps() if s != "followup"]
+    assert sorted(core) == ["answer", "filter", "quote_pick", "select"] and svc.router_client.calls + len(core) == 5      # 课程 + 名言 = 路由 1 + 4
     assert llm.steps().count("answer") == 1                                               # 只有一次作答
     assert out["answer"].endswith("——2018年，全国网络安全和信息化工作会议上的讲话") and [s["kind"] for s in out["sources"]] == ["course", "quote"]
 
@@ -303,10 +308,11 @@ class StepLLM:
 
 
 def test_case_plus_quote_makes_pick_and_one_answer_without_course(cctx):
-    llm = StepLLM({"case_pick": [case_pick_json(3)], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="判例讲了数据权益[C1]。总书记强调[Q1]。")]})
+    llm = StepLLM({"case_pick": [case_pick_json(3)], "quote_pick": [quote_pick_json()], "answer": [LLMResult(content="判例讲了数据权益[C1]。总书记强调[Q1]。")],
+                   "followup": [jtxt({"followups": ["数据权益还有哪些判例？", "总书记还强调过什么？"]})]})
     svc = svc_with(llm, ["case", "quote"])
     out = svc.ask("结合判例和总书记的讲话谈谈网络安全")
-    assert sorted(llm.steps()) == ["answer", "case_pick", "quote_pick"] and [s["kind"] for s in out["sources"]] == ["case", "quote"]
+    assert sorted(s for s in llm.steps() if s != "followup") == ["answer", "case_pick", "quote_pick"] and [s["kind"] for s in out["sources"]] == ["case", "quote"]
     assert out["trace"]["combined"]["sections"] == ["case", "quote"]
 
 
@@ -370,10 +376,12 @@ def test_combined_with_unloaded_library_returns_unavailable_without_any_call(cct
 # ================================================================ 单库判例 / 名言（统一入口）
 
 def test_single_case_route_one_answer_call_no_stream(cctx):
-    llm = StepLLM({"case_pick": [case_pick_json(3)], "case_answer": [case_answer_json()]})
+    llm = StepLLM({"case_pick": [case_pick_json(3)], "case_answer": [case_answer_json()],
+                   "followup": [jtxt({"followups": ["数据爬取还有哪些典型判例？", "这类案子法院怎么定性？"]})]})
     svc = svc_with(llm, ["case"], count=1, chapter=6)
     out = svc.ask("举一个关于数据爬取的判例")
-    assert llm.steps() == ["case_pick", "case_answer"] and svc.router_client.calls == 1 and svc.router_client.calls + len(llm.calls) == 3    # 路由 1 + 选案 1 + 作答 1
+    core = [s for s in llm.steps() if s != "followup"]
+    assert core == ["case_pick", "case_answer"] and svc.router_client.calls == 1 and svc.router_client.calls + len(core) == 3    # 路由 1 + 选案 1 + 作答 1
     assert out["route"] == "case" and out["routes"] == ["case"] and out["count"] == 1 and out["chapter"] == 6 and out["status"] == "ok"
     assert out["answer"].startswith("【第六章 数据市场】北京微梦创科诉云智联不正当竞争纠纷案\n案号：（2020）京73民终2980号") and "[1]" in out["answer"]
     assert out["sources"][0]["kind"] == "case" and out["sources"][0]["case_number"] == "（2020）京73民终2980号"
@@ -381,19 +389,24 @@ def test_single_case_route_one_answer_call_no_stream(cctx):
 
 
 def test_single_case_named_goes_straight_to_the_case_without_vector_search(cctx):
-    llm = StepLLM({"case_answer": [case_answer_json()]})
+    llm = StepLLM({"case_answer": [case_answer_json()],
+                   "followup": [jtxt({"followups": ["这个案子还有哪些争议点？", "案号是什么？"]})]})
     svc = svc_with(llm, ["case"])
     out = svc.ask("微博诉云智联案是怎么判的")
-    assert out["trace"]["case"]["mode"] == "named" and llm.steps() == ["case_answer"]        # 点名直达：不检索、不调用选案模型
+    # 点名直达：不检索、不调用选案模型（followup 是答案之后的可选小调用）
+    assert out["trace"]["case"]["mode"] == "named" and [s for s in llm.steps() if s != "followup"] == ["case_answer"]
 
 
 def test_case_list_mode_calls_no_model_and_no_retrieval(cctx):
-    llm = StepLLM({})
+    llm = StepLLM({"followup": [jtxt({"followups": ["数据权属还有哪些判例？", "平台数据怎么确权？"]})]})
     svc = svc_with(llm, ["case"], chapter=6)
     out = svc.ask("第六章有哪些判例？")
-    assert llm.calls == [] and svc.router_client.calls == 1
+    # 列表模式本身零模型调用；追问是答案之后的可选小调用
+    assert [c["step"] for c in llm.calls] == ["followup"]
+    assert svc.router_client.calls == 1
     assert out["status"] == "ok" and out["answer"].startswith("第六章 数据市场共有 1 个判例：") and "1. 北京微梦创科" in out["answer"]
     assert out["trace"]["case"]["mode"] == "list" and out["trace"]["case"]["llm_calls"] == 0
+    assert out["followups"]
 
 
 def test_case_not_found_does_not_call_the_answer_model(cctx):
@@ -430,13 +443,16 @@ def test_case_and_quote_unavailable_when_libraries_not_loaded(cctx):
 # ================================================================ 现有路由的行为不变
 
 def test_existing_routes_unchanged_by_the_new_dispatch(cctx):
-    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="课程答案[S1]。")]})
+    llm = StepLLM({"select": [pick()], "filter": [filt], "answer": [LLMResult(content="课程答案[S1]。")],
+                   "followup": [jtxt({"followups": ["数据要素还有哪些特征？", "它和数据资源什么关系？"]})]})
     out = svc_with(llm, ["course"], case=False, quote=False).ask("什么是数据要素")
     assert out["route"] == "course" and out["routes"] == ["course"] and out["status"] == "ok" and out["answer"] == "课程答案[1]。"
-    assert llm.steps() == ["select", "filter", "answer"] and "combined" not in out["trace"] and "case" not in out["trace"]
+    assert [s for s in llm.steps() if s != "followup"] == ["select", "filter", "answer"] and "combined" not in out["trace"] and "case" not in out["trace"]
+    # 失败/拒答路径：门控生效，不发起追问调用
     off = svc_with(StepLLM({}), ["off_topic"]).ask("今天天气怎么样")
     pol = svc_with(StepLLM({}), ["policy"]).ask("数据二十条第几条")
     assert off["status"] == "refused" and off["answer"] == config_text("refusal") and pol["status"] == "unavailable"
+    assert off["followups"] == [] and pol["followups"] == []
 
 
 def config_text(kind):
@@ -516,9 +532,10 @@ def test_sse_single_quote_is_not_streamed_result_in_done(cctx):
 
 
 def test_sse_case_list_mode_has_no_model_calls(cctx):
-    llm = StepLLM({})
+    llm = StepLLM({"followup": [jtxt({"followups": ["数据权属还有哪些判例？", "平台数据怎么确权？"]})]})
     ev = _events(_app(svc_with(llm, ["case"], chapter=6)).post("/auto/ask/stream", json={"question": "第六章有哪些判例"}))
-    assert [e["type"] for e in ev] == ["route", "done"] and "共有 1 个判例" in ev[-1]["answer"] and llm.calls == []
+    assert [e["type"] for e in ev] == ["route", "done", "followups"] and "共有 1 个判例" in ev[1]["answer"]
+    assert [c["step"] for c in llm.calls] == ["followup"] and ev[2]["items"]
 
 
 def test_sse_combined_streams_the_single_answer_with_kind_in_materials(cctx):
@@ -579,23 +596,29 @@ def test_combined_stream_slot_is_in_concurrency_paths():
     assert "/auto/ask/stream" in concurrency.RequestConcurrencyMiddleware._PATHS            # 组合 / 单库都走这两个已计入并发的路径
 
 
-# ---------------------------------------------------------------- 组合回答：总—分—总 + 结尾问句
+# ---------------------------------------------------------------- 组合回答：总—分—总（问句移交 followups）
 
 def test_combined_prompt_requires_total_part_total_and_a_closing_question_without_citation():
     from rag.combined import COMBINED_SYSTEM as S
-    for w in ("总—分—总", "总：开头用一两句话直接回答", "分：先把知识点讲清楚，再用判例或讲话来印证", "总：用一句话收束要点",
-              "最后单独一行，写一个问句", "这个问句不加引用编号", "不要分成「教材部分」「判例部分」两个独立回答"):
+    from rag import prompt_rules as rules
+    assert rules.ANSWER_STRUCTURE in S                              # 结构条款引用同一常量
+    assert rules.COURSE_SAMPLES in S                                # 样例同源
+    for w in ("总—分—总", "总：开头用一两句话直接回答", "总：用一句话收束要点",
+              "不要分成「教材部分」「判例部分」两个独立回答"):
         assert w in S
+    assert "最后单独一行，写一个问句" not in S and "这个问句不加引用编号" not in S   # 已移交 followups
     assert "不写引言和总结段" not in S                           # 旧的与“总”相矛盾的指令已去掉
 
 
 def test_combined_prompt_keeps_quote_rules_and_matches_the_course_prompts_structure_wording():
     from rag.combined import COMBINED_SYSTEM as S
     from rag.course import prompts
+    from rag import prompt_rules as rules
     for w in ("[Q#] 标记来指明位置", "不要把讲话文字放进引号", "[S2]、[C1]、[Q1]"):
         assert w in S
-    shared = "最后单独一行，写一个问句：结合本题内容引导学生进一步思考，或询问学生还想了解哪方面"
-    assert shared in S and shared in prompts.ANSWER_SYSTEM                  # 与线上课程单库的问句要求同一措辞
+    shared = rules.ANSWER_STRUCTURE
+    assert shared in S and shared in prompts.ANSWER_SYSTEM          # 与线上课程单库共用同一结构条款
+    assert rules.COURSE_SAMPLES in S and rules.COURSE_SAMPLES in prompts.ANSWER_SYSTEM
 
 
 def test_closing_question_survives_citation_rewriting_and_quote_scrubbing():

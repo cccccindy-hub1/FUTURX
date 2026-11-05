@@ -19,10 +19,16 @@ def test_answer_prompt_requires_points_for_list_and_relation_questions():
 
 
 def test_answer_prompt_total_split_total_and_closing_question():
+    from rag import prompt_rules as rules
     s = prompts.ANSWER_SYSTEM
     assert "AI 李老师" in s
+    # 结构条款与样例集中管理：断言引用同一常量，而不是硬编码措辞
+    assert rules.ANSWER_STRUCTURE in s
     assert "“总—分—总”结构" in s and "收束要点" in s
-    assert "最后单独一行，写一个问句" in s and "不加引用编号" in s
+    assert rules.COURSE_SAMPLES in s
+    assert "样例一·概念解释型" in s and "样例二·流程列举型" in s
+    # 结尾问句已移交 followups 管道，prompt 里不应再有
+    assert "最后单独一行，写一个问句" not in s and "不加引用编号" not in s
     assert "不写引言和总结段" not in s                 # 与「总分总」冲突的旧要求已去掉
 
 

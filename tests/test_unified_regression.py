@@ -126,7 +126,7 @@ def test_pure_course_question_identical_with_and_without_case_quote_services(ctx
         rc = route_client(["course"])
         out = make(ctx, with_new, rc, llm).ask("什么是数据要素")
         outs.append(strip_times(out))
-        steps.append((rc.calls, [c["step"] for c in llm.calls]))
+        steps.append((rc.calls, [c["step"] for c in llm.calls if c["step"] != "followup"]))   # 追问不计入作答管道
     assert outs[0] == outs[1] and steps[0] == steps[1] == (["route"], ["select", "filter", "answer"])         # 输出逐字一致；路由 1 + 选概念 1 + 筛选 1 + 作答 1 = 4 次
     assert outs[0]["route"] == "course" and outs[0]["routes"] == ["course"] and outs[0]["status"] == "ok" and outs[0]["answer"] == "数据要素是参与价值创造的数据资源[1]。"
     assert outs[0]["sources"][0]["n"] == 1 and "kind" not in outs[0]["sources"][0] or outs[0]["sources"][0].get("kind") in (None, "course")
@@ -185,7 +185,8 @@ def test_thesis_question_identical_and_never_touches_new_libs(ctx):
         rc = route_client(["thesis"])
         out = make(ctx, with_new, rc, llm).ask("怎么写开题报告")
         outs.append(strip_times(out))
-        assert llm.calls == []
+        # 论文库本身不调这个 LLM；追问（followup）是答案之后的可选小调用，允许发生
+        assert [c["step"] for c in llm.calls] == ["followup"] or llm.calls == []
     assert outs[0] == outs[1] and outs[0]["route"] == "thesis" and outs[0]["answer"] == "论文答案" and outs[0]["sources"] == [{"source": "a.pdf"}]
 
 
@@ -227,7 +228,7 @@ def test_old_style_router_json_with_single_route_still_dispatches_the_same_way(c
             return LLMResult(content=json.dumps({"route": "course", "complexity": "simple", "reason": "t"}))
     llm = ScriptedLLM(course_script())
     out = make(ctx, True, Old(), llm).ask("什么是数据要素")
-    assert out["route"] == "course" and out["routes"] == ["course"] and out["status"] == "ok" and [c["step"] for c in llm.calls] == ["select", "filter", "answer"]
+    assert out["route"] == "course" and out["routes"] == ["course"] and out["status"] == "ok" and [c["step"] for c in llm.calls if c["step"] != "followup"] == ["select", "filter", "answer"]
 
 
 def test_old_style_router_json_is_honored_as_the_models_decision_not_the_rule_fallback():
