@@ -307,6 +307,24 @@ body {
 .src-row-path { overflow-wrap: anywhere; }
 .answer-meta { font-size: 12px; color: var(--ink-soft); opacity: .8; }
 
+/* ---- 追问胶囊（回答末尾，点击即发送）---- */
+.followups { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.followups-label { font-size: 12px; color: var(--ink-soft); margin-right: 2px; }
+.chip.followup {
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-soft);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  line-height: 1.4;
+  max-width: 100%;
+  text-align: left;
+}
+.chip.followup::before { content: '↳ '; opacity: .55; }
+.chip.followup:hover { background: var(--panel); border-color: var(--accent); }
+.chip.followup:disabled { opacity: .5; cursor: default; }
+
 .send {
   border: none;
   background: var(--accent);

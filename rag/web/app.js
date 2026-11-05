@@ -283,6 +283,30 @@ function routeTag(routes) {
   return tag;
 }
 
+/* 追问胶囊：点一下填入输入框并自动发送（沿用 .chip 的胶囊风格，尺寸略小以区别于欢迎页） */
+function followupCapsules(items) {
+  const wrap = document.createElement('div');
+  wrap.className = 'followups';
+  const label = document.createElement('div');
+  label.className = 'followups-label';
+  label.textContent = '继续追问';
+  wrap.appendChild(label);
+  items.forEach((text) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip followup';
+    b.textContent = text;
+    b.addEventListener('click', () => {
+      if (sendBtn.disabled) return;          // 上一轮还在生成：不打断
+      input.value = text;
+      autoGrow();
+      send();
+    });
+    wrap.appendChild(b);
+  });
+  return wrap;
+}
+
 async function send() {
   const q = input.value.trim();
   if (!q) return;
@@ -389,6 +413,11 @@ async function send() {
       }
       if (ev.practice && ev.practice.length) body.appendChild(practiceList(ev.practice));
       body.appendChild(meta());
+      scrollBottom();
+    } else if (ev.type === 'followups') {
+      // 追问在 done 之后单独一帧到达（后端不阻塞主答案）。点击填入输入框并自动发送。
+      const items = (ev.items || []).filter((s) => typeof s === 'string' && s.trim());
+      if (items.length) body.appendChild(followupCapsules(items));
       scrollBottom();
     } else if (ev.type === 'error') {
       finished = true;
