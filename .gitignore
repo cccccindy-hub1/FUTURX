@@ -7,6 +7,7 @@ __pycache__/
 # ---- 密钥与本地配置（绝对不能提交）----
 .env
 .env.*.local
+.env.bak.*
 *.pem
 
 # ---- 向量库与缓存（可由 `python -m rag.cli build` 重建，勿提交）----
