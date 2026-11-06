@@ -80,7 +80,12 @@ def _ms(seconds) -> float | None:
 
 
 class RequestLog:
-    """一个请求的累积器。finish() 只写一次；之后的 record_llm 之类调用被忽略。"""
+    """一个请求的累积器。finish() 只写一次；之后的 record_llm 之类调用被忽略。
+
+    可调用对象而非仅靠 contextvar：Starlette 会把同步生成器交给线程池逐段恢复，
+    每次 next() 跑在独立上下文里，生成器内设置的 contextvar 在下次恢复时丢失
+    （实测流式请求只记到第一条 route 调用）。因此生成器要把 self 直接传给下游。
+    """
 
     def __init__(self, question: str, origin: str = "eval", key_id_value: str | None = None):
         self.request_id = uuid.uuid4().hex
@@ -251,7 +256,10 @@ class _Recorder:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         try:
-            self._token.var.reset(self._token)
+            if self._token is None:
+                _current.set(None)
+            else:
+                self._token.var.reset(self._token)
         except Exception:  # noqa: BLE001 - 生成器的 finally 可能落在别的线程
             pass
         if exc is not None and not issubclass(exc_type, GeneratorExit):
@@ -261,12 +269,50 @@ class _Recorder:
 
 def record(question: str, origin: str = "eval", key_id_value: str | None = None) -> _Recorder:
     """开启一条记录：with usage_log.record(q, "http", kid) as rec: ... rec.finish(out)。"""
-    rec = RequestLog(question, origin, key_id_value)
+    rec = start(question, origin, key_id_value)
+    return _Recorder(rec, _current.set(rec))
+
+
+def start(question: str, origin: str = "eval", key_id_value: str | None = None) -> RequestLog:
+    """只建记录、不绑 contextvar（流式生成器用：它每段恢复都在新上下文里）。"""
+    return RequestLog(question, origin, key_id_value)
+
+
+def clear() -> None:
+    """清掉本上下文的当前记录（流式收尾用，避免串到下一条请求）。"""
     try:
-        token = _current.set(rec)
+        _current.set(None)
     except Exception:  # noqa: BLE001
-        token = None
-    return _Recorder(rec, token)
+        pass
+
+
+class _Activate:
+    """在一个同步块内把 rec 设为当前记录（流式生成器每段恢复都需重新激活）。"""
+
+    def __init__(self, rec: RequestLog | None):
+        self.rec, self._token = rec, None
+
+    def __enter__(self) -> RequestLog | None:
+        try:
+            self._token = _current.set(self.rec)
+        except Exception:  # noqa: BLE001
+            self._token = None
+        return self.rec
+
+    def __exit__(self, *_exc) -> bool:
+        try:
+            if self._token is None:
+                _current.set(None)
+            else:
+                self._token.var.reset(self._token)
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
+def activate(rec: RequestLog | None) -> _Activate:
+    """with usage_log.activate(rec): ... 让 LLM 客户端在此块内上报到该记录。"""
+    return _Activate(rec)
 
 
 def current() -> RequestLog | None:
@@ -349,5 +395,5 @@ def simple_record(question: str, *, origin: str = "http", key_id_value: str | No
     return rec
 
 
-__all__ = ["RequestLog", "record", "current", "record_llm", "stage", "note_lock", "first_delta", "bind",
+__all__ = ["RequestLog", "record", "start", "clear", "activate", "current", "record_llm", "stage", "note_lock", "first_delta", "bind",
            "key_id", "key_id_from_header", "log_dir", "retention_days", "simple_record", "write"]

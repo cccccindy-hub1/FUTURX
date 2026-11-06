@@ -272,3 +272,61 @@ def test_tracing_llm_does_not_double_report(logdir):
         TracingLLM(SelfReporting(), Trace()).chat("select", [], model="m")
         rec.finish({"answer": "x"})
     assert len(_read(logdir)[0]["llm_calls"]) == 1
+
+
+def test_stream_log_survives_threadpool_resume(logdir):
+    """回归：Starlette 把同步生成器交给线程池逐段 next()，每段都是新的上下文副本，
+    生成器内 / 其后台线程里设置的 contextvar 会丢。流式请求必须逐段重新激活记录，
+    否则只记到第一条 route 调用（线上实测 route 之外的 select/filter/answer 全丢）。"""
+    import anyio
+    from anyio import to_thread
+
+    from rag.course.llm import LLMResult
+    from rag.unified import UnifiedService
+
+    def report(step, p_tok, c_tok):
+        usage_log.record_llm(step, "m", p_tok, c_tok, 0.01)   # 模拟 OpenAICompatClient 的内部上报
+
+    class Router:
+        def chat(self, step, messages, **kw):
+            import json as _j
+            report(step, 100, 10)
+            return LLMResult(content=_j.dumps({"route": "course", "routes": ["course"],
+                                              "complexity": "simple", "reason": "t"}),
+                             prompt_tokens=100, completion_tokens=10, latency_s=0.01)
+
+    def ask(question, ctx, llm, **kw):
+        report("select", 200, 50)                              # 模拟管线内三步调用
+        report("filter", 300, 60)
+        return {"question": question, "answer": {"text": "答案", "sources": []}, "trace": {"calls": []},
+                "selected_concepts": [], "filtered": [], "recalled": [], "fallback": None}
+
+    svc = UnifiedService(router_client=Router(), course_llm=object(), course_ctx=object())
+    import rag.course.pipeline as pipeline
+    orig = pipeline.ask
+    pipeline.ask = ask
+    try:
+        def _next(it):
+            try:
+                return True, next(it)
+            except StopIteration:
+                return False, None
+
+        async def consume():
+            gen = svc.ask_stream("什么是数据要素", origin="http", key_id="feedface")
+            out = []
+            while True:
+                more, ev = await to_thread.run_sync(_next, gen)   # 每段都在线程池新上下文里恢复
+                if not more:
+                    break
+                out.append(ev)
+            return out
+
+        events = anyio.run(consume)
+    finally:
+        pipeline.ask = orig
+    assert events[0]["type"] == "route"
+    row = _read(logdir)[0]
+    steps = [c["step"] for c in row["llm_calls"]]
+    assert "route" in steps, "route 未记录"
+    assert "select" in steps and "filter" in steps, f"后台线程里的调用丢失（contextvar 未跨线程传递）：{steps}"

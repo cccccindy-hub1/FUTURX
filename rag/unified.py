@@ -185,21 +185,37 @@ class UnifiedService:
         服务端实时维护 S# → 序号的映射，一个被拆在两片里的 [S12] 先缓冲到闭合再输出。
         materials 在某块第一次被引用（分配序号）时发出，带 n、chunk_id、章节路径；done 带最终的 sources（按序号排列，只含被引用的块）。
         生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。
-        origin/key_id 只用于调用日志（需求5）。"""
-        with usage_log.record(question, origin, key_id) as rec:
-            inner = self._ask_stream(question, top_k, rec)
-            try:
-                for ev in inner:
-                    if ev.get("type") == "route":                # route 先到、done 可能因断开来不了
-                        rec.route_name = ev.get("route")
-                        rec.routes = list(ev.get("routes") or [])
-                        rec.complexity = ev.get("complexity")
-                    yield ev
-            except GeneratorExit:                                # 客户端断开：落已得结果后正常收尾
-                inner.close()
-                rec.finish(error="client_disconnect")
-                raise
-            rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
+        origin/key_id 只用于调用日志（需求5）。
+
+        注意：Starlette 把同步生成器交给线程池逐段 next()，每次恢复都在新的上下文里，
+        生成器内设置的 contextvar 会被丢弃（流式日志只剩第一条 route 调用）。所以整条链都显式传 rec，
+        不依赖 contextvar。"""
+        rec = usage_log.start(question, origin, key_id)
+        inner = self._ask_stream(question, top_k, rec)
+        try:
+            while True:
+                # 关键：每段恢复都在线程池的新上下文里，必须在本段内重新激活 rec，
+                # 内层的 LLM 上报（以及它再起的后台线程 via bind）才看得到这条记录。
+                with usage_log.activate(rec):
+                    try:
+                        ev = next(inner)
+                    except StopIteration:
+                        break
+                if ev.get("type") == "route":                # route 先到、done 可能因断开来不了
+                    rec.route_name = ev.get("route")
+                    rec.routes = list(ev.get("routes") or [])
+                    rec.complexity = ev.get("complexity")
+                yield ev
+        except GeneratorExit:                                # 客户端断开：落已得结果后正常收尾
+            inner.close()
+            rec.finish(error="client_disconnect")
+            raise
+        except Exception as e:  # noqa: BLE001 - 已开始流式，异常转事件由端点处理
+            rec.finish(error=type(e).__name__)
+            raise
+        finally:
+            usage_log.clear()
+        rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
 
     def _ask_stream(self, question: str, top_k: int | None, rec) -> Iterator[dict[str, Any]]:
         question = question.strip()
@@ -276,7 +292,9 @@ class UnifiedService:
 
         def run() -> None:
             try:
-                q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm, on_event=on_event, solve=solve)))
+                with usage_log.activate(rec):                    # 后台线程里重新激活，pipeline 的 LLM 调用才记得到
+                    q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm,
+                                         on_event=on_event, solve=solve)))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -420,16 +438,18 @@ class UnifiedService:
 
         def run() -> None:
             try:
-                m = gather_materials(self, question, d, on_event=lambda e: emit(e) if e.get("type") == "stage" else None)
-                emit({"type": "stage", "stage": "combined", "sections": m.sections, "missing": m.empty})
-                if not m.sections:
-                    q.put(("result", None, m))
-                    return
-                titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
-                ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
-                                      on_delta=lambda t: emit({"type": "delta", "text": t}),
-                                      on_source=lambda e: emit({"type": "materials", **e}))
-                q.put(("result", ans, m))
+                with usage_log.activate(rec):                    # 组合路由同样在后台线程里调 LLM
+                    m = gather_materials(self, question, d,
+                                         on_event=lambda e: emit(e) if e.get("type") == "stage" else None)
+                    emit({"type": "stage", "stage": "combined", "sections": m.sections, "missing": m.empty})
+                    if not m.sections:
+                        q.put(("result", None, m))
+                        return
+                    titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
+                    ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
+                                          on_delta=lambda t: emit({"type": "delta", "text": t}),
+                                          on_source=lambda e: emit({"type": "materials", **e}))
+                    q.put(("result", ans, m))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
