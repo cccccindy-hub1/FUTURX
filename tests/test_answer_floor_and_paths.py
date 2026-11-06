@@ -14,7 +14,7 @@ def test_answer_prompt_requires_points_for_list_and_relation_questions():
     assert "必须分点展开" in s and "不能只给结论或只罗列名称" in s
     for kind in ("列举", "构成", "环节", "关系", "区别", "原因"):
         assert kind in s
-    assert "一般不超过 400 字" in s                     # 上限保留
+    assert "全文不超过 400 字" in s                     # 上限保留（Stage 2B：由「一般不超过」改为硬约束）
     assert "按需分点补充" not in s                     # 旧的「按需」写法会让模型只写一两句结论
 
 
