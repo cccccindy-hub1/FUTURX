@@ -254,3 +254,21 @@ def test_tracing_llm_reports_every_call(logdir):
     calls = _read(logdir)[0]["llm_calls"]
     assert [(c["step"], c["model"]) for c in calls] == [("select", "m1"), ("answer", "m2")]
     assert calls[0]["prompt_tokens"] == 11 and calls[1]["completion_tokens"] == 44
+
+
+def test_tracing_llm_does_not_double_report(logdir):
+    """内层会自己上报（OpenAICompatClient）时，包装器不能再记一遍，否则 token 翻倍。"""
+    from rag.course.llm import LLMResult, TracingLLM, Trace
+
+    class SelfReporting:
+        reports_usage = True
+
+        def chat(self, step, messages, **kw):
+            res = LLMResult(content="x", prompt_tokens=1, completion_tokens=2, latency_s=0.01)
+            usage_log.record_llm(step, "m", 1, 2, 0.01)
+            return res
+
+    with usage_log.record("q", "eval") as rec:
+        TracingLLM(SelfReporting(), Trace()).chat("select", [], model="m")
+        rec.finish({"answer": "x"})
+    assert len(_read(logdir)[0]["llm_calls"]) == 1

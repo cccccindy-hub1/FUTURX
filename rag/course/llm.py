@@ -48,6 +48,8 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatClient:
+    reports_usage = True        # 自己会向调用日志上报；TracingLLM 据此避免重复记一次
+
     def __init__(self, base: str | None = None, key: str | None = None, *, timeout: float = 120.0,
                  reasoning: dict[str, str] | None = None):
         self._base = (config.COURSE_LLM_API_BASE if base is None else base).strip()
@@ -259,7 +261,9 @@ class TracingLLM:
 
     def _record(self, step, model, tools, json_mode, res, t0, stream=False) -> LLMResult:
         reasoning_for = getattr(self.inner, "reasoning_for", None)
-        _report(step, model, res)                     # 流式/非流式都经这里，统一上报调用日志
+        # 内层已自行上报（OpenAICompatClient）时不重复记；测试替身等不会上报，由这里补上。
+        if not getattr(self.inner, "reports_usage", False):
+            _report(step, model, res)
         self.trace.calls.append({
             "step": step, "model": model, "tools": bool(tools), "json_mode": json_mode, "stream": stream,
             "reasoning": reasoning_for(step) if reasoning_for else None,
