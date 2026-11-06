@@ -37,6 +37,19 @@ def test_length_bands_pass_warn_fail():
     assert any("超字数" in p for p in bad["problems"]) and not bad["ok"]
 
 
+def test_more_than_four_points_fails():
+    """分点硬上限 4 条：与 prompt 的「归并为最多 4 条」一致，>4 判 FAIL。"""
+    body = ("数据定价方法有七种，可按维度归并理解。\n"
+            "- 成本加成：按投入加收益定价；\n- 市场比较：参照同类成交价；\n"
+            "- 收益分成：按增量收益分配；\n- 基于价值：按边际贡献定价；\n"
+            "- 动态定价：按时效调整；\n- 政府指导：公共数据适用。\n"
+            "这些方法常组合使用。")
+    m = caf.analyze(body)
+    assert m["points"] == 6 and not m["ok"]
+    assert any("分点过多" in p for p in m["problems"])
+    assert not any("分点过多" in w for w in m["warnings"])     # 不再只是警告
+
+
 def test_good_answer_passes_with_qualified_followups():
     m = caf.analyze(GOOD, GOOD_FU, route="course")
     assert m["ok"] and not m["problems"]

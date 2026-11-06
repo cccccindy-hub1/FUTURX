@@ -7,7 +7,7 @@
 输出逐题表、通过率、字数分布（min/median/max）、追问合格率与样例复用标记。
 判定口径与 rag/prompt_rules.ANSWER_STRUCTURE 一致：
 - 总起：首个非空行是完整句子（≥12 字）且不以分点符号开头；
-- 分点：2–4 条以 - / * / 1. / （1） / 一、 开头的行；
+- 分点：2–4 条以 - / * / 1. / （1） / 一、 开头的行；>4 条判 FAIL（与 prompt 硬上限一致）；
 - 收束：最后一个非分点段落，且不是分点行本身；
 - 字数：剥离引用标记（[1][2] 与 [来源N]）后统计；≤400 PASS，401–500 WARN，>500 FAIL；
 - 追问：2–4 条、每条 ≤25 字、以问号结尾（route=exam 记 N/A，剔除出分母）；
@@ -30,6 +30,7 @@ from rag import prompt_rules  # noqa: E402
 
 MAX_CHARS = 400
 WARN_CHARS = 500                        # 401–500 警告，>500 失败
+MAX_POINTS = 4                          # 与 prompt 硬上限一致：>4 条即 FAIL
 SHORT_ANSWER = 150                      # ≤ 此长度，分点要求降级为警告
 SAMPLE_OVERLAP = 12                     # 与样例连续相同的字数阈值
 _BULLET = re.compile(r"^\s*(?:[-*+·]|\d{1,2}[.)、]|[（(]\d{1,2}[）)]|[一二三四五六七八九十]+[、.])")
@@ -101,8 +102,8 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "") ->
             warnings.append("短答未分点(允许)")
         else:
             problems.append(f"分点不足({points})")
-    if points > 4:
-        warnings.append(f"分点过多({points})")
+    if points > MAX_POINTS:
+        problems.append(f"分点过多({points}>{MAX_POINTS})")
     if not opening:
         problems.append("缺总起")
     if not closing:
