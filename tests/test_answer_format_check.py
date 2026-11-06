@@ -33,7 +33,7 @@ def test_length_bands_pass_warn_fail():
     warn = caf.analyze(base[:450])
     assert warn["chars"] == 450 and any("字数偏高" in w for w in warn["warnings"])
     assert not any("超字数" in p for p in warn["problems"])
-    bad = caf.analyze(base[:520])
+    bad = caf.analyze(base[:620])
     assert any("超字数" in p for p in bad["problems"]) and not bad["ok"]
 
 
@@ -48,6 +48,20 @@ def test_more_than_four_points_fails():
     assert m["points"] == 6 and not m["ok"]
     assert any("分点过多" in p for p in m["problems"])
     assert not any("分点过多" in w for w in m["warnings"])     # 不再只是警告
+
+
+def test_citation_overflow_fails():
+    """引用编号超过 materials 数：指向不存在的材料，判 FAIL 并列出越界编号。"""
+    body = ("数据要素市场由多类主体构成。\n"
+            "- 供给与需求：供给方、需求方各自分工；\n"
+            "- 中介与监管：数据商、平台运营方、监管机构 [3]。\n"
+            "四类主体共同支撑交易达成。")
+    ok = caf.analyze(body, ["a？", "b？"], "course", [{"n": 1}, {"n": 2}, {"n": 3}])
+    assert not ok["citation_overflow"] and ok["ok"]
+    bad = caf.analyze(body, ["a？", "b？"], "course", [{"n": 1}, {"n": 2}])
+    assert bad["citation_overflow"] == [3] and not bad["ok"]
+    assert any("引用越界" in p for p in bad["problems"])
+    assert not caf.analyze(body, ["a？", "b？"], "course", None)["citation_overflow"]   # 无 sources 不误报
 
 
 def test_good_answer_passes_with_qualified_followups():

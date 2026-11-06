@@ -1,17 +1,19 @@
-"""检查 eval result json 的回答格式：总起 / 分点 / 收束 / 字数 / 追问 / 样例复用。
+"""检查 eval result json 的回答格式：总起 / 分点 / 收束 / 字数 / 追问 / 样例复用 / 引用越界。
 
 用法：
     python scripts/check_answer_format.py rag/eval_data/course_e2e_1102_flash_v2.json
     python scripts/check_answer_format.py <file> [<file> ...] [--min-points 2]
 
-输出逐题表、通过率、字数分布（min/median/max）、追问合格率与样例复用标记。
+输出逐题表、通过率、字数分布（min/median/max）、追问合格率、样例复用标记、引用越界清单。
 判定口径与 rag/prompt_rules.ANSWER_STRUCTURE 一致：
 - 总起：首个非空行是完整句子（≥12 字）且不以分点符号开头；
 - 分点：2–4 条以 - / * / 1. / （1） / 一、 开头的行；>4 条判 FAIL（与 prompt 硬上限一致）；
 - 收束：最后一个非分点段落，且不是分点行本身；
-- 字数：剥离引用标记（[1][2] 与 [来源N]）后统计；≤400 PASS，401–500 WARN，>500 FAIL；
+- 字数：剥离引用标记（[1][2] 与 [来源N]）后统计；≤400 PASS，401–600 WARN，>600 FAIL
+  （600 是列举类问题的有界例外，条款见 ANSWER_STRUCTURE 的“字数放宽”）；
 - 追问：2–4 条、每条 ≤25 字、以问号结尾（route=exam 记 N/A，剔除出分母）；
-- 样例复用：与 prompt_rules 四条样例连续 ≥12 字相同即标记（样例只示范结构，不得抄原句）。
+- 样例复用：与 prompt_rules 四条样例连续 ≥12 字相同即标记（样例只示范结构，不得抄原句）；
+- 引用越界：正文出现的最大编号 > 该题 sources 数 → FAIL（编号指向不存在的材料）。
 
 压缩格式例外：≤150 字的答案不要求分点（降级为警告），但总起与收束仍需存在。
 """
@@ -29,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rag import prompt_rules  # noqa: E402
 
 MAX_CHARS = 400
-WARN_CHARS = 500                        # 401–500 警告，>500 失败
+WARN_CHARS = 600                        # 401–600 警告（列举类有界例外），>600 失败
+WARN_RATIO_LIMIT = 0.30                 # 例外被滥用阈值：WARN 占比 >30% 需报告并回紧
 MAX_POINTS = 4                          # 与 prompt 硬上限一致：>4 条即 FAIL
 SHORT_ANSWER = 150                      # ≤ 此长度，分点要求降级为警告
 SAMPLE_OVERLAP = 12                     # 与样例连续相同的字数阈值
@@ -37,6 +40,7 @@ _BULLET = re.compile(r"^\s*(?:[-*+·]|\d{1,2}[.)、]|[（(]\d{1,2}[）)]|[一二
 _SENT_END = re.compile(r"[。！？；]")
 # 引用标记：[1] [12] [来源1] [来源 3]，以及误留的 [S1]（作答提示词要求不出现）
 _CITE = re.compile(r"[\[【]\s*(?:来源\s*\d+|[Ss]\d{1,3}|\d{1,3})\s*[\]】]")
+_CITE_NUM = re.compile(r"\[(\d{1,3})\]")
 
 # 四条样例：两个常量拼接后按样例标题切开，取「回答：」之后的正文作为比对语料
 _SAMPLES = re.split(r"【样例[一二三四五六七八九十]+·",
@@ -76,7 +80,16 @@ def sample_overlap(answer: str) -> int:
     return max((_longest_common(body, s) for s in _SAMPLE_BODIES), default=0)
 
 
-def analyze(answer: str, followups: list[str] | None = None, route: str = "") -> dict:
+def citation_overflow(answer: str, sources: list | None) -> list[int]:
+    """正文里超过 sources 数的引用编号（编号指向不存在的材料）。sources 缺失时返回 []。"""
+    if not sources:
+        return []
+    nums = [int(x) for x in _CITE_NUM.findall(answer or "")]
+    return sorted({n for n in nums if n > len(sources)})
+
+
+def analyze(answer: str, followups: list[str] | None = None, route: str = "",
+            sources: list | None = None) -> dict:
     raw = (answer or "").strip()
     text = strip_citations(raw).strip()
     lines = _lines(text)
@@ -113,6 +126,10 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "") ->
     if reused >= SAMPLE_OVERLAP:
         warnings.append(f"疑似复用样例({reused}字)")
 
+    over = citation_overflow(raw, sources)
+    if over:
+        problems.append(f"引用越界({','.join(map(str, over))}>{len(sources or [])})")
+
     fu = [str(x) for x in (followups or []) if str(x).strip()]
     fu_ok = None if route == "exam" else (             # route=exam 走题库模板，记 N/A 不进分母
         2 <= len(fu) <= 4
@@ -124,6 +141,7 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "") ->
 
     return {"chars": chars, "points": points, "opening": opening, "closing": closing,
             "followups": len(fu), "followup_ok": fu_ok, "reused": reused,
+            "citation_overflow": over, "citation_count": len(sources or []),
             "problems": problems, "warnings": warnings, "ok": not problems}
 
 
@@ -146,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     all_chars: list[int] = []
     fu_checked = fu_passed = 0
     reused_rows: list[str] = []
+    over_rows: list[str] = []
+    warn_count = 0
     for path in args.files:
         p = Path(path)
         if not p.is_file():
@@ -161,15 +181,22 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             fu = r.get("followups") or []
             route = r.get("route") or ""
-            m = analyze(answer, fu, route)
+            sources = r.get("sources")
+            m = analyze(answer, fu, route, sources)
             total += 1
             passed += 1 if m["ok"] else 0
             all_chars.append(m["chars"])
+            if any(w.startswith("字数偏高") for w in m["warnings"]):
+                warn_count += 1
             if m["followup_ok"] is not None:
                 fu_checked += 1
                 fu_passed += 1 if m["followup_ok"] else 0
             if m["reused"] >= SAMPLE_OVERLAP:
                 reused_rows.append(f"{r.get('id') or r.get('question', '')}（{m['reused']} 字）")
+            if m["citation_overflow"]:
+                rid = r.get("id") or r.get("question", "")
+                over_rows.append(f"{rid}（引用 {'/'.join(map(str, m['citation_overflow']))}，"
+                                 f"sources {m['citation_count']}）")
             verdict = "PASS" if m["ok"] else "FAIL: " + "、".join(m["problems"])
             if m["warnings"]:
                 verdict += "  (~" + "、".join(m["warnings"]) + ")"
@@ -178,12 +205,17 @@ def main(argv: list[str] | None = None) -> int:
                   f"{'Y' if m['opening'] else 'N':>4} {'Y' if m['closing'] else 'N':>4} {fu_cell:>4}  {verdict}")
 
     if total:
+        ratio = warn_count / total
         print(f"\n通过率：{passed}/{total} = {passed / total * 100:.1f}%")
         print(f"字数分布：min {min(all_chars)} / median {statistics.median(all_chars):.0f} / max {max(all_chars)}")
+        print(f"字数 WARN 占比：{warn_count}/{total} = {ratio * 100:.1f}%"
+              + ("  ⚠ 超过 30%，例外条款疑被滥用" if ratio > WARN_RATIO_LIMIT else ""))
         print(f"追问合格率：{fu_passed}/{fu_checked} = "
               f"{(fu_passed / fu_checked * 100) if fu_checked else 0:.1f}%"
               + ("（route=exam 记 N/A，已剔除出分母）" if fu_checked < total else ""))
         print("样例复用标记：" + ("、".join(reused_rows) if reused_rows else "无"))
+        print(f"引用越界：{len(over_rows)}/{total}"
+              + ("　" + "；".join(over_rows) if over_rows else "（无）"))
     else:
         print("\n没有可检查的回答（rows 为空或所有 answer 为空）")
     return 0 if total and passed == total else 1
