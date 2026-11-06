@@ -93,6 +93,9 @@ class RequestLog:
         self.stages: dict[str, float | None] = {}
         self.time_to_first_delta_ms: float | None = None
         self.pending_out: dict = {}                     # 流式：done 时的最终结果，供生成器收尾时落盘
+        self.route_name: str | None = None              # 流式：route 事件先到、done 可能因断开而不来
+        self.routes: list[str] = []
+        self.complexity: str | None = None
         self._first_delta_at: float | None = None
         self._done = False
         self._lock = threading.Lock()
@@ -133,9 +136,10 @@ class RequestLog:
 
     def _build(self, out: dict, error: str | None) -> dict:
         trace = out.get("trace") or {}
-        routes = out.get("routes")
+        routes = out.get("routes") or self.routes
         if not routes:
-            routes = [out["route"]] if out.get("route") else []
+            fallback_route = out.get("route") or self.route_name
+            routes = [fallback_route] if fallback_route else []
         stages = {k: None for k in STAGE_KEYS}
         stages.update(self._trace_stages(trace))
         stages.update({k: v for k, v in self.stages.items() if v is not None})
@@ -148,9 +152,9 @@ class RequestLog:
             "duration_ms": _ms(time.perf_counter() - self._t0),
             "key_id": self.key_id,
             "question": self.question,
-            "route": out.get("route"),
+            "route": out.get("route") or self.route_name,
             "routes": routes,
-            "complexity": out.get("complexity"),
+            "complexity": out.get("complexity") or self.complexity,
             "status": out.get("status") or ("error" if error else None),
             "answer": answer,
             "answer_chars": len(answer),

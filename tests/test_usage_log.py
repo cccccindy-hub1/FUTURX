@@ -142,6 +142,36 @@ def test_simple_record_shape(logdir):
     assert r["key_id"] == "deadbeef" and r["origin"] == "http"
 
 
+def test_stream_route_kept_when_client_disconnects(logdir):
+    """流式：route 事件先到、done 不来（客户端断开）时，记录仍带 route 与 client_disconnect。"""
+    from rag.course.llm import LLMResult
+    from rag.unified import UnifiedService
+
+    class Router:
+        def chat(self, step, messages, **kw):
+            import json as _j
+            return LLMResult(content=_j.dumps({"route": "exam", "routes": ["exam"], "complexity": "simple"}),
+                             latency_s=0.01, prompt_tokens=10, completion_tokens=5)
+
+    class SlowLLM:
+        def chat(self, step, messages, **kw):
+            raise RuntimeError("should not be called in this test")
+
+    class Bank:
+        def search(self, q):
+            return {"status": "no_match", "items": [], "strategy": "bm25", "intent": "find"}
+
+    svc = UnifiedService(router_client=Router(), lib_llm=SlowLLM(), exam_bank=Bank())
+    gen = svc.ask_stream("给我出三道判断题", origin="http", key_id="cafebabe")
+    first = next(gen)
+    assert first["type"] == "route" and first["route"] == "exam"
+    gen.close()                                     # 模拟客户端断开
+    rows = _read(logdir)
+    assert len(rows) == 1
+    assert rows[0]["route"] == "exam" and rows[0]["routes"] == ["exam"]
+    assert rows[0]["error"] == "client_disconnect"
+
+
 def test_tests_default_dir_is_temp(monkeypatch):
     """pytest 进程不写仓库 logs/（假答案会污染真实统计）。"""
     monkeypatch.delenv("RAG_LOG_DIR", raising=False)

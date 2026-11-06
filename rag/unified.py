@@ -187,9 +187,16 @@ class UnifiedService:
         生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。
         origin/key_id 只用于调用日志（需求5）。"""
         with usage_log.record(question, origin, key_id) as rec:
+            inner = self._ask_stream(question, top_k, rec)
             try:
-                yield from self._ask_stream(question, top_k, rec)
+                for ev in inner:
+                    if ev.get("type") == "route":                # route 先到、done 可能因断开来不了
+                        rec.route_name = ev.get("route")
+                        rec.routes = list(ev.get("routes") or [])
+                        rec.complexity = ev.get("complexity")
+                    yield ev
             except GeneratorExit:                                # 客户端断开：落已得结果后正常收尾
+                inner.close()
                 rec.finish(error="client_disconnect")
                 raise
             rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
@@ -309,6 +316,9 @@ class UnifiedService:
                 else:
                     if item.get("type") == "delta":
                         rec.first_delta()
+                    elif item.get("type") == "route":
+                        rec.route_name, rec.routes, rec.complexity = (
+                            item.get("route"), list(item.get("routes") or []), item.get("complexity"))
                     yield item
         finally:
             cancelled.set()
