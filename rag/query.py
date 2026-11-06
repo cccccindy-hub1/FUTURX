@@ -156,6 +156,21 @@ class RAGService:
             kwargs["reasoning_effort"] = LLM_REASONING_EFFORT
         return kwargs
 
+    def _acq(self, lock) -> float:
+        """获取锁并返回排队等待秒数（只计时，不改语义）。"""
+        t0 = time.perf_counter()
+        lock.acquire()
+        return time.perf_counter() - t0
+
+    def _note_lock(self, name: str, wait_s: float, hold_s: float) -> None:
+        """把一次锁等待/持有时长上报调用日志（rag.usage_log）；无当前请求或日志出错都静默忽略。"""
+        try:
+            from . import usage_log
+
+            usage_log.note_lock(name, wait_s * 1000, hold_s * 1000)
+        except Exception:  # noqa: BLE001 - 埋点失败不影响检索
+            pass
+
     def _retrieval_query(self, query: str) -> str:
         """按开关做查询改写 / HyDE；无 LLM 时原样返回。"""
         if not (self.rewrite or self.use_hyde):
@@ -170,7 +185,10 @@ class RAGService:
         retrieval_query = self._retrieval_query(query)
         # Protect shared embedding/reranking models and lazily loaded indexes.
         # Release before LLM generation so answers can run in parallel.
-        with self._retrieval_lock:
+        # 计时：lock_wait（排队等锁）与 retrieval（持锁检索）分开记，用于估算满载排队深度。
+        wait_s = self._acq(self._retrieval_lock)
+        t_hold = time.perf_counter()
+        try:
             result = self.retriever.search(
                 retrieval_query,
                 top_k=top_k,
@@ -180,6 +198,12 @@ class RAGService:
             )
             if self.expand_context:
                 self._expand(result)
+        except BaseException:
+            self._retrieval_lock.release()
+            self._note_lock("retrieval", wait_s, time.perf_counter() - t_hold)
+            raise
+        self._retrieval_lock.release()
+        self._note_lock("retrieval", wait_s, time.perf_counter() - t_hold)
         return result
 
     def _expand(self, result) -> None:

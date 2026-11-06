@@ -96,6 +96,7 @@ class RequestLog:
         self.route_name: str | None = None              # 流式：route 事件先到、done 可能因断开而不来
         self.routes: list[str] = []
         self.complexity: str | None = None
+        self.locks: dict[str, dict] = {}                # 检索锁：{name: {lock_wait_ms, retrieval_ms, locks}}
         self._first_delta_at: float | None = None
         self._done = False
         self._lock = threading.Lock()
@@ -113,6 +114,16 @@ class RequestLog:
         with self._lock:
             if not self._done:
                 self.stages[name] = _ms(seconds)
+
+    def note_lock(self, name: str, wait_ms: float, hold_ms: float) -> None:
+        """累加一次锁等待/持有时长（同一请求内多次检索会累加，locks 计次数）。"""
+        with self._lock:
+            if self._done:
+                return
+            cur = self.locks.setdefault(name, {"lock_wait_ms": 0.0, "retrieval_ms": 0.0, "locks": 0})
+            cur["lock_wait_ms"] = round(cur["lock_wait_ms"] + wait_ms, 1)
+            cur["retrieval_ms"] = round(cur["retrieval_ms"] + hold_ms, 1)
+            cur["locks"] += 1
 
     def first_delta(self) -> None:
         """流式首段正文到达（重复调用只记第一次）。"""
@@ -161,6 +172,7 @@ class RequestLog:
             "followups": list(out.get("followups") or []),
             "sources": _brief_sources(sources),
             "stages": stages,
+            "locks": {k: dict(v) for k, v in self.locks.items()},
             "llm_calls": list(self.llm_calls),
             "time_to_first_delta_ms": self.time_to_first_delta_ms,
             "error": error,
@@ -284,6 +296,16 @@ def stage(name: str, seconds: float) -> None:
         pass
 
 
+def note_lock(name: str, wait_ms: float, hold_ms: float) -> None:
+    """检索锁埋点：排队等待与持锁时长分别累加（无当前记录时静默无操作）。"""
+    try:
+        rec = current()
+        if rec is not None:
+            rec.note_lock(name, wait_ms, hold_ms)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def first_delta() -> None:
     try:
         rec = current()
@@ -321,11 +343,11 @@ def simple_record(question: str, *, origin: str = "http", key_id_value: str | No
         "route": route, "routes": [route], "complexity": None, "status": status,
         "answer": answer or "", "answer_chars": len(answer or ""), "followups": [],
         "sources": _brief_sources(sources or []), "stages": {**{k: None for k in STAGE_KEYS}, **(stages or {})},
-        "llm_calls": [], "time_to_first_delta_ms": time_to_first_delta_ms, "error": error, "origin": origin,
+        "locks": {}, "llm_calls": [], "time_to_first_delta_ms": time_to_first_delta_ms, "error": error, "origin": origin,
     }
     write(rec)
     return rec
 
 
-__all__ = ["RequestLog", "record", "current", "record_llm", "stage", "first_delta", "bind",
+__all__ = ["RequestLog", "record", "current", "record_llm", "stage", "note_lock", "first_delta", "bind",
            "key_id", "key_id_from_header", "log_dir", "retention_days", "simple_record", "write"]

@@ -176,3 +176,59 @@ def test_tests_default_dir_is_temp(monkeypatch):
     """pytest 进程不写仓库 logs/（假答案会污染真实统计）。"""
     monkeypatch.delenv("RAG_LOG_DIR", raising=False)
     assert "futurx_usage_test" in str(usage_log.log_dir())
+
+
+def test_lock_timing_separates_wait_from_hold(logdir):
+    """检索锁：排队等待与持锁时长分别记入 locks，不互相混算。"""
+    with usage_log.record("q", "eval") as rec:
+        rec.note_lock("retrieval", 120.0, 340.0)
+        rec.note_lock("retrieval", 30.0, 210.0)      # 同请求第二次检索：累加
+        rec.finish({"route": "thesis", "status": "ok", "answer": "x"})
+    row = _read(logdir)[0]
+    lock = row["locks"]["retrieval"]
+    assert lock["lock_wait_ms"] == 150.0
+    assert lock["retrieval_ms"] == 550.0
+    assert lock["locks"] == 2
+
+
+def test_lock_timing_after_finish_is_ignored(logdir):
+    with usage_log.record("q", "eval") as rec:
+        rec.finish({"route": "exam", "status": "ok", "answer": "x"})
+        rec.note_lock("retrieval", 999.0, 999.0)
+    assert _read(logdir)[0]["locks"] == {}
+
+
+def test_note_lock_without_current_record_is_noop():
+    usage_log.note_lock("retrieval", 1.0, 2.0)       # 不抛异常
+
+
+def test_retrieve_result_reports_lock_timing(monkeypatch):
+    """真实调用 RAGService.retrieve_result：持锁段有数、等待段非负，且锁已释放。"""
+    import time as _t
+
+    import rag.query as query
+
+    svc = object.__new__(query.RAGService)
+    from threading import RLock, local
+    svc._request_state = local()
+    svc._retrieval_lock = RLock()
+    svc._retrieval_query = lambda q: q
+    svc.fetch_k = 20
+    svc.where = None
+    svc.expand_context = False
+    svc.collection_name = "x"
+
+    def search(q, **kwargs):
+        _t.sleep(0.02)
+        return q
+    svc.retriever = type("R", (), {"search": staticmethod(search)})()
+
+    with usage_log.record("q", "eval") as rec:
+        assert svc.retrieve_result("hello") == "hello"
+        rec.finish({"route": "thesis", "status": "ok", "answer": "x"})
+    rows = _read(Path(usage_log.log_dir()))
+    lock = [r for r in rows if r.get("locks")][0]["locks"]["retrieval"]
+    assert lock["locks"] == 1
+    assert lock["retrieval_ms"] >= 20
+    assert lock["lock_wait_ms"] >= 0
+    assert not svc._retrieval_lock._is_owned()      # 锁已释放，异常路径也不泄漏
