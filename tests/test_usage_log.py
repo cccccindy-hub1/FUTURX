@@ -232,3 +232,25 @@ def test_retrieve_result_reports_lock_timing(monkeypatch):
     assert lock["retrieval_ms"] >= 20
     assert lock["lock_wait_ms"] >= 0
     assert not svc._retrieval_lock._is_owned()      # 锁已释放，异常路径也不泄漏
+
+
+def test_tracing_llm_reports_every_call(logdir):
+    """课程管线的 llm 被 TracingLLM 包着：chat 与 chat_stream 都必须上报到调用日志。"""
+    from rag.course.llm import LLMResult, Trace, TracingLLM
+
+    class Inner:
+        def chat(self, step, messages, **kw):
+            return LLMResult(content="x", prompt_tokens=11, completion_tokens=2, latency_s=0.01)
+
+        def chat_stream(self, step, messages, *, model, on_delta):
+            on_delta("a")
+            return LLMResult(content="a", prompt_tokens=33, completion_tokens=44, latency_s=0.02)
+
+    with usage_log.record("q", "eval") as rec:
+        t = TracingLLM(Inner(), Trace())
+        t.chat("select", [], model="m1")
+        t.chat_stream("answer", [], model="m2", on_delta=lambda _x: None)
+        rec.finish({"route": "course", "status": "ok", "answer": "x"})
+    calls = _read(logdir)[0]["llm_calls"]
+    assert [(c["step"], c["model"]) for c in calls] == [("select", "m1"), ("answer", "m2")]
+    assert calls[0]["prompt_tokens"] == 11 and calls[1]["completion_tokens"] == 44

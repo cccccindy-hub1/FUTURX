@@ -259,6 +259,7 @@ class TracingLLM:
 
     def _record(self, step, model, tools, json_mode, res, t0, stream=False) -> LLMResult:
         reasoning_for = getattr(self.inner, "reasoning_for", None)
+        _report(step, model, res)                     # 流式/非流式都经这里，统一上报调用日志
         self.trace.calls.append({
             "step": step, "model": model, "tools": bool(tools), "json_mode": json_mode, "stream": stream,
             "reasoning": reasoning_for(step) if reasoning_for else None,
