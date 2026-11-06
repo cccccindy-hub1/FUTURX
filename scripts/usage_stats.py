@@ -76,7 +76,8 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def fmt_ms(v: float) -> str:
-    return f"{v:.1f}s" if v >= 1000 else f"{v:.0f}ms"
+    """输入毫秒，友好显示（≥1000ms 转秒）。"""
+    return f"{v / 1000:.2f}s" if v >= 1000 else f"{v:.0f}ms"
 
 
 def format_report(s: dict, label: str) -> str:
