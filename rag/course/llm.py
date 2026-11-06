@@ -92,7 +92,9 @@ class OpenAICompatClient:
             resp = self._client.chat.completions.create(**kwargs)
         except Exception as e:  # noqa: BLE001 - 统一脱敏后重抛
             raise LLMError(f"[{step}] LLM 调用失败：{type(e).__name__}: {self._redact(str(e))}") from None
-        return parse_response(resp, time.perf_counter() - t0)
+        res = parse_response(resp, time.perf_counter() - t0)
+        _report(step, model, res)
+        return res
 
     def chat_stream(self, step: str, messages: list[dict], *, model: str, on_delta) -> LLMResult:
         """流式生成（只用于作答）：content 片段逐段回调 on_delta；reasoning 片段只计长度。返回汇总后的 LLMResult。"""
@@ -118,10 +120,21 @@ class OpenAICompatClient:
         except Exception as e:  # noqa: BLE001 - 统一脱敏后重抛
             raise LLMError(f"[{step}] LLM 调用失败：{type(e).__name__}: {self._redact(str(e))}") from None
         details = getattr(usage, "completion_tokens_details", None)
-        return LLMResult(content="".join(parts), prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-                         completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-                         reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0, reasoning_chars=r_chars,
-                         latency_s=time.perf_counter() - t0)
+        res = LLMResult(content="".join(parts), prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                        reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0, reasoning_chars=r_chars,
+                        latency_s=time.perf_counter() - t0)
+        _report(step, model, res)
+        return res
+
+
+def _report(step: str, model: str, res: LLMResult) -> None:
+    """把一次调用上报给调用日志（rag.usage_log）；无当前请求或日志出错都不影响本调用。"""
+    try:
+        from .. import usage_log
+        usage_log.record_llm(step, model, res.prompt_tokens, res.completion_tokens, res.latency_s)
+    except Exception:  # noqa: BLE001 - 日志失败绝不影响主流程
+        pass
 
 
 _EFFORTS = ("low", "medium", "high")

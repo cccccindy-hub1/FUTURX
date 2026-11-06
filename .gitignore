@@ -71,3 +71,6 @@ rag/eval_data/*
 # ---- 日志与空库备份 ----
 *.log
 rag/chroma_db.empty_bak/
+
+# ---- 调用日志（含用户真实问答全文，public 仓库绝不能进）----
+logs/

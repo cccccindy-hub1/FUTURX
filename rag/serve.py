@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from fastapi import Request
 from pydantic import BaseModel
 
 from .config import MAX_CONCURRENT_REQUESTS, TOP_K
@@ -159,27 +160,63 @@ def build_app(**service_kwargs):
     # 请求头带 Authorization: Bearer <key>（key 由页面输入后存 localStorage）。服务改为对外监听后，
     # 不鉴权等于开放 LLM 免费调用入口，故 /ask 与 /ask/stream 补上与 /auto/ask 相同的鉴权依赖。
     @app.post("/ask", dependencies=[Depends(require_api_key)])
-    def ask(req: AskRequest):
-        ans, sources, docs = svc.answer(req.question, req.top_k)
+    def ask(req: AskRequest, request: Request):
+        import time as _t
+
+        from .api import key_fingerprint
+        from .usage_log import simple_record
+
+        t0 = _t.time()
+        try:
+            ans, sources, docs = svc.answer(req.question, req.top_k)
+        except Exception as e:  # noqa: BLE001 - 记录后按原样抛出（由 FastAPI 转 500）
+            simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
+                          status="error", error=type(e).__name__, started=t0)
+            raise
+        simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
+                      status="ok" if ans is not None else "unavailable", answer=ans or "",
+                      sources=sources, started=t0, stages={"answer": round((_t.time() - t0) * 1000, 1)})
         return {"answer": ans, "sources": sources, "contexts": docs}
 
     @app.post("/ask/stream", dependencies=[Depends(require_api_key)])
-    def ask_stream(req: AskRequest):
+    def ask_stream(req: AskRequest, request: Request):
         """SSE 流式问答：先推 sources，再逐段推 delta，避免前端长时间空等。"""
+        import time as _t
+
+        from .api import key_fingerprint
+        from .usage_log import simple_record
+
+        t0 = _t.time()
         try:
             docs, sources, deltas = svc.open_stream(req.question, req.top_k)
         except RuntimeError as e:
+            simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
+                          status="unavailable", error="RuntimeError", started=t0)
             raise HTTPException(status_code=503, detail=str(e))
 
         def gen():
+            parts: list[str] = []
+            first_at: float | None = None
             yield _sse({"type": "sources", "sources": sources, "contexts": docs})
             try:
                 for text in deltas:
+                    if first_at is None:
+                        first_at = _t.time()
+                    parts.append(text)
                     yield _sse({"type": "delta", "text": text})
             except Exception as e:  # 流已开始，只能以事件告知
+                simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
+                              status="error", answer="".join(parts), sources=sources, started=t0,
+                              error=type(e).__name__,
+                              time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
+                              stages={"answer": round((_t.time() - t0) * 1000, 1)})
                 yield _sse({"type": "error", "message": f"生成中断：{e}"})
                 return
             yield _sse({"type": "done"})
+            simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
+                          status="ok", answer="".join(parts), sources=sources, started=t0,
+                          time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
+                          stages={"answer": round((_t.time() - t0) * 1000, 1)})
 
         return StreamingResponse(
             gen(),

@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
+from . import usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
 from .router import RouteDecision, classify
@@ -93,7 +94,15 @@ class UnifiedService:
                 bad.append(r)
         return bad
 
-    def ask(self, question: str, top_k: int | None = None) -> dict[str, Any]:
+    def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
+            key_id: str | None = None) -> dict[str, Any]:
+        """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。"""
+        with usage_log.record(question, origin, key_id) as rec:
+            out = self._ask(question, top_k)
+            rec.finish(out)
+            return out
+
+    def _ask(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
@@ -134,6 +143,14 @@ class UnifiedService:
     _SKIP_FOLLOWUP = ("off_topic", "quote")           # 拒答无追问；讲话原文照录，不附追问
 
     def _followups(self, question: str, out: dict[str, Any]) -> list[str]:
+        """追问（需求3）；耗时记入调用日志的 followup 阶段。"""
+        t0 = time.perf_counter()
+        try:
+            return self._followups_impl(question, out)
+        finally:
+            usage_log.stage("followup", time.perf_counter() - t0)
+
+    def _followups_impl(self, question: str, out: dict[str, Any]) -> list[str]:
         """按路由决定追问来源：exam 命中题库走零调用模板，其余走一次小调用。
 
         门控：仅 status == "ok" 且 answer 非空时生成。off_topic / quote / unavailable /
@@ -159,14 +176,25 @@ class UnifiedService:
         except Exception:  # noqa: BLE001 - 追问失败不影响主答案
             return []
 
-    def ask_stream(self, question: str, top_k: int | None = None) -> Iterator[dict[str, Any]]:
+    def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
+                   key_id: str | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
         正文对学生只显示序号：delta 与 done.answer 里的引用都是按首次出现编号的 [1] [2]，不出现 [S#] 和 chunk_id；
         服务端实时维护 S# → 序号的映射，一个被拆在两片里的 [S12] 先缓冲到闭合再输出。
         materials 在某块第一次被引用（分配序号）时发出，带 n、chunk_id、章节路径；done 带最终的 sources（按序号排列，只含被引用的块）。
-        生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。"""
+        生成中途出错发 error 事件，只带异常类型名。调用方提前断开（生成器被 close）时通知后台线程尽快收尾。
+        origin/key_id 只用于调用日志（需求5）。"""
+        with usage_log.record(question, origin, key_id) as rec:
+            try:
+                yield from self._ask_stream(question, top_k, rec)
+            except GeneratorExit:                                # 客户端断开：落已得结果后正常收尾
+                rec.finish(error="client_disconnect")
+                raise
+            rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
+
+    def _ask_stream(self, question: str, top_k: int | None, rec) -> Iterator[dict[str, Any]]:
         question = question.strip()
         t0 = time.perf_counter()
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
@@ -178,7 +206,9 @@ class UnifiedService:
                    "trace": solved["trace"]}
             got = self._followups(question, solved)                # exam 命中题库：零调用模板
             if got:
+                solved["followups"] = got
                 yield {"type": "followups", "items": got}
+            rec.pending_out = dict(solved)
             return
         solve = self._solve_flag(question)
         d: RouteDecision = classify(question, self.router_client)
@@ -187,7 +217,7 @@ class UnifiedService:
         yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
                "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
         if d.combined and not self._available(d.routes):
-            yield from self._stream_combined(question, d, t0)
+            yield from self._stream_combined(question, d, t0, rec)
             return
         if d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None:
             out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
@@ -211,6 +241,9 @@ class UnifiedService:
                 else:
                     self._thesis(question, top_k, d.complexity, out, trace)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
+                rec.pending_out = {"route": d.route, "routes": list(d.routes), "complexity": d.complexity,
+                                   "status": "error", "answer": "", "sources": []}
+                rec.finish(error=type(e).__name__)
                 yield {"type": "error", "error": type(e).__name__}
                 return
             trace["total_s"] = round(time.perf_counter() - t0, 4)
@@ -219,7 +252,9 @@ class UnifiedService:
                    "trace": trace}
             got = self._followups(question, out)                   # done 先发，追问后到；失败静默省略
             if got:
+                out["followups"] = got
                 yield {"type": "followups", "items": got}
+            rec.pending_out = dict(out)
             return
 
         from .course.pipeline import ask, result_to_json
@@ -242,7 +277,7 @@ class UnifiedService:
             finally:
                 q.put(_END)
 
-        threading.Thread(target=run, name="auto-ask-stream", daemon=True).start()
+        threading.Thread(target=usage_log.bind(run), name="auto-ask-stream", daemon=True).start()
         try:
             while True:
                 item = q.get()
@@ -251,6 +286,7 @@ class UnifiedService:
                 if isinstance(item, tuple):
                     kind, val = item
                     if kind == "error":
+                        rec.finish(error=str(val))
                         yield {"type": "error", "error": val}
                         continue
                     res = result_to_json(val)
@@ -267,7 +303,12 @@ class UnifiedService:
                     got = self._followups(question, {"route": d.route, "status": status, "answer": text, "exam": None})
                     if got:
                         yield {"type": "followups", "items": got}
+                    rec.pending_out = {"route": d.route, "routes": [d.route], "complexity": d.complexity,
+                                       "status": status, "answer": text, "sources": sources,
+                                       "followups": got or [], "trace": trace}
                 else:
+                    if item.get("type") == "delta":
+                        rec.first_delta()
                     yield item
         finally:
             cancelled.set()
@@ -353,7 +394,7 @@ class UnifiedService:
                                  missing=m.empty, sections=m.sections)
         out.update(answer=ans.text, sources=ans.sources)
 
-    def _stream_combined(self, question, d, t0) -> Iterator[dict[str, Any]]:
+    def _stream_combined(self, question, d, t0, rec) -> Iterator[dict[str, Any]]:
         """组合问答的流式：只有一次作答，照常流式。事件：stage（各库取材进度）→ materials（带库别 kind）/ delta → done。
         讲话引号校验需要完整正文，所以只作用于 done 里的最终 answer（delta 先流出；前端在 done 时用最终正文覆盖）。"""
         from .combined import answer_combined, gather_materials
@@ -386,7 +427,7 @@ class UnifiedService:
             finally:
                 q.put(_END)
 
-        threading.Thread(target=run, name="auto-ask-stream", daemon=True).start()
+        threading.Thread(target=usage_log.bind(run), name="auto-ask-stream", daemon=True).start()
         try:
             while True:
                 item = q.get()
@@ -394,6 +435,7 @@ class UnifiedService:
                     return
                 if isinstance(item, tuple):
                     if item[0] == "error":
+                        rec.finish(error=str(item[1]))
                         yield {"type": "error", "error": item[1]}
                         continue
                     _, ans, m = item
@@ -401,6 +443,9 @@ class UnifiedService:
                     if ans is None:
                         yield {"type": "done", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "status": "insufficient",
                                "answer": config.ADAPTIVE_INSUFFICIENT_TEXT, "sources": [], "trace": trace}
+                        rec.pending_out = {"route": d.route, "routes": list(d.routes), "complexity": d.complexity,
+                                           "status": "insufficient", "answer": config.ADAPTIVE_INSUFFICIENT_TEXT,
+                                           "sources": [], "followups": [], "trace": trace}
                     else:
                         trace["combined"].update(removed_quotes=ans.removed_quotes, missing=m.empty, sections=m.sections)
                         yield {"type": "done", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "status": "ok",
@@ -408,7 +453,12 @@ class UnifiedService:
                         got = self._followups(question, {"route": d.route, "status": "ok", "answer": ans.text, "exam": None})
                         if got:
                             yield {"type": "followups", "items": got}
+                        rec.pending_out = {"route": d.route, "routes": list(d.routes), "complexity": d.complexity,
+                                           "status": "ok", "answer": ans.text, "sources": ans.sources,
+                                           "followups": got or [], "trace": trace}
                 else:
+                    if item.get("type") == "delta":
+                        rec.first_delta()
                     yield item
         finally:
             cancelled.set()
@@ -515,8 +565,9 @@ def auto_ask(req: AutoAskRequest, request: Request):
     svc: UnifiedService | None = getattr(request.app.state, "unified", None)
     if svc is None:
         raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
+    from .api import key_fingerprint
     try:
-        out = svc.ask(req.question, req.top_k)
+        out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
     except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
@@ -539,8 +590,10 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
     if svc is None:
         raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
 
+    from .api import key_fingerprint
+
     def gen():
-        events = svc.ask_stream(req.question, req.top_k)
+        events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
         try:
             for ev in events:
                 if ev.get("type") == "done" and not req.include_trace:
