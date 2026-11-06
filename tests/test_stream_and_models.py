@@ -403,13 +403,14 @@ def test_auto_ask_stream_is_in_concurrency_paths():
     assert "/auto/ask/stream" in concurrency.RequestConcurrencyMiddleware._PATHS and "/auto/ask" in concurrency.RequestConcurrencyMiddleware._PATHS
 
 
-def test_stream_slot_held_until_response_finishes(ctx):
+def test_stream_slot_held_until_response_finishes(ctx, monkeypatch):
     release, started = threading.Event(), threading.Event()
+    monkeypatch.setenv("RAG_QUEUE_TIMEOUT_S", "0.5")          # 排队等待：超时才 503
 
     class Hold(StreamScript):
         def chat_stream(self, step, messages, *, model, on_delta):
             on_delta("x"); started.set()
-            assert release.wait(5)
+            assert release.wait(30)
             return LLMResult(content="x[S1]")
     svc = UnifiedService(router_client=route_llm("course"), course_ctx=ctx, course_llm=Hold(_course_script()))
     app = FastAPI()
@@ -424,15 +425,16 @@ def test_stream_slot_held_until_response_finishes(ctx):
             box["r"] = c.post("/auto/ask/stream", json={"question": "什么是数据要素"})
     t = threading.Thread(target=first)
     t.start()
-    assert started.wait(5)
+    assert started.wait(30)
     with TestClient(app) as c2:
         busy = c2.post("/auto/ask/stream", json={"question": "q"})
-        assert busy.status_code == 503 and busy.json()["error"]["code"] == "server_busy"       # 流还没结束：名额仍被占用
+        # 满员时先排队，等不到名额才 503；等待期间流仍在进行 ⇒ 名额确实被持有到响应结束
+        assert busy.status_code == 503 and busy.json()["error"]["code"] == "server_busy"
         assert c2.get("/health").status_code == 200
         busy2 = c2.post("/auto/ask", json={"question": "q"})
         assert busy2.status_code == 503                                                       # /auto/ask 与流式共用同一个名额池
     release.set()
-    t.join(5)
+    t.join(30)
     assert box["r"].status_code == 200 and _events(box["r"])[-1]["type"] == "done"
     with TestClient(app) as c3:                                                               # 流完整结束后名额已释放
         assert c3.post("/auto/ask/stream", json={"question": "q"}).status_code != 503

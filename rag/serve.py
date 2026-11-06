@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
 from fastapi import Request
 from pydantic import BaseModel
@@ -144,10 +145,17 @@ def build_app(**service_kwargs):
 
     from .api import require_api_key
     from .api import router as openai_router
-    from .concurrency import RequestConcurrencyMiddleware
+    from .concurrency import RequestConcurrencyMiddleware, raise_threadpool_limit
+
+    # 同步 handler 每请求占一个 anyio 工作线程（流式全程占用）；默认 40 会把并发名额卡在 40 以内，
+    # 启动时提到 140（≥ 默认信号量 100）。仅在事件循环里才能改，故挂在 startup 钩子上。
+    @asynccontextmanager
+    async def lifespan(_app):
+        raise_threadpool_limit()
+        yield
 
     svc = RAGService(**service_kwargs)
-    app = FastAPI(title="FUTURX RAG 查询服务")
+    app = FastAPI(title="FUTURX RAG 查询服务", lifespan=lifespan)
     app.state.service = svc
     app.add_middleware(RequestConcurrencyMiddleware, max_requests=MAX_CONCURRENT_REQUESTS)
     web_dir = Path(__file__).resolve().parent / "web"

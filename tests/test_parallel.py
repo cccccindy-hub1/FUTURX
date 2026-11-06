@@ -83,7 +83,7 @@ def test_limit_held_until_response_finishes_and_health_stays_available(monkeypat
     class GatedService:
         def wait(self):
             started.set()
-            assert release.wait(5)
+            assert release.wait(30)
 
         def answer(self, q, k):
             self.wait()
@@ -97,12 +97,14 @@ def test_limit_held_until_response_finishes_and_health_stays_available(monkeypat
 
     monkeypatch.setattr(serve, 'RAGService', lambda **kw: GatedService())
     monkeypatch.setattr(serve, 'MAX_CONCURRENT_REQUESTS', 1)
+    # 排队等待超时设小：第二个请求应排队，超时后才 503（而不是立刻拒绝）
+    monkeypatch.setenv('RAG_QUEUE_TIMEOUT_S', '0.5')
     with TestClient(serve.build_app()) as client, ThreadPoolExecutor(1) as pool:
         path = '/ask/stream' if stream else '/ask'
         headers = _auth_headers()
         first = pool.submit(client.post, path, json={'question': 'first'}, headers=headers)
         try:
-            assert started.wait(5)
+            assert started.wait(30)
             assert client.get('/health').status_code == 200
             busy = client.post('/ask', json={'question': 'overload'}, headers=headers)
             assert busy.status_code == 503
@@ -110,8 +112,50 @@ def test_limit_held_until_response_finishes_and_health_stays_available(monkeypat
             assert busy.json()['error']['code'] == 'server_busy'
         finally:
             release.set()
-        assert first.result(timeout=5).status_code == 200
+        assert first.result(timeout=30).status_code == 200
         assert client.post('/ask', json={'question': 'after'}, headers=headers).status_code == 200
+
+
+def test_queued_request_waits_then_succeeds(monkeypatch):
+    """满员时排队等待，不立刻 503：第一个请求释放后，排队者拿到名额正常返回。"""
+    started, release = Event(), Event()
+
+    class GatedService:
+        def answer(self, q, k):
+            if q == 'first':
+                started.set()
+                assert release.wait(30)
+            return q, [], []
+
+    monkeypatch.setattr(serve, 'RAGService', lambda **kw: GatedService())
+    monkeypatch.setattr(serve, 'MAX_CONCURRENT_REQUESTS', 1)
+    monkeypatch.setenv('RAG_QUEUE_TIMEOUT_S', '10')
+    with TestClient(serve.build_app()) as client, ThreadPoolExecutor(1) as pool:
+        headers = _auth_headers()
+        first = pool.submit(client.post, '/ask', json={'question': 'first'}, headers=headers)
+        assert started.wait(30)
+
+        def later():
+            import time as _t
+            _t.sleep(1.0)                     # 确认它是在排队而不是立刻返回
+            release.set()
+        import threading
+        threading.Thread(target=later, daemon=True).start()
+        second = client.post('/ask', json={'question': 'queued'}, headers=headers)
+        assert second.status_code == 200 and second.json()['answer'] == 'queued'
+        assert first.result(timeout=30).status_code == 200
+
+
+def test_threadpool_limit_raised_to_cover_semaphore():
+    import anyio
+
+    from rag.concurrency import raise_threadpool_limit
+
+    async def run():
+        n = raise_threadpool_limit(140)
+        assert n == 140
+        assert anyio.to_thread.current_default_thread_limiter().total_tokens == 140
+    anyio.run(run)
 
 
 @pytest.mark.parametrize('failure', ['exception', 'cancel'])
