@@ -19,7 +19,17 @@
       <span class="dot" id="status-dot"></span>
       <span id="status-text">连接中…</span>
     </div>
+    <button id="toggle-sidebar" class="toggle-sidebar" type="button" aria-label="历史对话">☰</button>
   </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <button id="new-chat" class="new-chat" type="button">＋ 新对话</button>
+      <div class="sidebar-title">历史对话</div>
+      <div class="conv-list" id="conv-list">
+        <div class="conv-empty" id="conv-empty">还没有历史对话</div>
+      </div>
+    </aside>
 
   <main class="chat" id="chat">
     <div class="welcome" id="welcome">
@@ -33,6 +43,8 @@
       <p class="hint">课程问题的回答依据《数据要素》教材生成，正文中的 [1] [2] 对应文末来源，鼠标悬停可查看出处。</p>
     </div>
   </main>
+  </div>
+  <div class="sidebar-mask" id="sidebar-mask"></div>
 
   <footer class="composer">
     <div class="composer-inner">

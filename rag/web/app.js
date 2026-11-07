@@ -12,6 +12,42 @@ const statusDot = document.getElementById('status-dot');
 const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', exam: '试卷', off_topic: '拒答' };
 const KIND_LABELS = { course: '教材', case: '判例', quote: '讲话', policy: '政策' };
 const KEY_STORE = 'futurx_api_key';
+const CONV_STORE = 'futurx_conv_by_key';   // { "<api key>": "conv_xxx" }，会话按 key 隔离
+
+/* ---- 当前会话：跟着 API key 走，换 key 就换一套历史 ---- */
+let conversationId = null;
+
+function currentKey() {
+  return (keyInput && keyInput.value.trim()) || loadKey() || '';
+}
+
+function readConvMap() {
+  try { return JSON.parse(localStorage.getItem(CONV_STORE) || '{}') || {}; } catch { return {}; }
+}
+
+function loadConvId() {
+  return readConvMap()[currentKey()] || null;
+}
+
+function saveConvId(id) {
+  try {
+    const m = readConvMap();
+    if (id) m[currentKey()] = id; else delete m[currentKey()];
+    localStorage.setItem(CONV_STORE, JSON.stringify(m));
+  } catch { /* 隐私模式等 */ }
+}
+
+function forgetConvId() {
+  conversationId = null;
+  saveConvId(null);
+}
+
+function authHeaders(extra) {
+  const h = extra || {};
+  const key = currentKey();
+  if (key) h.Authorization = 'Bearer ' + key;
+  return h;
+}
 
 /* ---- 访问密钥：只存在本浏览器 ---- */
 function loadKey() {
@@ -22,7 +58,13 @@ function saveKey(v) {
 }
 if (keyInput) {
   keyInput.value = loadKey();
-  keyInput.addEventListener('change', () => saveKey(keyInput.value.trim()));
+  keyInput.addEventListener('change', () => {
+    saveKey(keyInput.value.trim());
+    // 换 key = 换一个人，历史与当前会话都要跟着换
+    conversationId = loadConvId();
+    clearChat();
+    refreshConversations();
+  });
 }
 
 /* ---- 探活 ---- */
@@ -44,6 +86,17 @@ async function checkHealth() {
 function hideWelcome() {
   const w = document.getElementById('welcome');
   if (w) w.style.display = 'none';
+}
+
+function showWelcome() {
+  const w = document.getElementById('welcome');
+  if (w) w.style.display = '';
+}
+
+/* 清空对话区（保留欢迎页节点本身，否则“新对话”后无法再显示引导） */
+function clearChat() {
+  [...chat.children].forEach((n) => { if (n.id !== 'welcome') n.remove(); });
+  showWelcome();
 }
 
 function scrollBottom() {
@@ -270,6 +323,39 @@ function showError(text) {
   addMessage('assistant', err);
 }
 
+/* ---- 回答内容的渲染（实时与历史回填共用，避免两套逻辑走偏）---- */
+
+/* 把 [n] -> 来源路径 填进 cites，正文渲染前必须先调用，否则引用没有悬停提示 */
+function fillCites(sources, cites) {
+  (sources || []).forEach((s) => {
+    if (s && s.n !== undefined) cites.set(Number(s.n), s.path || s.title || s.source || '');
+  });
+  return cites;
+}
+
+/* 来源卡片 / 试卷题 / 巩固练习。试卷题的正文提示由调用方给，这里只管结构化部分 */
+function appendAnswerParts(container, ev, cites) {
+  const sources = ev.sources || [];
+  const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
+  if (examQs.length) container.appendChild(examList(examQs, '', true));
+  if (sources.length) {
+    if (sources[0].n !== undefined) {
+      container.appendChild(numberedSources(sources));
+    } else {
+      const wrap = document.createElement('div');
+      wrap.className = 'sources';
+      const title = document.createElement('div');
+      title.className = 'sources-title';
+      title.textContent = `参考来源（${sources.length}）`;
+      wrap.appendChild(title);
+      sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, ev.contexts && ev.contexts[i])));
+      container.appendChild(wrap);
+    }
+  }
+  if (ev.practice && ev.practice.length) container.appendChild(practiceList(ev.practice));
+  return examQs;
+}
+
 /* ---- 发送 ---- */
 function autoGrow() {
   input.style.height = 'auto';
@@ -391,27 +477,13 @@ async function send() {
       start();
       if (frame) { cancelAnimationFrame(frame); frame = null; }
       const sources = ev.sources || [];
-      sources.forEach((s) => { if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || ''); });
+      fillCites(sources, cites);
       const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
       // 试卷库结果：题目、选项和默认折叠的答案由下面的结构化列表渲染，气泡里只留一句提示，避免题干重复显示
       text = examQs.length ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
       if (ev.status && ev.status !== 'ok') bubble.classList.add('note');
       paint();
-      if (examQs.length) body.appendChild(examList(examQs, '', true));
-      if (sources.length) {
-        body.appendChild(sources[0].n !== undefined ? numberedSources(sources)
-          : (() => {
-            const wrap = document.createElement('div');
-            wrap.className = 'sources';
-            const title = document.createElement('div');
-            title.className = 'sources-title';
-            title.textContent = `参考来源（${sources.length}）`;
-            wrap.appendChild(title);
-            sources.forEach((s, i) => wrap.appendChild(sourceCard(i, s, ev.contexts && ev.contexts[i])));
-            return wrap;
-          })());
-      }
-      if (ev.practice && ev.practice.length) body.appendChild(practiceList(ev.practice));
+      appendAnswerParts(body, ev, cites);
       body.appendChild(meta());
       scrollBottom();
     } else if (ev.type === 'followups') {
@@ -430,21 +502,31 @@ async function send() {
   };
 
   try {
-    const headers = { 'Content-Type': 'application/json' };
-    const key = (keyInput && keyInput.value.trim()) || loadKey();
-    if (key) headers.Authorization = 'Bearer ' + key;
+    const headers = authHeaders({ 'Content-Type': 'application/json' });
+    const payload = { question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false };
+    if (conversationId) payload.conversation_id = conversationId;   // 不传就会每轮新建一个会话
     const r = await fetch('/auto/ask/stream', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false }),
+      body: JSON.stringify(payload),
     });
     if (!r.ok) {
       clearInterval(timer);
       pendingMsg.remove();
       if (r.status === 401) showError('需要有效的访问密钥：请在下方“访问密钥”里填写后重试。');
-      else if (r.status === 503) showError('服务繁忙或未就绪，请稍后重试。');
+      else if (r.status === 404) {
+        // 会话被删或换了 key：丢掉旧 id，重新开一个，别让用户卡住
+        forgetConvId();
+        showError('这个会话已不存在，已为你开始新对话。请重新发送。');
+      } else if (r.status === 503) showError('服务繁忙或未就绪，请稍后重试。');
       else showError('请求失败（HTTP ' + r.status + '），请重试。');
       return;
+    }
+    // 响应头里就有会话 id，早于任何事件到达，先存下来
+    const headCid = r.headers.get('X-Conversation-Id');
+    if (headCid && headCid !== conversationId) {
+      conversationId = headCid;
+      saveConvId(headCid);
     }
 
     const reader = r.body.getReader();
@@ -468,6 +550,7 @@ async function send() {
       if (!started) { clearInterval(timer); pendingMsg.remove(); }
       showError('连接中断，回答不完整，请重试。');
     }
+    refreshConversations();
   } catch {
     clearInterval(timer);
     if (!started) pendingMsg.remove();
@@ -475,6 +558,105 @@ async function send() {
   } finally {
     sendBtn.disabled = false;
   }
+}
+
+/* ---- 历史会话：列表 + 回填 ---- */
+
+async function refreshConversations() {
+  const list = document.getElementById('conv-list');
+  const empty = document.getElementById('conv-empty');
+  if (!list) return;
+  // 页面加载时 key 还没填：不发请求，等输入 key 的 change 再拉
+  const key = currentKey();
+  if (!key) {
+    if (empty) empty.textContent = '填写访问密钥后显示历史';
+    return;
+  }
+  try {
+    const r = await fetch('/v1/conversations?limit=30', { headers: authHeaders() });
+    if (!r.ok) {
+      // 鉴权失败：侧栏保持空态，不打扰主流程
+      if (empty) empty.textContent = r.status === 401 ? '访问密钥无效，无法查看历史' : '历史加载失败';
+      return;
+    }
+    const data = (await r.json()).data || [];
+    [...list.querySelectorAll('.conv-item')].forEach((n) => n.remove());
+    if (empty) empty.style.display = data.length ? 'none' : '';
+    data.forEach((c) => list.appendChild(convItem(c)));
+  } catch {
+    if (empty) empty.textContent = '历史加载失败';
+  }
+}
+
+function convItem(c) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'conv-item' + (c.id === conversationId ? ' active' : '');
+  b.textContent = c.title || '（未命名会话）';
+  b.title = `${c.title || ''}\n${c.turn_count} 轮 · ${c.updated_at_iso || ''}`;
+  b.addEventListener('click', () => openConversation(c.id));
+  return b;
+}
+
+async function openConversation(cid) {
+  if (sendBtn.disabled) return;              // 正在生成，不打断
+  try {
+    const r = await fetch(`/v1/conversations/${cid}?limit=500`, { headers: authHeaders() });
+    if (!r.ok) {
+      if (r.status === 404) {
+        // 会话已被删除（或换了 key）：丢掉本地 id，直接开始新对话。
+        // 否则界面停在旧会话上，下一句发出去时会带着这个已失效的 id。
+        forgetConvId();
+        clearChat();
+        refreshConversations();
+      }
+      return;
+    }
+    const conv = await r.json();
+    conversationId = cid;
+    saveConvId(cid);
+    clearChat();
+    const msgs = conv.messages || [];
+    if (msgs.length) hideWelcome();
+    msgs.forEach(renderHistoryMessage);
+    refreshConversations();      // 重画列表以标出当前会话（conversationId 已更新）
+    scrollBottom();
+    closeSidebar();
+  } catch { /* 网络错误：保持当前界面 */ }
+}
+
+/* 回填一条历史消息。只用库里存的字段重建气泡，不带耗时行与追问胶囊 */
+function renderHistoryMessage(m) {
+  if (!m || !(m.content || '').trim()) return;
+  if (m.role === 'user') {
+    addUser(m.content);
+    return;
+  }
+  const body = document.createElement('div');
+  body.className = 'assistant-body';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble assistant markdown';
+  if (m.status && m.status !== 'ok') bubble.classList.add('note');
+  const cites = fillCites(m.sources, new Map());
+  bubble.innerHTML = renderMarkdown(m.content, cites);
+  body.appendChild(bubble);
+  // 历史里没有 exam / practice 的结构化数据，只有正文与来源，够还原阅读
+  appendAnswerParts(body, { sources: m.sources || [] }, cites);
+  addMessage('assistant', body).classList.add('history');
+}
+
+/* ---- 侧栏开关（窄屏抽屉）---- */
+function openSidebar() {
+  const s = document.getElementById('sidebar');
+  const mask = document.getElementById('sidebar-mask');
+  if (s) s.classList.add('open');
+  if (mask) mask.classList.add('open');
+}
+function closeSidebar() {
+  const s = document.getElementById('sidebar');
+  const mask = document.getElementById('sidebar-mask');
+  if (s) s.classList.remove('open');
+  if (mask) mask.classList.remove('open');
 }
 
 /* ---- 事件绑定 ---- */
@@ -486,6 +668,31 @@ input.addEventListener('input', autoGrow);
 document.querySelectorAll('.chip').forEach((c) => {
   c.addEventListener('click', () => { input.value = c.dataset.q; send(); });
 });
+
+const newChatBtn = document.getElementById('new-chat');
+if (newChatBtn) {
+  newChatBtn.addEventListener('click', () => {
+    if (sendBtn.disabled) return;
+    forgetConvId();          // 只丢“当前会话”，历史列表照旧存在
+    clearChat();
+    refreshConversations();
+    closeSidebar();
+    input.focus();
+  });
+}
+const toggleBtn = document.getElementById('toggle-sidebar');
+if (toggleBtn) toggleBtn.addEventListener('click', () => {
+  const s = document.getElementById('sidebar');
+  if (s && s.classList.contains('open')) closeSidebar(); else openSidebar();
+});
+const mask = document.getElementById('sidebar-mask');
+if (mask) mask.addEventListener('click', closeSidebar);
+
+conversationId = loadConvId();
+refreshConversations();
+// 刷新页面后把当前会话的历史直接铺开：否则输入框发出去的是「接着上一轮」的新问题，
+// 而屏幕上只有这一轮，用户看不出在跟谁说话。
+if (conversationId) openConversation(conversationId);
 
 checkHealth();
 setInterval(checkHealth, 30000);

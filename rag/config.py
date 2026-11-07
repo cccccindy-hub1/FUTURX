@@ -1,6 +1,9 @@
 """全局配置。所有可调参数均支持通过环境变量覆盖（或写入项目根目录 .env）。"""
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:  # python-dotenv 缺失时仍可运行（配置改由真实环境变量注入）
     from dotenv import load_dotenv
@@ -54,7 +57,32 @@ CONTEXT_EXPAND_ENABLED = os.environ.get("CONTEXT_EXPAND_ENABLED", "false").lower
 
 # ---- HTTP 对外接口（OpenAI 兼容层：POST /v1/chat/completions）----
 # 逗号分隔的密钥列表；留空则不校验（仅建议在内网/本机时留空）。
-API_KEYS = [k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()]
+# 用 set 而非 list：按人发 key 时（例如一个班一千人）每个请求都要查一次，
+# 列表是 O(n) 的字符串比较，集合是 O(1) 哈希查找。
+_API_KEYS_INLINE = [k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()]
+
+
+def _load_api_keys_file(path: str) -> list[str]:
+    """从文件读密钥：每行一个，# 开头为注释。
+
+    人数上千后把 key 全塞进 .env 的一行（约 48KB）既难维护也容易被误提交；
+    文件可以单独放到 .env 之外、由部署方管权限。
+    """
+    if not path:
+        return []
+    p = Path(path).expanduser()
+    if not p.is_file():
+        logger.warning("API_KEYS_FILE 指向的文件不存在：%s（只用 API_KEYS）", p)
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.append(line)
+    return out
+
+
+API_KEYS = frozenset(_API_KEYS_INLINE + _load_api_keys_file(os.environ.get("API_KEYS_FILE", "")))
 # 对外暴露的模型名，客户端 model 字段填它即可（实际生成模型由 LLM_MODEL 决定）。
 API_MODEL_NAME = os.environ.get("API_MODEL_NAME", "ai-li-teacher")
 

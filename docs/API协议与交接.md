@@ -39,7 +39,11 @@ python -m rag.cli serve --http --host 0.0.0.0 --port 8000
 Authorization: Bearer <API_KEY>
 ```
 
-- 由 `.env` 的 `API_KEYS`（逗号分隔）配置。**未配置 `API_KEYS` 时不校验**，该实例内所有调用视为同一匿名身份。
+- 由 `.env` 的 `API_KEYS`（逗号分隔）或 `API_KEYS_FILE`（每行一个 key，`#` 开头为注释）配置，
+  两者同时存在取并集。**两者都为空时不校验**，该实例内所有调用视为同一匿名身份。
+- 按人发 key（例如一个班上千个）时用 `API_KEYS_FILE`：1000 个 key 塞进 `.env` 一行约 48KB，
+  既难维护也容易误提交。生成方式见 12.3。
+- 校验用集合查找（`frozenset`），千级 key 下每次请求仍是 O(1)。
 - 失败返回 `401`：
 
 ```json
@@ -454,6 +458,23 @@ GET /v1/conversations/{id}/messages?after_seq=<本地最后一条 seq>
 
 拿到缺失的消息补齐，然后继续发新问题。
 
+### 8.4 网页前端的历史会话
+
+`rag/web/` 的页面已经接上会话，行为如下（改前端时按这个约束走）：
+
+| 动作 | 行为 |
+|---|---|
+| 发第一句 | 服务端建会话，id 从响应头 `X-Conversation-Id` 取回，存 `localStorage`（按 API key 分开存） |
+| 继续追问 | 请求体带 `conversation_id`，服务端取历史 → 改写 → 作答 |
+| 刷新页面 | 会话 id 从 `localStorage` 恢复，侧栏从 `/v1/conversations` 重新拉 |
+| 点侧栏某条 | `GET /v1/conversations/{id}` 取 `messages`，逐条回填；**回填的消息不带耗时行与追问胶囊** |
+| 换访问密钥 | 清空对话区，历史列表按新 key 重新拉（会话按 key 隔离） |
+| 新对话 | 只清掉当前会话 id，历史列表照旧 |
+| 会话已被删 / 换了 key | `/auto/ask/stream` 返回 404 时自动丢弃本地 id 并提示重发 |
+
+回填时引用序号靠 assistant 消息的 `sources` 重建（`[n]` → 路径），所以 `sources` 必须落库——
+这也是 `conversation.py` 里 assistant 消息保留 `sources` 字段的原因。
+
 ---
 
 ## 9. 配置项（与本次功能相关）
@@ -502,14 +523,69 @@ GET /v1/conversations/{id}/messages?after_seq=<本地最后一条 seq>
 | `rag/embedding.py` | 并发向量化批处理 |
 | `rag/retrieval.py` | 检索 / BM25 / 重排 |
 | `rag/query.py` | 论文库 `RAGService`、提示词组装 |
+| `rag/web/` | 网页前端：`index.html` 布局、`app.js` 会话与历史回填、`style.css` |
 | `scripts/purge_conversations.py` | 过期会话清理 |
+| `scripts/gen_api_keys.py` | 生成 API key（支持写入密钥文件，千级批量） |
+| `scripts/smoke_api.py` | 接口冒烟测试 |
 
 改接口时优先看 `rag/api.py` 的 `ChatCompletionRequest` 与 `rag/unified.py` 的 `AutoAskRequest`，
 两个请求模型就是对外契约。
 
 ---
 
-## 12. 变更记录
+## 12. 运维
+
+### 12.1 前端
+
+页面在 `GET /`（静态资源挂 `/static`）。改 `rag/web/` 下的文件**不需要重启**，
+刷新浏览器即可（FastAPI 静态目录是运行时读取的）。
+
+### 12.2 会话库
+
+`rag/conversation_db/conversations.sqlite3`（可用 `CONVERSATION_DB` 改），已进 `.gitignore`。
+备份直接复制文件即可，但建议在服务空闲时做（WAL 模式下还需一并复制 `-wal`/`-shm`）。
+
+### 12.3 批量发 key（千级）
+
+```bash
+# 生成 1000 个 key 到单独文件（推荐），并输出 学号→key 的 json/csv 分配表
+python scripts/gen_api_keys.py --count 1000 --keys-file /etc/futurx/api_keys.txt
+
+# 已经拿到学号名单时按顺序分配
+python scripts/gen_api_keys.py --count 1000 --keys-file /etc/futurx/api_keys.txt \
+    --students "$(paste -sd, students.txt)"
+
+# 先看看会生成什么，不落盘
+python scripts/gen_api_keys.py --count 1000 --keys-file /etc/futurx/api_keys.txt --dry-run
+```
+
+然后：
+
+```bash
+echo 'API_KEYS_FILE=/etc/futurx/api_keys.txt' >> .env
+systemctl restart futurx
+```
+
+- 密钥文件权限自动设为 `600`，内容每行一个 key。
+- 分配表写到 `logs/api_keys_<时间>.json` 与 `.csv`（`logs/` 已忽略），**这两份是唯一能反查
+  学号与 key 对应关系的地方**，务必在分发前妥善保存。
+- 追加生成时是「已有 + 新增」，不会重复造 key。
+- **key 泄露后的处理**：从文件里删掉那一行 → 重启。该 key 立即失效，
+  但它历史创建的会话仍归属该 key_id，删除 key 后无人能再访问（可人工改 `key_id` 或删除）。
+
+### 12.4 会话归属与 key 的关系
+
+会话记的是 `key_id`（key 的 sha256 前 8 位），不是 key 原文。因此：
+
+- 轮换一把 key（删旧建新）= 换了一个人，**旧会话看不到**。
+- 想让学生换 key 后仍看到历史，只能保持 key 不变，或人工改库里那一列的 `key_id`。
+
+---
+
+## 13. 变更记录
 
 - `eb5ee75`：多轮对话（历史 + 追问改写）+ 会话持久化（`/v1/conversations*`）+
   检索去全局锁与向量化批处理 + 流式先回头再检索。
+- `6c1c15a`：接口协议文档、冒烟脚本；`archived` 支持 `all`。
+- 前端：历史会话侧栏 + 历史回填；每轮带 `conversation_id`（此前每轮都新建会话，多轮在页面上不生效）。
+- 鉴权：`API_KEYS` 改 `frozenset`，新增 `API_KEYS_FILE` 支持千级 key。

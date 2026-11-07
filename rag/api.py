@@ -36,7 +36,9 @@ def require_api_key(request: Request) -> None:
         return
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or token.strip() not in API_KEYS:
+    token = token.strip()
+    # API_KEYS 是 frozenset：按人发 key（千级）时每个请求 O(1) 查找，不做线性扫描。
+    if scheme.lower() != "bearer" or not token or token not in API_KEYS:
         raise HTTPException(
             status_code=401,
             detail={
