@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
-from . import usage_log
+from . import qa_store, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
 from .router import RouteDecision, classify
@@ -38,6 +38,9 @@ class AutoAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     top_k: int | None = None
     include_trace: bool = True
+    # 对话记忆：最近几轮 [{role, content}]（服务端只取最近 6 条、每条 500 字）；user 同 OpenAI 的 user 字段
+    history: list[dict] | None = None
+    user: str | None = None
 
 
 class _Cancelled(Exception):
@@ -95,15 +98,19 @@ class UnifiedService:
         return bad
 
     def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-            key_id: str | None = None) -> dict[str, Any]:
-        """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。"""
+            key_id: str | None = None, history: list | None = None, user_id: str | None = None,
+            session_id: str | None = None) -> dict[str, Any]:
+        """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。
+        history/user_id/session_id：对话记忆与永久问答记录（rag.qa_store）；都可省略，省略时行为与以前完全一致。"""
         with usage_log.record(question, origin, key_id) as rec:
-            out = self._ask(question, top_k)
+            rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
+            out = self._ask(question, top_k, rec)
             rec.finish(out)
             return out
 
-    def _ask(self, question: str, top_k: int | None = None) -> dict[str, Any]:
+    def _ask(self, question: str, top_k: int | None = None, rec=None) -> dict[str, Any]:
         question = question.strip()
+        history = (rec.qa_meta.get("history") if rec is not None else None) or None
         t0 = time.perf_counter()
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
@@ -111,9 +118,11 @@ class UnifiedService:
             solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
             return solved
         solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client)
+        d: RouteDecision = classify(question, self.router_client, history=history)
         if solve:
             d = self._solve_route(d)
+        orig = question
+        question = self._standalone(orig, d, rec)                  # 路由之后的检索、作答、追问都用补全后的问题
         out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                "answer": None, "sources": [], "status": "ok"}
         trace: dict[str, Any] = {"router": d.to_dict()}
@@ -138,6 +147,14 @@ class UnifiedService:
         out["trace"] = trace
         out["followups"] = self._followups(question, out)
         return out
+
+    @staticmethod
+    def _standalone(question: str, d: RouteDecision, rec) -> str:
+        """路由给出的补全问题；为空（无历史、路由失败回落规则、解析失败）就用原问题。补全结果记入问答记录。"""
+        sa = (getattr(d, "standalone", "") or "").strip()
+        if rec is not None and sa and sa != question:
+            rec.qa_meta["standalone"] = sa
+        return sa or question
 
     # ---------------------------------------------------------------- 追问（需求3）
     _SKIP_FOLLOWUP = ("off_topic", "quote")           # 拒答无追问；讲话原文照录，不附追问
@@ -177,7 +194,8 @@ class UnifiedService:
             return []
 
     def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-                   key_id: str | None = None) -> Iterator[dict[str, Any]]:
+                   key_id: str | None = None, history: list | None = None, user_id: str | None = None,
+                   session_id: str | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
@@ -191,6 +209,7 @@ class UnifiedService:
         生成器内设置的 contextvar 会被丢弃（流式日志只剩第一条 route 调用）。所以整条链都显式传 rec，
         不依赖 contextvar。"""
         rec = usage_log.start(question, origin, key_id)
+        rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
         inner = self._ask_stream(question, top_k, rec)
         try:
             while True:
@@ -219,6 +238,7 @@ class UnifiedService:
 
     def _ask_stream(self, question: str, top_k: int | None, rec) -> Iterator[dict[str, Any]]:
         question = question.strip()
+        history = rec.qa_meta.get("history") or None
         t0 = time.perf_counter()
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
@@ -234,9 +254,10 @@ class UnifiedService:
             rec.pending_out = dict(solved)
             return
         solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client)
+        d: RouteDecision = classify(question, self.router_client, history=history)
         if solve:
             d = self._solve_route(d)
+        question = self._standalone(question, d, rec)              # 路由之后的检索、作答、追问都用补全后的问题
         yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
                "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
         if d.combined and not self._available(d.routes):
@@ -596,8 +617,10 @@ def auto_ask(req: AutoAskRequest, request: Request):
     if svc is None:
         raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
     from .api import key_fingerprint
+    meta = qa_store.request_meta(request.headers, body_user=req.user, history=req.history)
     try:
-        out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
+        out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
+                      history=meta["history"], user_id=meta["user_id"], session_id=meta["session_id"])
     except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
@@ -621,9 +644,11 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
         raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
 
     from .api import key_fingerprint
+    meta = qa_store.request_meta(request.headers, body_user=req.user, history=req.history)
 
     def gen():
-        events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
+        events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
+                                history=meta["history"], user_id=meta["user_id"], session_id=meta["session_id"])
         try:
             for ev in events:
                 if ev.get("type") == "done" and not req.include_trace:

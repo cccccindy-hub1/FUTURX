@@ -102,6 +102,9 @@ class RequestLog:
         self.routes: list[str] = []
         self.complexity: str | None = None
         self.locks: dict[str, dict] = {}                # 检索锁：{name: {lock_wait_ms, retrieval_ms, locks}}
+        # ---- 问答永久记录（rag.qa_store）的旁路数据；不进 JSONL，字段格式不变 ----
+        self.qa_meta: dict = {}                         # user_id / session_id / history / standalone
+        self.prompts: dict[str, tuple[str, str]] = {}   # {sha256: (step, system prompt 全文)}
         self._first_delta_at: float | None = None
         self._done = False
         self._lock = threading.Lock()
@@ -130,6 +133,18 @@ class RequestLog:
             cur["retrieval_ms"] = round(cur["retrieval_ms"] + hold_ms, 1)
             cur["locks"] += 1
 
+    def note_prompt(self, step: str, messages) -> None:
+        """记下某一步实际发给模型的 system prompt（按 sha256 去重；同一请求同一步重复调用无副作用）。"""
+        try:
+            from . import qa_store
+            text = qa_store.system_text(messages)
+            if text:
+                with self._lock:
+                    if not self._done:
+                        self.prompts[qa_store.prompt_hash(text)] = (step, text)
+        except Exception:  # noqa: BLE001 - 旁路记录失败绝不影响主请求
+            pass
+
     def first_delta(self) -> None:
         """流式首段正文到达（重复调用只记第一次）。"""
         with self._lock:
@@ -148,6 +163,11 @@ class RequestLog:
             _append(record)
         except Exception as e:  # noqa: BLE001 - 日志失败绝不影响主请求
             log.warning("usage_log 写入失败（%s），本条丢弃", type(e).__name__)
+        try:                                            # 同一时刻旁路写一条永久问答记录（SQLite）；自身已吞掉全部异常
+            from . import qa_store
+            qa_store.log_request(self, record)
+        except Exception as e:  # noqa: BLE001
+            log.warning("qa_store 挂钩失败（%s）", type(e).__name__)
         return record
 
     def _build(self, out: dict, error: str | None) -> dict:
@@ -352,6 +372,16 @@ def note_lock(name: str, wait_ms: float, hold_ms: float) -> None:
         pass
 
 
+def note_prompt(step: str, messages) -> None:
+    """LLM 客户端在每次调用前登记 system prompt（无当前记录时静默无操作）。"""
+    try:
+        rec = current()
+        if rec is not None:
+            rec.note_prompt(step, messages)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def first_delta() -> None:
     try:
         rec = current()
@@ -380,7 +410,8 @@ def simple_record(question: str, *, origin: str = "http", key_id_value: str | No
                   sources: list | None = None, started: float | None = None,
                   error: str | None = None, stages: dict | None = None,
                   request_id: str | None = None,
-                  time_to_first_delta_ms: float | None = None) -> dict:
+                  time_to_first_delta_ms: float | None = None,
+                  qa_meta: dict | None = None) -> dict:
     """轻量记录：/ask 与 /v1/chat/completions 这类不经统一入口的路径。"""
     t0 = started if started is not None else time.time()
     rec = {
@@ -392,8 +423,13 @@ def simple_record(question: str, *, origin: str = "http", key_id_value: str | No
         "locks": {}, "llm_calls": [], "time_to_first_delta_ms": time_to_first_delta_ms, "error": error, "origin": origin,
     }
     write(rec)
+    try:
+        from . import qa_store
+        qa_store.log_simple(rec, qa_meta)
+    except Exception as e:  # noqa: BLE001
+        log.warning("qa_store 挂钩失败（%s）", type(e).__name__)
     return rec
 
 
 __all__ = ["RequestLog", "record", "start", "clear", "activate", "current", "record_llm", "stage", "note_lock", "first_delta", "bind",
-           "key_id", "key_id_from_header", "log_dir", "retention_days", "simple_record", "write"]
+           "key_id", "key_id_from_header", "log_dir", "retention_days", "simple_record", "write", "note_prompt"]

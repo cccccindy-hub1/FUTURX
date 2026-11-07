@@ -76,6 +76,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     # 非标准扩展：允许客户端顺手指定检索片段数
     top_k: int | None = None
+    user: str | None = None          # OpenAI 标准字段：终端用户标识（记入永久问答记录，限长 64、只含 [A-Za-z0-9_-]）
 
 
 def _text_of(content: Any) -> str:
@@ -115,9 +116,21 @@ def _chunk(cid: str, created: int, model: str, delta: dict, finish: str | None =
     }
 
 
+def _qa_meta(req: "ChatCompletionRequest", request: Request) -> dict:
+    """永久问答记录用：user（标准字段）/ X-User-Id、X-Session-Id，以及 messages 里最近几轮历史（不含最后那条 user 问题）。"""
+    try:
+        from .qa_store import normalize_history, request_meta
+
+        msgs = [{"role": m.role, "content": _text_of(m.content)} for m in req.messages]
+        last = max((i for i, m in enumerate(msgs) if m["role"] == "user" and m["content"].strip()), default=-1)
+        return request_meta(request.headers, body_user=req.user, history=normalize_history(msgs[:last] if last >= 0 else []))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _log(question: str, request: Request, cid: str, model: str, answer: str, sources: list,
          t0: float, *, status: str = "ok", error: str | None = None,
-         first_at: float | None = None) -> None:
+         first_at: float | None = None, meta: dict | None = None) -> None:
     """OpenAI 兼容层的轻量调用日志（route 固定 thesis：本接口只走论文 RAG）。日志失败不影响响应。"""
     try:
         from .usage_log import simple_record
@@ -126,7 +139,8 @@ def _log(question: str, request: Request, cid: str, model: str, answer: str, sou
                       route="thesis", status=status, answer=answer, sources=sources,
                       started=t0, error=error, request_id=cid,
                       stages={"answer": round((time.time() - t0) * 1000, 1)},
-                      time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1))
+                      time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
+                      qa_meta=meta)
     except Exception:  # noqa: BLE001 - 日志失败不影响响应
         pass
 
@@ -159,12 +173,13 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
     created = int(time.time())
     model = req.model or API_MODEL_NAME
     t0 = time.time()
+    meta = _qa_meta(req, request)
 
     if req.stream:
         try:
             _docs, sources, deltas = svc.open_stream(question, top_k)
         except RuntimeError as e:
-            _log(question, request, cid, model, "", [], t0, status="unavailable", error="RuntimeError")
+            _log(question, request, cid, model, "", [], t0, status="unavailable", error="RuntimeError", meta=meta)
             raise HTTPException(status_code=503, detail={"error": {"message": str(e), "type": "service_unavailable"}})
 
         def event_stream() -> Iterator[bytes]:
@@ -187,14 +202,14 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
                     {"error": {"message": f"生成中断：{e}", "type": "upstream_error"}}, ensure_ascii=False
                 ).encode() + b"\n\n"
                 _log(question, request, cid, model, "".join(parts), sources, t0,
-                     status="error", error=type(e).__name__, first_at=first_at)
+                     status="error", error=type(e).__name__, first_at=first_at, meta=meta)
                 return
             # 末帧附带来源，标准客户端会忽略这个额外字段
             final = _chunk(cid, created, model, {}, finish="stop")
             final["sources"] = sources
             yield b"data: " + json.dumps(final, ensure_ascii=False).encode() + b"\n\n"
             yield b"data: [DONE]\n\n"
-            _log(question, request, cid, model, "".join(parts), sources, t0, first_at=first_at)
+            _log(question, request, cid, model, "".join(parts), sources, t0, first_at=first_at, meta=meta)
 
         return StreamingResponse(
             event_stream(),
@@ -204,12 +219,12 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
 
     ans, sources, _docs = svc.answer(question, top_k)
     if ans is None:
-        _log(question, request, cid, model, "", sources, t0, status="unavailable")
+        _log(question, request, cid, model, "", sources, t0, status="unavailable", meta=meta)
         raise HTTPException(
             status_code=503,
             detail={"error": {"message": "未配置 LLM_API_KEY，服务只能检索、不能生成", "type": "service_unavailable"}},
         )
-    _log(question, request, cid, model, ans, sources, t0)
+    _log(question, request, cid, model, ans, sources, t0, meta=meta)
     return {
         "id": cid,
         "object": "chat.completion",

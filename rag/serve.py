@@ -19,6 +19,18 @@ from .query import RAGService
 class AskRequest(BaseModel):
     question: str
     top_k: int = TOP_K
+    # 可选：对话历史（同 messages 格式，服务端只取最近 6 条、每条 500 字）。/ask 只走论文 RAG，历史只进永久问答记录，不改变检索。
+    history: list[dict] | None = None
+    user: str | None = None
+
+
+def _qa_meta(request, req) -> dict:
+    """永久问答记录用的调用方身份与历史（X-User-Id / body.user、X-Session-Id）；解析失败不影响请求。"""
+    try:
+        from .qa_store import request_meta
+        return request_meta(request.headers, body_user=getattr(req, "user", None), history=getattr(req, "history", None))
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _sse(payload: dict) -> bytes:
@@ -175,15 +187,16 @@ def build_app(**service_kwargs):
         from .usage_log import simple_record
 
         t0 = _t.time()
+        meta = _qa_meta(request, req)
         try:
             ans, sources, docs = svc.answer(req.question, req.top_k)
         except Exception as e:  # noqa: BLE001 - 记录后按原样抛出（由 FastAPI 转 500）
             simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
-                          status="error", error=type(e).__name__, started=t0)
+                          status="error", error=type(e).__name__, started=t0, qa_meta=meta)
             raise
         simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
                       status="ok" if ans is not None else "unavailable", answer=ans or "",
-                      sources=sources, started=t0, stages={"answer": round((_t.time() - t0) * 1000, 1)})
+                      sources=sources, started=t0, stages={"answer": round((_t.time() - t0) * 1000, 1)}, qa_meta=meta)
         return {"answer": ans, "sources": sources, "contexts": docs}
 
     @app.post("/ask/stream", dependencies=[Depends(require_api_key)])
@@ -195,11 +208,12 @@ def build_app(**service_kwargs):
         from .usage_log import simple_record
 
         t0 = _t.time()
+        meta = _qa_meta(request, req)
         try:
             docs, sources, deltas = svc.open_stream(req.question, req.top_k)
         except RuntimeError as e:
             simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
-                          status="unavailable", error="RuntimeError", started=t0)
+                          status="unavailable", error="RuntimeError", started=t0, qa_meta=meta)
             raise HTTPException(status_code=503, detail=str(e))
 
         def gen():
@@ -217,14 +231,14 @@ def build_app(**service_kwargs):
                               status="error", answer="".join(parts), sources=sources, started=t0,
                               error=type(e).__name__,
                               time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
-                              stages={"answer": round((_t.time() - t0) * 1000, 1)})
+                              stages={"answer": round((_t.time() - t0) * 1000, 1)}, qa_meta=meta)
                 yield _sse({"type": "error", "message": f"生成中断：{e}"})
                 return
             yield _sse({"type": "done"})
             simple_record(req.question, origin="http", key_id_value=key_fingerprint(request),
                           status="ok", answer="".join(parts), sources=sources, started=t0,
                           time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
-                          stages={"answer": round((_t.time() - t0) * 1000, 1)})
+                          stages={"answer": round((_t.time() - t0) * 1000, 1)}, qa_meta=meta)
 
         return StreamingResponse(
             gen(),

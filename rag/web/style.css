@@ -399,3 +399,7 @@ body {
     background: radial-gradient(120% 90% at 50% 0%, rgba(99, 102, 241, .35), rgba(15, 23, 42, .92) 72%);
     border: 1px solid rgba(129, 140, 248, .3); box-shadow: 0 0 24px rgba(79, 70, 229, .25) inset; }
 }
+
+/* ---- 新对话按钮 ---- */
+.new-chat { margin-right: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--accent-ink); border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
+.new-chat:hover { background: var(--accent-soft); border-color: var(--accent); }

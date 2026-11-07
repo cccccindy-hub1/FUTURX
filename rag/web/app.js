@@ -55,6 +55,44 @@ async function loadWordcloud() {
   } catch { /* 词云只是装饰，加载失败就不显示 */ }
 }
 
+/* ---- 对话记忆与身份：user_id 存在本浏览器（随机、长期）；session_id 每次“新对话”重新生成；历史只在同一对话里带 ---- */
+const UID_STORE = 'futurx_user_id';
+const HISTORY_TURNS = 3;            // 最近 3 轮（最多 6 条）；服务端另有同样的上限
+const HISTORY_CHARS = 500;
+function randomId(prefix) {
+  let s = '';
+  try {
+    const a = new Uint8Array(12);
+    crypto.getRandomValues(a);
+    s = Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { s = Math.random().toString(16).slice(2) + Date.now().toString(16); }
+  return `${prefix}-${s}`;
+}
+function userId() {
+  try {
+    let v = localStorage.getItem(UID_STORE);
+    if (!v || !/^[A-Za-z0-9_-]{1,64}$/.test(v)) { v = randomId('u'); localStorage.setItem(UID_STORE, v); }
+    return v;
+  } catch { return sessionUid || (sessionUid = randomId('u')); }   // 隐私模式：本页面生命周期内稳定
+}
+let sessionUid = '';
+let sessionId = randomId('s');
+let history = [];                   // [{role, content}]，只含已完成的轮次
+function newConversation() {
+  sessionId = randomId('s');
+  history = [];
+  chat.querySelectorAll('.msg').forEach((m) => m.remove());
+  const w = document.getElementById('welcome');
+  if (w) w.style.display = '';
+  input.value = '';
+  autoGrow();
+}
+function pushHistory(q, a) {
+  if (!q || !a) return;
+  history.push({ role: 'user', content: q.slice(0, HISTORY_CHARS) }, { role: 'assistant', content: a.slice(0, HISTORY_CHARS) });
+  history = history.slice(-HISTORY_TURNS * 2);
+}
+
 /* ---- 探活 ---- */
 function setStatus(ok, text) {
   statusText.textContent = text;
@@ -443,6 +481,7 @@ async function send() {
       }
       if (ev.practice && ev.practice.length) body.appendChild(practiceList(ev.practice));
       body.appendChild(meta());
+      if (ev.status === 'ok' && !(ev.exam && ev.exam.questions && ev.exam.questions.length)) pushHistory(q, ev.answer || '');   // 失败 / 拒答 / 找题不进历史
       scrollBottom();
     } else if (ev.type === 'followups') {
       // 追问在 done 之后单独一帧到达（后端不阻塞主答案）。点击填入输入框并自动发送。
@@ -460,13 +499,13 @@ async function send() {
   };
 
   try {
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json', 'X-User-Id': userId(), 'X-Session-Id': sessionId };
     const key = (keyInput && keyInput.value.trim()) || loadKey();
     if (key) headers.Authorization = 'Bearer ' + key;
     const r = await fetch('/auto/ask/stream', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false }),
+      body: JSON.stringify({ question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false, history: history.slice(), user: userId() }),
     });
     if (!r.ok) {
       clearInterval(timer);
@@ -516,6 +555,9 @@ input.addEventListener('input', autoGrow);
 document.querySelectorAll('.chip').forEach((c) => {
   c.addEventListener('click', () => { input.value = c.dataset.q; send(); });
 });
+
+const newChatBtn = document.getElementById('new-chat');
+if (newChatBtn) newChatBtn.addEventListener('click', () => { if (!sendBtn.disabled) newConversation(); });
 
 checkHealth();
 loadWordcloud();

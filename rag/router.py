@@ -54,6 +54,23 @@ chapter：判例问题对应的教材章（整数 1–10），判断不了填 nu
 routes 的元素取自 thesis|course|policy|exam|case|quote|off_topic。exam 只能单独出现，不参与组合。"""
 
 
+# 仅在有对话历史时追加到 ROUTER_SYSTEM 之后；无历史时路由提示词与行为都和以前完全一致。
+# 不增加模型调用次数：路由这一次调用同时把代词补全成完整问题（standalone）。
+ROUTER_HISTORY_ADDENDUM = """
+对话历史：用户消息里会附上之前的几轮对话（【对话历史】）和【当前问题】。分类时请结合历史理解当前问题（如「考试中常考哪种题型」接在「什么是数据确权」之后，主题是数据确权）。
+此外输出多一个字段 standalone：把【当前问题】里的代词、省略和指代（「这个」「它」「那」「类似的」「上面说的」等）按历史补全成一个脱离历史也能看懂的完整问题；
+当前问题本身已经完整就原样照抄；不要回答问题，不要加入历史里没有的信息，不超过 100 字。
+输出格式变为：{"routes": ["course"], "complexity": "simple|complex", "count": 1, "chapter": null, "standalone": "补全后的完整问题", "reason": "不超过30字的理由"}"""
+HISTORY_USER = "【对话历史】\n{history}\n\n【当前问题】\n{question}"
+STANDALONE_MAX = 200
+
+
+def render_history(history) -> str:
+    """[{role, content}] -> 「用户：…\n助手：…」。"""
+    names = {"user": "用户", "assistant": "助手"}
+    return "\n".join(f"{names.get(m.get('role'), m.get('role'))}：{m.get('content', '')}" for m in history or [])
+
+
 @dataclass
 class RouteDecision:
     route: str                                         # 旧字段，恒等于 routes[0]
@@ -65,6 +82,7 @@ class RouteDecision:
     routes: list[str] = field(default_factory=list)    # 单库一个元素；组合最多 2 个（course/case/quote 之间）
     count: int = COUNT_DEFAULT                         # 要几个判例 / 几次讲话，1–5
     chapter: int | None = None                         # 判例对应的教材章 1–10
+    standalone: str = ""                               # 有历史时路由补全的完整问题；空 = 用原问题
 
     def __post_init__(self):
         if not self.routes:
@@ -297,16 +315,22 @@ def build_router_client() -> LLMClient | None:
         return None
 
 
-def classify(question: str, client: LLMClient | None, *, model: str | None = None) -> RouteDecision:
-    """一次 LLM 调用分类；任何失败都回落到规则。永不抛异常。"""
+def classify(question: str, client: LLMClient | None, *, model: str | None = None, history=None) -> RouteDecision:
+    """一次 LLM 调用分类；任何失败都回落到规则。永不抛异常。
+    history：之前几轮对话（[{role, content}]）。有历史时提示词附带历史说明、用户消息附带历史，并多读一个 standalone 字段；
+    没有历史（None / 空）时提示词与消息和以前逐字相同。路由失败回落规则时 standalone 为空，调用方用原问题。"""
     t0 = time.perf_counter()
     err = ""
     if client is None:
         err = "NotConfigured"
     else:
         try:
-            res = client.chat("route", [{"role": "system", "content": ROUTER_SYSTEM},
-                                        {"role": "user", "content": question}],
+            system, user = ROUTER_SYSTEM, question
+            if history:
+                system = ROUTER_SYSTEM + ROUTER_HISTORY_ADDENDUM
+                user = HISTORY_USER.format(history=render_history(history), question=question)
+            res = client.chat("route", [{"role": "system", "content": system},
+                                        {"role": "user", "content": user}],
                               model=model or config.ROUTER_MODEL, json_mode=True)
             obj = parse_json_object(res.content)
             routes = normalize_routes(obj.get("routes"), fallback=str(obj.get("route", "")).strip() or None)   # 兼容旧格式只给 route
@@ -314,9 +338,11 @@ def classify(question: str, client: LLMClient | None, *, model: str | None = Non
             cx = str(obj.get("complexity", "simple")).strip()
             cx = cx if cx in COMPLEXITIES and route == "thesis" else "simple"
             uses_case = "case" in routes
+            sa = obj.get("standalone") if history else ""
+            sa = sa.strip()[:STANDALONE_MAX] if isinstance(sa, str) else ""
             return RouteDecision(route, cx, str(obj.get("reason", ""))[:80], "llm", time.perf_counter() - t0, routes=routes,
                                  count=clamp_count(obj.get("count")) if ({"case", "quote"} & set(routes)) else COUNT_DEFAULT,
-                                 chapter=clamp_chapter(obj.get("chapter")) if uses_case else None)
+                                 chapter=clamp_chapter(obj.get("chapter")) if uses_case else None, standalone=sa)
         except Exception as e:  # noqa: BLE001 - 路由失败一律走规则；只记类型名，避免泄露请求细节
             err = type(e).__name__
             logger.warning("路由 LLM 调用失败（%s），改用规则判断", err)
