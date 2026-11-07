@@ -80,8 +80,21 @@ def _msg_obj(row: dict[str, Any]) -> dict[str, Any]:
 @router.get("/v1/conversations", dependencies=[Depends(require_api_key)])
 def list_conversations(request: Request, limit: int = Query(20, ge=1, le=100),
                        cursor: str | None = None,
-                       archived: bool | None = Query(False, description="默认只看未归档；传空显示全部")):
-    got = store.list_conversations(key_id=_owner(request), limit=limit, cursor=cursor, archived=archived)
+                       archived: str = Query("false", description="false=只看未归档（默认）/ true=只看已归档"
+                                                             " / all=全部")):
+    # false / true / all：用字符串接收，None 才能传给存储层表示「不按归档状态过滤」。
+    # 用 bool | None 时 Query 无法表达「全部」——不传和传空都落到默认值，已归档的会话永远查不到。
+    flag = str(archived).strip().lower()
+    if flag in ("all", "any", "none", ""):
+        only = None
+    elif flag in ("true", "1", "yes"):
+        only = True
+    elif flag in ("false", "0", "no"):
+        only = False
+    else:
+        raise HTTPException(status_code=400, detail={"error": {
+            "message": "archived 只能是 true / false / all", "type": "invalid_request_error"}})
+    got = store.list_conversations(key_id=_owner(request), limit=limit, cursor=cursor, archived=only)
     return {
         "object": "list",
         "data": [_conv_obj(c) for c in got["items"]],

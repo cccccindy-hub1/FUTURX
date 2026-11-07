@@ -152,6 +152,22 @@ def test_rest_patch_archive_and_delete(client):
     assert client.get(f"/v1/conversations/{cid}").status_code == 404
 
 
+def test_rest_archived_filter_can_show_all(client):
+    """archived=all 必须能查到已归档的会话：用 bool 参数表达不了「全部」，已归档的会永远查不到。"""
+    keep = client.post("/v1/conversations", json={"title": "在用"}).json()["id"]
+    gone = client.post("/v1/conversations", json={"title": "已归档"}).json()["id"]
+    client.patch(f"/v1/conversations/{gone}", json={"archived": True})
+
+    def ids(**params):
+        return {c["id"] for c in client.get("/v1/conversations", params=params).json()["data"]}
+
+    assert ids() == {keep}
+    assert ids(archived="false") == {keep}
+    assert ids(archived="true") == {gone}
+    assert ids(archived="all") == {keep, gone}
+    assert client.get("/v1/conversations", params={"archived": "bogus"}).status_code == 400
+
+
 def test_rest_messages_after_seq(client):
     cid = client.post("/v1/conversations", json={}).json()["id"]
     store.append_turn(conversation_id=cid, question="q1", answer="a1")

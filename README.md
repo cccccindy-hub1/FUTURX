@@ -160,3 +160,21 @@ DELETE /v1/conversations/{id}/messages         清空消息但保留会话
 
 清理：`CONVERSATION_RETENTION_DAYS`（默认 365，0 = 永久），到期用
 `python scripts/purge_conversations.py` 删除，建议 cron 每天跑一次。
+
+完整的接口协议（字段、事件序列、错误码、典型调用流程）见
+[`docs/API协议与交接.md`](docs/API协议与交接.md)。
+
+### 接口冒烟测试
+
+服务启动后，对本机实例跑一遍（基础部分不调用模型，几秒完成）：
+
+```bash
+export FUTURX_BASE=http://127.0.0.1:8000
+export FUTURX_KEY=<.env 里 API_KEYS 的一把>
+
+python scripts/smoke_api.py                          # 健康检查 + 会话管理 + 404 语义
+python scripts/smoke_api.py --with-multi-turn        # 追加多轮对话与流式落库（真实调模型）
+python scripts/smoke_api.py --with-concurrency       # 追加并发响应头跨度检查
+```
+
+退出码 0 表示全部通过。
