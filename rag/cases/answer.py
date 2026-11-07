@@ -76,11 +76,16 @@ def build_messages(question: str, hits: list[CaseHit], first_n: int = 1) -> list
             {"role": "user", "content": CASE_ANSWER_USER.format(question=question, materials=render_materials(hits, first_n))}]
 
 
-def answer_cases(question: str, hits: list[CaseHit], llm: LLMClient, *, model: str) -> CaseAnswer:
+def answer_cases(question: str, hits: list[CaseHit], llm: LLMClient, *, model: str,
+                 history: list[dict] | None = None) -> CaseAnswer:
     """一次作答调用。模型只填 facts / holding / relation；头两行由程序拼。解析失败时只返回程序填写的头部和原文要点，不重试。"""
     from ..course.answer import CitationRewriter
     from ..course.llm import parse_json_object
     msgs = build_messages(question, hits)
+    if history:
+        from ..prompt_rules import with_history
+
+        msgs = with_history(msgs, history)
     res = llm.chat("case_answer", msgs, model=model, json_mode=True)
     refs = {f"C{k}": h.ref.case_id for k, h in enumerate(hits, 1)}
     rw = CitationRewriter(refs)

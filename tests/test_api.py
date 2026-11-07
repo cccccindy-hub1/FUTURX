@@ -18,16 +18,20 @@ class FakeService:
         self.has_llm = has_llm
         self.questions = []
 
-    def answer(self, query, top_k=4):
+    def answer(self, query, top_k=4, *, history=None, search_query=None):
         self.questions.append((query, top_k))
+        self.history = history
+        self.search_query = search_query
         if not self.has_llm:
             return None, [{"source": "a.pdf", "section": "扎根", "distance": 0.2}], ["片段"]
         return self.answer_text, [{"source": "a.pdf", "section": "扎根", "distance": 0.2}], ["片段"]
 
-    def open_stream(self, query, top_k=4):
+    def open_stream(self, query, top_k=4, *, history=None, search_query=None):
         if not self.has_llm:
             raise RuntimeError("未配置 LLM_API_KEY")
         self.questions.append((query, top_k))
+        self.history = history
+        self.search_query = search_query
         sources = [{"source": "a.pdf", "section": "扎根", "distance": 0.2}]
         return ["片段"], sources, iter(["扎根", "理论", "三级编码"])
 

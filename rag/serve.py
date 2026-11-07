@@ -233,6 +233,10 @@ def build_app(**service_kwargs):
         )
 
     app.include_router(openai_router)
+    # 会话管理（列表 / 详情 / 改名归档 / 删除 / 消息增量）：/v1/conversations*
+    from .conversation_api import router as conversation_router
+
+    app.include_router(conversation_router)
 
     # 统一入口 POST /auto/ask：先路由再分发；路由客户端未配置时只用规则。课程库启动时加载一次，缺失则降级。
     from .router import build_router_client

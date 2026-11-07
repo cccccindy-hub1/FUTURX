@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 from ..course.llm import parse_json_object
-from ..prompt_rules import ANSWER_STRUCTURE, COURSE_SAMPLES
+from ..prompt_rules import ANSWER_STRUCTURE, COURSE_SAMPLES, with_history
 from . import config
 from .aliases import ALIASES
 from .corpus import build_corpus, cn_to_int
@@ -289,13 +289,16 @@ def finish_answer(body: str, hits: list[PolicyHit], cited: dict[str, int]) -> tu
     return body.rstrip() + "\n\n" + "".join(notes), sources, removed
 
 
-def answer_policy(question: str, hits: list[PolicyHit], llm, *, model: str, on_delta=None, on_source=None) -> PolicyAnswer:
+def answer_policy(question: str, hits: list[PolicyHit], llm, *, model: str, on_delta=None, on_source=None,
+                  history: list[dict] | None = None) -> PolicyAnswer:
     """一次作答调用。on_delta：流式时回调学生可见文本（[n] 已实时编号）；引号校验与附注只作用于最终 answer。"""
     from ..course.answer import CitationRewriter
     refs = {f"S{h.n}": h.chunk["chunk_id"] for h in hits}
     by_id = {h.chunk["chunk_id"]: h for h in hits}
-    msgs = [{"role": "system", "content": ANSWER_SYSTEM},
-            {"role": "user", "content": ANSWER_USER.format(question=question, materials=render_materials(hits))}]
+    msgs = with_history([{"role": "system", "content": ANSWER_SYSTEM},
+                         {"role": "user",
+                          "content": ANSWER_USER.format(question=question, materials=render_materials(hits))}],
+                        history)
     rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(by_id[cid], n))) if on_source else None)
     n_hits = max((h.n for h in hits), default=0)
 

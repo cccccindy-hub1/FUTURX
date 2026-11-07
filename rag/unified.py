@@ -22,7 +22,7 @@ import time
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
@@ -38,6 +38,165 @@ class AutoAskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     top_k: int | None = None
     include_trace: bool = True
+    # 会话：传了就把本轮追加到该会话，并从库里取之前几轮作为上下文（检索仍只用本轮问题）。
+    conversation_id: str | None = Field(default=None, max_length=80)
+    store: bool = True                       # false = 不落库（临时提问）
+
+
+def _conversation_context(conversation_id: str | None, request: Request, store: bool) -> str | None:
+    """校验/新建会话，返回可用的会话 id（不落库返回 None）。显式传入但不存在的 id → 404。"""
+    if not store:
+        return None
+    from . import conversation as cstore
+    from .api import key_fingerprint
+
+    owner = key_fingerprint(request)
+    if conversation_id:
+        try:
+            cstore.ensure(conversation_id, key_id=owner)
+        except LookupError:
+            raise HTTPException(status_code=404, detail={"error": {
+                "message": f"conversation not found: {conversation_id}",
+                "type": "invalid_request_error", "code": "not_found"}}) from None
+        return conversation_id
+    return cstore.create(key_id=owner)["id"]
+
+
+def _history_messages(conversation_id: str | None) -> list[dict]:
+    """会话历史转成 LLM messages（user/assistant 交替，最近的在后）。"""
+    if not conversation_id:
+        return []
+    from . import conversation as cstore
+    from .config import CHAT_HISTORY_MAX_CHARS, CHAT_HISTORY_MAX_TURNS
+
+    try:
+        pairs = cstore.history(conversation_id, max_turns=CHAT_HISTORY_MAX_TURNS,
+                               max_chars=CHAT_HISTORY_MAX_CHARS or None)
+    except Exception:  # noqa: BLE001 - 会话库故障时退化为单轮
+        return []
+    return [{"role": role, "content": text} for role, text in pairs]
+
+
+def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
+    """把追问改写成独立问题，供**路由**判断（检索与作答仍用原话）。
+
+    统一入口的路由按问题文本分类，像「那它适用什么情形？」这种只有指代的追问会被判成
+    off_topic 直接拒答。这里复用检索用的改写器（rag.enhance.contextualize_query）拿到完整
+    问题再分类；改写失败或不需要改写时原样返回。
+    """
+    if not history:
+        return question
+    from .config import CONTEXTUALIZE_QUERY_ENABLED, CONTEXTUALIZE_TIMEOUT, REWRITE_MODEL
+    from .enhance import contextualize_query, needs_contextualize
+
+    if not CONTEXTUALIZE_QUERY_ENABLED or not needs_contextualize(question):
+        return question
+    pairs = [(m.get("role"), m.get("content")) for m in history
+             if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")]
+    if not pairs:
+        return question
+    return contextualize_query(question, pairs, llm, REWRITE_MODEL,
+                               reasoning_effort="none", timeout=CONTEXTUALIZE_TIMEOUT)
+
+
+def _save_turn(conversation_id: str | None, out: dict, request: Request) -> None:
+    """把统一入口的一轮结果落库；失败只记日志。"""
+    if not conversation_id:
+        return
+    try:
+        from . import conversation as cstore
+        from .api import key_fingerprint
+
+        cstore.append_turn(conversation_id=conversation_id, question=out.get("question") or "",
+                           answer=out.get("answer") or "", key_id=key_fingerprint(request),
+                           route=out.get("route"), status=out.get("status") or "ok",
+                           error=out.get("error"), sources=out.get("sources") or [],
+                           latency_ms=(out.get("trace") or {}).get("total_s", 0) * 1000 or None)
+    except Exception as e:  # noqa: BLE001 - 落库失败不影响响应
+        import logging
+
+        logging.getLogger(__name__).warning("会话落库失败（%s），本轮未保存", type(e).__name__)
+
+
+@router.post("/auto/ask", dependencies=[Depends(require_api_key)])
+def auto_ask(req: AutoAskRequest, request: Request):
+    svc: UnifiedService | None = getattr(request.app.state, "unified", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
+    from .api import key_fingerprint
+
+    conversation_id = _conversation_context(req.conversation_id, request, req.store)
+    context = _history_messages(conversation_id)
+    try:
+        out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
+                      history=context)
+    except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
+        raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
+                                                               "type": "upstream_error"}}) from None
+    out["question"] = req.question
+    _save_turn(conversation_id, out, request)
+    out.pop("question", None)
+    if conversation_id:
+        out["conversation_id"] = conversation_id
+    if not req.include_trace:
+        out.pop("trace", None)
+    headers = {"X-Conversation-Id": conversation_id} if conversation_id else None
+    return JSONResponse(content=_jsonable(out), headers=headers)
+
+
+def _sse(payload: dict) -> bytes:
+    return b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
+
+
+@router.post("/auto/ask/stream", dependencies=[Depends(require_api_key)])
+def auto_ask_stream(req: AutoAskRequest, request: Request):
+    """SSE 流式统一入口：先推 route，课程路由再推 stage / delta / materials，最后 done（带最终 answer 与 sources）。
+    delta 与 answer 里引用都是序号 [1] [2]（不含 [S#] 与 chunk_id）；materials 在序号分配时发出（n、chunk_id、path）。
+    非课程路由不流式，完整结果直接放进 done。生成中途出错发 error 事件，只带异常类型名。
+    并发名额由 RequestConcurrencyMiddleware 持有到整个流结束。
+    带 conversation_id 时：历史只作为上下文交给作答模型，检索仍只用本轮问题；done 之后落库。"""
+    svc: UnifiedService | None = getattr(request.app.state, "unified", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
+
+    from .api import key_fingerprint
+
+    conversation_id = _conversation_context(req.conversation_id, request, req.store)
+    context = _history_messages(conversation_id)
+
+    def gen():
+        final: dict | None = None
+        events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
+                                history=context)
+        try:
+            for ev in events:
+                if ev.get("type") == "done":
+                    final = {**ev, "question": req.question}
+                    if conversation_id:
+                        ev = {**ev, "conversation_id": conversation_id}
+                if ev.get("type") == "done" and not req.include_trace:
+                    ev = {k: v for k, v in ev.items() if k != "trace"}
+                yield _sse(ev)
+        except Exception as e:  # noqa: BLE001 - 流已开始，只能以事件告知，且只带类型名
+            yield _sse({"type": "error", "error": type(e).__name__})
+            if final is None:
+                final = {"question": req.question, "status": "error", "error": type(e).__name__, "answer": ""}
+        finally:
+            events.close()
+            _save_turn(conversation_id, final or {"question": req.question, "status": "error",
+                                                  "error": "client_disconnect", "answer": ""}, request)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    if conversation_id:
+        headers["X-Conversation-Id"] = conversation_id
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
+def _jsonable(obj):
+    """把 trace / dataclass 之类的对象转成可 JSON 序列化的结构（复用 FastAPI 的编码器）。"""
+    from fastapi.encoders import jsonable_encoder
+
+    return jsonable_encoder(obj)
 
 
 class _Cancelled(Exception):
@@ -95,45 +254,52 @@ class UnifiedService:
         return bad
 
     def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-            key_id: str | None = None) -> dict[str, Any]:
-        """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。"""
+            key_id: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
+        """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。
+        history：之前几轮的 [{"role","content"}]，只作为作答上下文，不参与检索与路由判断。"""
         with usage_log.record(question, origin, key_id) as rec:
-            out = self._ask(question, top_k)
+            out = self._ask(question, top_k, history=history)
             rec.finish(out)
             return out
 
-    def _ask(self, question: str, top_k: int | None = None) -> dict[str, Any]:
+    def _ask(self, question: str, top_k: int | None = None, *, history: list[dict] | None = None) -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
-        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        # 路由 / 题库匹配用「独立问题」：把「那它适用什么情形」补全成完整问句，
+        # 否则只有指代的追问会被路由判成 off_topic 直接拒答。
+        routed_q = _standalone_question(question, history, self.lib_llm)
+        solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
             return solved
-        solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client)
+        solve = self._solve_flag(routed_q)
+        d: RouteDecision = classify(routed_q, self.router_client)
         if solve:
             d = self._solve_route(d)
         out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                "answer": None, "sources": [], "status": "ok"}
         trace: dict[str, Any] = {"router": d.to_dict()}
         out["routes"], out["count"], out["chapter"] = list(d.routes), d.count, d.chapter
+        # 作答与检索用补全后的独立问题：各库的作答提示词都是「只依据材料回答」，
+        # 只给历史不看指代时，模型会说「你问的它指代不明」（实测）。历史仍作为上下文一并传入。
+        q = routed_q
         if d.combined:
-            self._combined(question, d, out, trace)
+            self._combined(q, d, out, trace, history)
         elif d.route == "off_topic":
             out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
         elif d.route == "policy":
-            self._policy(question, out, trace)
+            self._policy(q, out, trace, history)
         elif d.route == "course":
-            self._course(question, out, trace, solve=solve)
+            self._course(q, out, trace, solve=solve, history=history)
         elif d.route == "exam":
-            self._exam(question, out, trace)
+            self._exam(q, out, trace)
         elif d.route == "case":
-            self._case(question, d, out, trace)
+            self._case(q, d, out, trace, history)
         elif d.route == "quote":
-            self._quote(question, d, out, trace)
+            self._quote(q, d, out, trace)
         else:
-            self._thesis(question, top_k, d.complexity, out, trace)
+            self._thesis(q, top_k, d.complexity, out, trace, history)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
         out["trace"] = trace
         out["followups"] = self._followups(question, out)
@@ -177,7 +343,8 @@ class UnifiedService:
             return []
 
     def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-                   key_id: str | None = None) -> Iterator[dict[str, Any]]:
+                   key_id: str | None = None,
+                   history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
@@ -191,7 +358,7 @@ class UnifiedService:
         生成器内设置的 contextvar 会被丢弃（流式日志只剩第一条 route 调用）。所以整条链都显式传 rec，
         不依赖 contextvar。"""
         rec = usage_log.start(question, origin, key_id)
-        inner = self._ask_stream(question, top_k, rec)
+        inner = self._ask_stream(question, top_k, rec, history)
         try:
             while True:
                 # 关键：每段恢复都在线程池的新上下文里，必须在本段内重新激活 rec，
@@ -217,10 +384,12 @@ class UnifiedService:
             usage_log.clear()
         rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
 
-    def _ask_stream(self, question: str, top_k: int | None, rec) -> Iterator[dict[str, Any]]:
+    def _ask_stream(self, question: str, top_k: int | None, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
         question = question.strip()
         t0 = time.perf_counter()
-        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        # 同 _ask：路由与题库匹配用补全后的独立问题，作答与检索资料仍对应本轮原话。
+        routed_q = _standalone_question(question, history, self.lib_llm)
+        solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
@@ -233,14 +402,14 @@ class UnifiedService:
                 yield {"type": "followups", "items": got}
             rec.pending_out = dict(solved)
             return
-        solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client)
+        solve = self._solve_flag(routed_q)
+        d: RouteDecision = classify(routed_q, self.router_client)
         if solve:
             d = self._solve_route(d)
         yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
                "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
         if d.combined and not self._available(d.routes):
-            yield from self._stream_combined(question, d, t0, rec)
+            yield from self._stream_combined(question, d, t0, rec, history)
             return
         if d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None:
             out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
@@ -248,21 +417,21 @@ class UnifiedService:
             trace: dict[str, Any] = {"router": d.to_dict()}
             try:
                 if d.combined:
-                    self._combined(question, d, out, trace)        # 其中某个库未加载：返回 unavailable
+                    self._combined(routed_q, d, out, trace, history)        # 其中某个库未加载：返回 unavailable
                 elif d.route == "off_topic":
                     out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
                 elif d.route == "policy":
-                    self._policy(question, out, trace)    # 单库政策：不流式，结果放进 done
+                    self._policy(routed_q, out, trace, history)    # 单库政策：不流式，结果放进 done
                 elif d.route == "course":
-                    self._course(question, out, trace, solve=solve)        # 课程库未加载：返回 unavailable
+                    self._course(routed_q, out, trace, solve=solve, history=history)        # 课程库未加载：返回 unavailable
                 elif d.route == "exam":
-                    self._exam(question, out, trace)
+                    self._exam(routed_q, out, trace)
                 elif d.route == "case":
-                    self._case(question, d, out, trace)       # 单库判例：不流式，结果放进 done
+                    self._case(routed_q, d, out, trace, history)       # 单库判例：不流式，结果放进 done
                 elif d.route == "quote":
-                    self._quote(question, d, out, trace)      # 单库名言：不流式，结果放进 done
+                    self._quote(routed_q, d, out, trace)      # 单库名言：不流式，结果放进 done
                 else:
-                    self._thesis(question, top_k, d.complexity, out, trace)
+                    self._thesis(routed_q, top_k, d.complexity, out, trace, history)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
                 rec.pending_out = {"route": d.route, "routes": list(d.routes), "complexity": d.complexity,
                                    "status": "error", "answer": "", "sources": []}
@@ -294,7 +463,7 @@ class UnifiedService:
             try:
                 with usage_log.activate(rec):                    # 后台线程里重新激活，pipeline 的 LLM 调用才记得到
                     q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm,
-                                         on_event=on_event, solve=solve)))
+                                         on_event=on_event, solve=solve, history=history)))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -342,7 +511,7 @@ class UnifiedService:
             cancelled.set()
 
     # ---------------------------------------------------------------- 判例（单库，不流式）
-    def _case(self, question, d, out, trace) -> None:
+    def _case(self, question, d, out, trace, history: list[dict] | None = None) -> None:
         if self.case_retriever is None:
             out.update(status="unavailable", answer=CASE_UNAVAILABLE)
             return
@@ -363,7 +532,7 @@ class UnifiedService:
             trace["case"]["answer_calls"] = 0
             return
         t1 = time.perf_counter()
-        ans = answer_cases(question, got["hits"], self.lib_llm, model=self.answer_model)
+        ans = answer_cases(question, got["hits"], self.lib_llm, model=self.answer_model, history=history)
         trace["case"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, dropped=ans.dropped)
         out.update(answer=ans.text, sources=ans.sources)
 
@@ -384,7 +553,7 @@ class UnifiedService:
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
 
     # ---------------------------------------------------------------- 政策（单库，不流式）
-    def _policy(self, question, out, trace) -> None:
+    def _policy(self, question, out, trace, history: list[dict] | None = None) -> None:
         if self.policy_retriever is None:
             out.update(status="unavailable", answer=POLICY_UNAVAILABLE)
             return
@@ -396,12 +565,12 @@ class UnifiedService:
             trace["policy"]["answer_calls"] = 0
             return
         t1 = time.perf_counter()
-        ans = answer_policy(question, got["hits"], self.lib_llm, model=self.answer_model)
+        ans = answer_policy(question, got["hits"], self.lib_llm, model=self.answer_model, history=history)
         trace["policy"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, removed_quotes=ans.removed_quotes)
         out.update(answer=ans.text, sources=ans.sources)
 
     # ---------------------------------------------------------------- 组合（各库并行取材，一次作答）
-    def _combined(self, question, d, out, trace) -> None:
+    def _combined(self, question, d, out, trace, history: list[dict] | None = None) -> None:
         bad = self._available(d.routes)
         if bad:
             names = {"course": "课程库", "case": "判例库", "quote": "名言库", "policy": "政策库"}
@@ -417,12 +586,13 @@ class UnifiedService:
             return
         t1 = time.perf_counter()
         titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
-        ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles)
+        ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
+                              history=history)
         trace["combined"].update(answer_s=round(time.perf_counter() - t1, 4), removed_quotes=ans.removed_quotes,
                                  missing=m.empty, sections=m.sections)
         out.update(answer=ans.text, sources=ans.sources)
 
-    def _stream_combined(self, question, d, t0, rec) -> Iterator[dict[str, Any]]:
+    def _stream_combined(self, question, d, t0, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
         """组合问答的流式：只有一次作答，照常流式。事件：stage（各库取材进度）→ materials（带库别 kind）/ delta → done。
         讲话引号校验需要完整正文，所以只作用于 done 里的最终 answer（delta 先流出；前端在 done 时用最终正文覆盖）。"""
         from .combined import answer_combined, gather_materials
@@ -447,6 +617,7 @@ class UnifiedService:
                         return
                     titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
                     ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
+                                          history=history,
                                           on_delta=lambda t: emit({"type": "delta", "text": t}),
                                           on_source=lambda e: emit({"type": "materials", **e}))
                     q.put(("result", ans, m))
@@ -493,21 +664,22 @@ class UnifiedService:
         finally:
             cancelled.set()
 
-    def _thesis(self, question, top_k, complexity, out, trace) -> None:
+    def _thesis(self, question, top_k, complexity, out, trace, history: list[dict] | None = None) -> None:
         if self.adaptive is None:
             out.update(status="unavailable", answer="论文指导服务未加载。")
             return
-        r = self.adaptive.run(question, top_k, complexity)
+        r = self.adaptive.run(question, top_k, complexity, history=history)
         trace["adaptive"] = r.pop("trace")
         out.update(status=r["status"], answer=r["answer"], sources=r["sources"])
         out["contexts"] = r["contexts"]
 
-    def _course(self, question, out, trace, solve: bool = False) -> None:
+    def _course(self, question, out, trace, solve: bool = False, history: list[dict] | None = None) -> None:
         if self.course_ctx is None or self.course_llm is None:
             out.update(status="unavailable", answer="课程问答服务未加载（需要教材/本体数据与 COURSE_LLM_* 配置）。")
             return
         from .course.pipeline import ask, result_to_json
-        res = result_to_json(ask(question, ctx=self.course_ctx, llm=self.course_llm, solve=solve))
+        res = result_to_json(ask(question, ctx=self.course_ctx, llm=self.course_llm, solve=solve,
+                                 history=history))
         trace["course"] = res.pop("trace", None)
         ans = res.get("answer")
         if ans:
@@ -589,50 +761,3 @@ class UnifiedService:
         # 答案始终随题带出（网页默认折叠）；正文只排题干与选项，答案放在 exam.questions[*].answer / analysis
         out["answer"] = format_items(r["items"], include_answer=False)
         out["exam"] = {"questions": [it.view(include_answer=True) for it in r["items"]]}
-
-@router.post("/auto/ask", dependencies=[Depends(require_api_key)])
-def auto_ask(req: AutoAskRequest, request: Request):
-    svc: UnifiedService | None = getattr(request.app.state, "unified", None)
-    if svc is None:
-        raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
-    from .api import key_fingerprint
-    try:
-        out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
-    except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
-        raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
-                                                               "type": "upstream_error"}}) from None
-    if not req.include_trace:
-        out.pop("trace", None)
-    return out
-
-
-def _sse(payload: dict) -> bytes:
-    return b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
-
-
-@router.post("/auto/ask/stream", dependencies=[Depends(require_api_key)])
-def auto_ask_stream(req: AutoAskRequest, request: Request):
-    """SSE 流式统一入口：先推 route，课程路由再推 stage / delta / materials，最后 done（带最终 answer 与 sources）。
-    delta 与 answer 里引用都是序号 [1] [2]（不含 [S#] 与 chunk_id）；materials 在序号分配时发出（n、chunk_id、path）。
-    非课程路由不流式，完整结果直接放进 done。生成中途出错发 error 事件，只带异常类型名。
-    并发名额由 RequestConcurrencyMiddleware 持有到整个流结束。"""
-    svc: UnifiedService | None = getattr(request.app.state, "unified", None)
-    if svc is None:
-        raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
-
-    from .api import key_fingerprint
-
-    def gen():
-        events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request))
-        try:
-            for ev in events:
-                if ev.get("type") == "done" and not req.include_trace:
-                    ev = {k: v for k, v in ev.items() if k != "trace"}
-                yield _sse(ev)
-        except Exception as e:  # noqa: BLE001 - 流已开始，只能以事件告知，且只带类型名
-            yield _sse({"type": "error", "error": type(e).__name__})
-        finally:
-            events.close()
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

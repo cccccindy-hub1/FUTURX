@@ -462,7 +462,7 @@ def config_text(kind):
 
 def test_thesis_route_still_uses_adaptive(cctx):
     class Adaptive:
-        def run(self, q, top_k, cx):
+        def run(self, q, top_k, cx, **kwargs):
             return {"status": "ok", "answer": "论文答案", "sources": [{"source": "a"}], "contexts": ["c"], "trace": {"path": "simple"}}
     svc = svc_with(StepLLM({}), ["thesis"], case=False, quote=False)
     svc.adaptive = Adaptive()

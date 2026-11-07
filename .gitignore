@@ -33,6 +33,7 @@ nlp_/
 
 # ---- 真实用户对话数据（含用户ID/省市/论文医疗等敏感话题，绝不提交）----
 data_benchmark/
+rag/conversation_db/
 
 # ---- 本地 Claude Code 配置 ----
 .claude/

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from . import config, prompts
 from .llm import LLMClient
+from ..prompt_rules import with_history
 from .recall import Recalled
 
 # 全角 / 其他括号 -> 半角方括号：模型偶尔写出 ［S3］ 或 【S3】，不归一化就匹配不上、引用留在正文里
@@ -214,7 +215,8 @@ def source_entry(n: int, chunk: Recalled, titles: dict[int, str] | None = None) 
 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,
                     model: str | None = None, on_delta=None, on_source=None,
-                    titles: dict[int, str] | None = None, solve: bool = False) -> AnswerResult:
+                    titles: dict[int, str] | None = None, solve: bool = False,
+                    history: list[dict] | None = None) -> AnswerResult:
     """solve=True：学生带着具体题目来问，系统提示词追加“判断 / 选择题先给结论”一条；默认 False，提示词与原来逐字相同。
     on_delta(text)：流式时逐段回调「学生可见」文本（[S#] 已实时改成 [n]，一个被拆在两片里的 [S12] 会先缓冲到闭合）；
     on_source(entry)：某块第一次被引用、分配序号时回调（entry 同 source_entry）。返回值与非流式相同。"""
@@ -224,9 +226,11 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
     passages = "\n\n".join(
         prompts.ANSWER_PASSAGE.format(ref=ref, path=" › ".join(k.path), text=k.text)
         for (ref, _cid), k in zip(refs.items(), kept)) or "（无）"
-    messages = [{"role": "system", "content": prompts.ANSWER_SYSTEM + (prompts.ANSWER_SOLVE_HINT if solve else "")},
-                {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
-                 + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")}]
+    messages = with_history([
+        {"role": "system", "content": prompts.ANSWER_SYSTEM + (prompts.ANSWER_SOLVE_HINT if solve else "")},
+        {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
+         + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")},
+    ], history)
     rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(n, by_id[cid], titles))) if on_source else None)
 
     def push(raw: str) -> None:

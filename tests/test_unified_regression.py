@@ -80,14 +80,17 @@ class FakeExam:
 
 
 class Adaptive:
-    def run(self, q, top_k, complexity):
+    def run(self, q, top_k, complexity, **kwargs):
         return {"status": "ok", "answer": "论文答案", "sources": [{"source": "a.pdf"}], "contexts": ["c"], "trace": {"path": "simple"}}
 
 
 def strip_times(x):
     """去掉所有耗时字段，剩下的必须逐字一致。"""
     if isinstance(x, dict):
-        return {k: strip_times(v) for k, v in x.items() if not (k.endswith("_s") or k in ("latency_s", "total_s", "calls", "totals", "stages", "timings"))}
+        # conversation_id 是每次请求新建的会话号，不属于「行为是否一致」的比较范围
+        return {k: strip_times(v) for k, v in x.items()
+                if not (k.endswith("_s") or k in ("latency_s", "total_s", "calls", "totals", "stages",
+                                                  "timings", "conversation_id"))}
     if isinstance(x, list):
         return [strip_times(v) for v in x]
     return x

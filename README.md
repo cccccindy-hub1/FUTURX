@@ -106,8 +106,57 @@ pytest
 `python -m rag.cli serve --http --host 127.0.0.1 --port 8000` accepts concurrent
 requests to `/ask`, `/ask/stream`, and `/v1/chat/completions` (including SSE).
 Set `RAG_MAX_CONCURRENT_REQUESTS=10` in `.env` to control the active-request limit
-per process. Restart the server after changing it. Excess requests receive HTTP
-503 with `Retry-After: 1`; clients should retry with backoff. Health checks remain
-available at capacity. The shared embedding/retrieval stage is guarded, while
-upstream LLM generation overlaps across requests. Timing data is local to each
-calling thread. Upstream provider rate limits can still limit throughput.
+per process. Restart the server after changing it. Excess requests wait in a queue
+(`RAG_QUEUE_TIMEOUT_S`, default 30s) and get HTTP 503 with `Retry-After: 1` only if
+the wait times out. Health checks remain available at capacity.
+
+Retrieval is no longer serialized: embeddings are merged into batches by
+`rag/embedding.py` (tune with `EMBED_WORKERS` / `EMBED_TORCH_THREADS` /
+`EMBED_MAX_CHARS`), Chroma and BM25 queries are read-only and run concurrently, and
+LLM generation overlaps across requests. Timing data is local to each calling
+thread. Streaming responses send the first SSE frame and the HTTP headers before
+retrieval starts, so clients see the connection immediately. Upstream provider
+rate limits can still limit throughput — measure them before blaming this layer.
+
+## 多轮对话
+
+`POST /v1/chat/completions` 会带上 `messages` 里之前的 user / assistant 轮次：
+历史按原样插在系统提示之后交给模型（最多 `CHAT_HISTORY_MAX_TURNS` 轮、总字数至多
+`CHAT_HISTORY_MAX_CHARS`，按整轮丢弃），调用方的 `system` 消息仍被忽略，服务端用自己的提示词。
+
+追问（「第二种具体怎么算」）在检索前会先用历史改写成独立问题
+（「数据资产估值的收益法具体怎么算」），改写只用于检索，交给模型的仍是原话。
+改写走 `REWRITE_MODEL`、关闭思考、`CONTEXTUALIZE_TIMEOUT` 秒超时，失败即退回原问题。
+
+## 会话存储与查询
+
+每一轮问答按会话落 SQLite（`rag/conversation.py`，默认 `rag/conversation_db/conversations.sqlite3`，
+已在 `.gitignore`）。这是**对话档案**；`rag/usage_log` 仍只管延迟 / token 计量，两者分工不重叠。
+
+`/v1/chat/completions` 与 `/auto/ask`、`/auto/ask/stream` 都接受这三个扩展字段：
+
+| 字段 | 说明 |
+|---|---|
+| `conversation_id` | 会话 id。不传则新建并回填；传了但不存在返回 404（避免拼错 id 导致历史悄悄丢失）|
+| `store` | `false` = 本轮不落库（临时提问），默认 `true` |
+
+响应体里的 `conversation_id` 与响应头 `X-Conversation-Id` 都会带回。同一请求重试按
+`request_id` 去重，不会插两条。
+
+管理接口（均按调用方 API key 隔离，别人的会话一律 404）：
+
+```
+GET    /v1/conversations                       会话列表（cursor 分页，archived 默认只看未归档）
+POST   /v1/conversations                       新建（可选 title / 自定义 id）
+GET    /v1/conversations/{id}                  详情（include_messages 默认 true）
+PATCH  /v1/conversations/{id}                  改名 / 归档
+DELETE /v1/conversations/{id}                  删除（软删，可恢复）
+GET    /v1/conversations/{id}/messages         消息列表（after_seq 增量拉取，断线重连用）
+DELETE /v1/conversations/{id}/messages         清空消息但保留会话
+```
+
+历史来源的优先级：客户端 `messages` 里有多轮时以客户端为准（OpenAI 兼容平台的常见做法），
+只有一句本轮问题时用服务端存的历史——这样两种调用方式都不会把同一轮算两遍。
+
+清理：`CONVERSATION_RETENTION_DAYS`（默认 365，0 = 永久），到期用
+`python scripts/purge_conversations.py` 删除，建议 cron 每天跑一次。

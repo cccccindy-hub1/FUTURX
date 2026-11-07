@@ -322,7 +322,7 @@ def test_sse_non_course_routes_are_not_streamed_but_complete_in_done():
 
 def test_sse_thesis_route_runs_adaptive_and_puts_result_in_done():
     class Adaptive:
-        def run(self, q, top_k, complexity):
+        def run(self, q, top_k, complexity, **kwargs):
             return {"status": "ok", "answer": "论文答案", "sources": [{"source": "a"}], "contexts": ["c"], "trace": {"path": "simple"}}
     svc = UnifiedService(router_client=route_llm("thesis"))
     svc.adaptive = Adaptive()

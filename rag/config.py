@@ -68,10 +68,30 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "none")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "120"))  # 单次请求超时（秒）
 
+# ---- 向量化批处理（rag.embedding）：把并发请求的单条 encode 合并成批 ----
+# 批大小、批内总字数上限、攒批最多等多久（毫秒）、编码 worker 数。
+# worker 数 × torch 线程数应接近核数：实测 8 核上 2 worker × 4 线程最稳。
+EMBED_MAX_BATCH = int(os.environ.get("EMBED_MAX_BATCH", "32"))
+EMBED_MAX_CHARS = int(os.environ.get("EMBED_MAX_CHARS", "6000"))
+EMBED_BATCH_WAIT_MS = float(os.environ.get("EMBED_BATCH_WAIT_MS", "15"))
+EMBED_WORKERS = max(1, int(os.environ.get("EMBED_WORKERS", "2")))
+EMBED_TORCH_THREADS = int(os.environ.get("EMBED_TORCH_THREADS", "4")) or None  # 0 = 不动 torch 默认
+
 # ---- 查询增强（需要 LLM；默认关闭）----
 QUERY_REWRITE_ENABLED = os.environ.get("QUERY_REWRITE_ENABLED", "false").lower() in ("1", "true", "yes")
 HYDE_ENABLED = os.environ.get("HYDE_ENABLED", "false").lower() in ("1", "true", "yes")
 REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "") or LLM_MODEL  # 改写/HyDE 用的小模型，默认同 LLM_MODEL
+
+# ---- 多轮对话（OpenAI 兼容层 /v1/chat/completions）----
+# 带上 messages 里最多这么多轮历史（user+assistant 算一轮）交给模型；0 = 忽略历史（旧行为）。
+CHAT_HISTORY_MAX_TURNS = max(0, int(os.environ.get("CHAT_HISTORY_MAX_TURNS", "6")))
+# 历史总字数上限：从最近一轮往前累加，超了就丢更早的轮次。只限轮数会让 6 个长问题把
+# prompt 撑到两万字，直接推高首字时间（上游 100 并发下 p50 已是 46.7s）。0 = 不限。
+CHAT_HISTORY_MAX_CHARS = max(0, int(os.environ.get("CHAT_HISTORY_MAX_CHARS", "8000")))
+# 检索前先用历史把追问改写成独立问题（「第二种具体怎么算」→「数据资产估值的收益法具体怎么算」）。
+CONTEXTUALIZE_QUERY_ENABLED = os.environ.get("CONTEXTUALIZE_QUERY_ENABLED", "true").lower() in ("1", "true", "yes")
+# 改写这一步在首字之前，超时就退回原问题，不让追问整体变慢。
+CONTEXTUALIZE_TIMEOUT = float(os.environ.get("CONTEXTUALIZE_TIMEOUT", "8"))
 
 # ---- Contextual Retrieval（建库时 LLM 为每个 chunk 生成上下文，拼进向量化与 BM25 文本；默认关闭）----
 # 开启后每个新 chunk 一次 LLM 调用（结果缓存在 CACHE_DIR/contextual_cache.json），见 rag/contextual.py

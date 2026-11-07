@@ -71,8 +71,9 @@ class AdaptiveRAG:
         finally:
             tm["aux_llm_s"] += time.perf_counter() - t0
 
-    def _generate(self, question: str, result: RetrievalResult, tm: dict, extra: str = ""):
-        docs, sources, messages = self.svc.prepare_from(question, result)
+    def _generate(self, question: str, result: RetrievalResult, tm: dict, extra: str = "",
+                  history: list[dict] | None = None):
+        docs, sources, messages = self.svc.prepare_from(question, result, history=self._as_pairs(history))
         if extra:
             messages[-1]["content"] += extra
         if not self.svc.llm:
@@ -94,15 +95,27 @@ class AdaptiveRAG:
 
     # ---------------------------------------------------------------- 入口
 
-    def run(self, question: str, top_k: int | None = None, complexity: str = "simple") -> dict:
+    @staticmethod
+    def _as_pairs(history: list[dict] | None) -> list[tuple[str, str]] | None:
+        """把 [{"role","content"}] 转成 prepare_from 期望的 [(role, content)]。"""
+        if not history:
+            return None
+        out = []
+        for m in history:
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and (m.get("content") or "").strip():
+                out.append((m["role"], m["content"].strip()))
+        return out or None
+
+    def run(self, question: str, top_k: int | None = None, complexity: str = "simple",
+            history: list[dict] | None = None) -> dict:
         top_k = top_k or config.TOP_K
         tm = {"retrieve_s": 0.0, "rerank_s": 0.0, "generate_s": 0.0, "aux_llm_s": 0.0}
         trace: dict = {"path": "simple", "retrievals": []}
         t0 = time.perf_counter()
         if complexity == "complex" and self.svc.llm is not None:
-            out = self._complex(question, top_k, tm, trace)
+            out = self._complex(question, top_k, tm, trace, history=history)
         else:
-            out = self._simple(question, top_k, tm, trace)
+            out = self._simple(question, top_k, tm, trace, history=history)
         out["trace"] = trace
         trace["timings"] = {**{k: round(v, 4) for k, v in tm.items()}, "total_s": round(time.perf_counter() - t0, 4)}
         return out
@@ -131,12 +144,13 @@ class AdaptiveRAG:
 
     # ---------------------------------------------------------------- simple
 
-    def _simple(self, question: str, top_k: int, tm: dict, trace: dict) -> dict:
+    def _simple(self, question: str, top_k: int, tm: dict, trace: dict,
+                history: list[dict] | None = None) -> dict:
         res, ok = self._corrective(question, top_k, tm, trace, "q")
         if not ok:
             trace["path"] = "simple:insufficient"
             return self._insufficient()
-        return self._ok(*self._generate(question, res, tm))
+        return self._ok(*self._generate(question, res, tm, history=history))
 
     # ---------------------------------------------------------------- complex
 
@@ -156,11 +170,12 @@ class AdaptiveRAG:
             return []
         return subs[: self.max_subs]
 
-    def _complex(self, question: str, top_k: int, tm: dict, trace: dict) -> dict:
+    def _complex(self, question: str, top_k: int, tm: dict, trace: dict,
+                 history: list[dict] | None = None) -> dict:
         subs = self._decompose(question, tm)
         if len(subs) < 2:           # 拆不出多个子问题 -> 走 simple
             trace["path"] = "complex->simple"
-            return self._simple(question, top_k, tm, trace)
+            return self._simple(question, top_k, tm, trace, history=history)
         trace.update(path="complex", sub_questions=subs, max_rounds=self.max_rounds)
         results: dict[int, RetrievalResult] = {}
         pending = list(range(len(subs)))
@@ -192,7 +207,7 @@ class AdaptiveRAG:
         merged = self._merge([results[i] for i in sorted(results)], top_k * len(results))
         extra = _SYNTH_NOTE.format(missing="；".join(missing)) if missing else ""
         trace["unanswered_sub_questions"] = missing
-        return self._ok(*self._generate(question, merged, tm, extra))
+        return self._ok(*self._generate(question, merged, tm, extra, history=history))
 
     @staticmethod
     def _merge(results: list[RetrievalResult], cap: int) -> RetrievalResult:

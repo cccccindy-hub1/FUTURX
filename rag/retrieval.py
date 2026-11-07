@@ -14,6 +14,7 @@ import logging
 import pickle
 import time
 from dataclasses import dataclass, field
+from threading import Lock
 
 from .config import CACHE_DIR, FETCH_K, RRF_K, TOP_K
 
@@ -144,13 +145,16 @@ class Reranker:
     def __init__(self, model_name: str):
         self.model_name = model_name
         self._model = None
+        self._load_lock = Lock()          # 并发首次调用只能加载一次（模型有几百 MB）
 
     def _ensure(self):
         if self._model is None:
-            from sentence_transformers import CrossEncoder
+            with self._load_lock:
+                if self._model is None:
+                    from sentence_transformers import CrossEncoder
 
-            logger.info("加载重排序模型 %s（首次较慢，会下载模型）…", self.model_name)
-            self._model = CrossEncoder(self.model_name)
+                    logger.info("加载重排序模型 %s（首次较慢，会下载模型）…", self.model_name)
+                    self._model = CrossEncoder(self.model_name)
         return self._model
 
     def rerank(self, query: str, docs: list[str], top_n: int) -> list[tuple[int, float]]:
@@ -196,11 +200,14 @@ class HybridRetriever:
         self.rrf_k = rrf_k
         self._bm25: BM25Index | None = None
         self._reranker: Reranker | None = None
+        self._bm25_lock = Lock()          # BM25 首次构建要读全库并分词，并发构建会重复几秒的活
 
     # -- 惰性资源 --
     def bm25(self, name: str) -> BM25Index:
         if self._bm25 is None:
-            self._bm25 = BM25Index.build(self.collection, name)
+            with self._bm25_lock:
+                if self._bm25 is None:
+                    self._bm25 = BM25Index.build(self.collection, name)
         return self._bm25
 
     def attach_reranker(self, reranker: Reranker) -> None:

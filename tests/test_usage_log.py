@@ -203,15 +203,14 @@ def test_note_lock_without_current_record_is_noop():
 
 
 def test_retrieve_result_reports_lock_timing(monkeypatch):
-    """真实调用 RAGService.retrieve_result：持锁段有数、等待段非负，且锁已释放。"""
+    """真实调用 RAGService.retrieve_result：检索耗时照常落 locks.retrieval_ms（不再有锁等待）。"""
     import time as _t
 
     import rag.query as query
 
     svc = object.__new__(query.RAGService)
-    from threading import RLock, local
+    from threading import local
     svc._request_state = local()
-    svc._retrieval_lock = RLock()
     svc._retrieval_query = lambda q: q
     svc.fetch_k = 20
     svc.where = None
@@ -230,8 +229,7 @@ def test_retrieve_result_reports_lock_timing(monkeypatch):
     lock = [r for r in rows if r.get("locks")][0]["locks"]["retrieval"]
     assert lock["locks"] == 1
     assert lock["retrieval_ms"] >= 20
-    assert lock["lock_wait_ms"] >= 0
-    assert not svc._retrieval_lock._is_owned()      # 锁已释放，异常路径也不泄漏
+    assert lock["lock_wait_ms"] == 0.0              # 已取消全局检索锁
 
 
 def test_tracing_llm_reports_every_call(logdir):

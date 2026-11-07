@@ -60,5 +60,28 @@ FOLLOWUP_MIN = 2
 FOLLOWUP_MAX = 4
 FOLLOWUP_MAX_CHARS = 25
 
+# ---- 多轮对话：把历史插进已有消息列表 ----
+def with_history(messages: list[dict], history: list[dict] | None) -> list[dict]:
+    """在最后一条 user 消息之前插入历史轮次（system 保持在最前）。
+
+    各作答路径（课程 / 政策 / 判例 / 组合）都按 [system, user(资料+问题)] 组装，历史统一插在
+    这两者之间，模型看到的就是真实的 user / assistant 交替，而不是被压成一段文字。
+    history 元素为 {"role": "user"|"assistant", "content": str}；空内容与非法角色直接跳过。
+    """
+    if not history:
+        return messages
+    pairs = []
+    for m in history:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        text = (m.get("content") or "").strip()
+        if role in ("user", "assistant") and text:
+            pairs.append({"role": role, "content": text})
+    if not pairs:
+        return messages
+    return messages[:-1] + pairs + messages[-1:]
+
+
 __all__ = ["ANSWER_STRUCTURE", "COURSE_SAMPLES", "THESIS_SAMPLES",
-           "FOLLOWUP_MIN", "FOLLOWUP_MAX", "FOLLOWUP_MAX_CHARS"]
+           "FOLLOWUP_MIN", "FOLLOWUP_MAX", "FOLLOWUP_MAX_CHARS", "with_history"]

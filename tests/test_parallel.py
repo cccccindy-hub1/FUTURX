@@ -48,11 +48,11 @@ def test_http_answers_overlap_and_stay_separate(monkeypatch, path, stream):
     barrier = Barrier(2, timeout=5)
 
     class ParallelService:
-        def answer(self, q, k):
+        def answer(self, q, k, *, history=None, search_query=None):
             barrier.wait()
             return 'answer:' + q, [{'source': q}], [q]
 
-        def open_stream(self, q, k):
+        def open_stream(self, q, k, *, history=None, search_query=None):
             def deltas():
                 barrier.wait()
                 yield 'answer:' + q
@@ -85,11 +85,11 @@ def test_limit_held_until_response_finishes_and_health_stays_available(monkeypat
             started.set()
             assert release.wait(30)
 
-        def answer(self, q, k):
+        def answer(self, q, k, *, history=None, search_query=None):
             self.wait()
             return q, [], []
 
-        def open_stream(self, q, k):
+        def open_stream(self, q, k, *, history=None, search_query=None):
             def deltas():
                 self.wait()
                 yield q
@@ -195,7 +195,7 @@ def test_parallel_answers_keep_their_own_timings(monkeypatch):
     svc._request_state = local()
     ticks = local()
     barrier = Barrier(2, timeout=5)
-    svc.prepare = lambda q, k: ([], [], [{'role': 'user', 'content': q}])
+    svc.prepare = lambda q, k, **kw: ([], [], [{'role': 'user', 'content': q}])
 
     class LLM:
         def create(self, **kwargs):
@@ -223,14 +223,19 @@ def test_parallel_answers_keep_their_own_timings(monkeypatch):
             assert timing['llm_total'] == 2*unit
 
 
-def test_retrieval_shared_state_is_guarded():
+def test_retrieval_runs_concurrently():
+    """检索不再持全局锁：并发请求的 retriever.search 必须重叠执行。
+
+    此前整段检索被一把 RLock 串起来，长问题（2600 字 embed 2.7s）会把后面的请求全部堵住；
+    现在方法内状态各自独立、encode 走 BatchedEmbedder，检索本身可并发。
+    """
     import time
     svc = object.__new__(query.RAGService)
-    svc._retrieval_lock = RLock()
     svc._retrieval_query = lambda q: q
     svc.fetch_k = 20
     svc.where = None
     svc.expand_context = False
+    svc.collection_name = "x"
     active = maximum = 0
     guard = Lock()
 
@@ -246,7 +251,7 @@ def test_retrieval_shared_state_is_guarded():
     svc.retriever = SimpleNamespace(search=search)
     with ThreadPoolExecutor(4) as pool:
         assert list(pool.map(svc.retrieve_result, ['a', 'b', 'c', 'd'])) == ['a', 'b', 'c', 'd']
-    assert maximum == 1
+    assert maximum == 4
 
 
 def test_invalid_concurrency_limit_rejected():
