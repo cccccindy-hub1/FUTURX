@@ -120,7 +120,8 @@ def test_committed_assets_are_masked_and_in_range():
     graph = json.loads((WEB / "data" / "graph.json").read_text(encoding="utf-8"))
     assert 60 <= len(cloud["words"]) <= 80 and all(set(w) == {"w", "s"} for w in cloud["words"]) and {w["s"] for w in cloud["words"]} == {1, 2, 3, 4, 5}
     t = graph["totals"]
-    assert t["chapters"] == 11 and 600 <= t["concepts"] <= 800 and t["relations"] == len(graph["edges"]) and t["concepts"] == len(graph["nodes"])
+    assert t["chapters"] == 11 and t["concepts_total"] >= 600 and t["concepts"] == len(graph["nodes"]) and t["relations"] == len(graph["edges"])
+    assert t["per_chapter_cap"] == g.GRAPH_PER_CHAPTER == 70
     named = sum(1 for n in graph["nodes"] if "n" in n)
     assert named == t["shown_names"] and 0.28 <= named / t["concepts"] <= 0.32
     assert all(set(n) <= {"i", "c", "d", "n"} for n in graph["nodes"]) and max(len(n["n"]) for n in graph["nodes"] if "n" in n) <= 14
@@ -190,7 +191,8 @@ def test_wordcloud_style_is_tech_styled_floats_slowly_supports_dark_and_reduced_
     assert "linear-gradient(120deg" in seg and "drop-shadow" in seg and "@keyframes wc-float" in seg and "animation: wc-float var(--t)" in seg
     assert "@media (prefers-reduced-motion: reduce) { .wc { animation: none" in seg
     assert "prefers-color-scheme: dark" in seg and ".wordcloud:hover .wc" in seg and "scale(1.22)" in seg
-    assert "overflow: hidden" in seg and "@media (max-width: 520px)" in seg
+    assert "overflow: visible" in seg and "overflow: hidden" not in seg[:seg.index("@keyframes")] and "max-height" not in seg[:seg.index("@keyframes")]   # 容器随内容长高：词不被裁切，也不压住下面的说明文字
+    assert "@media (max-width: 520px)" in seg and "linear-gradient(rgba(99, 102, 241" in seg and "26px 26px" in seg                          # 网格背景（无外部资源）
     for t in range(1, 6):
         assert f".wc-{t} {{" in seg
     import re
@@ -221,3 +223,97 @@ def test_structural_relation_between_two_concepts_is_not_drawn_and_not_counted()
     by = {n["n"]: n for n in graph["nodes"]}
     assert {e[2] for e in graph["edges"]} == {"hasPart", "hasFeature"} and len(graph["edges"]) == 2
     assert by["概念丙一"]["d"] == 1 and by["概念丙二"]["d"] == 2 and by["概念丙三"]["d"] == 1          # 结构性关系与自环都不计
+
+
+# ---------------------------------------------------------------- 每章节点上限：写进生成脚本，可复现
+
+def _big_rows():
+    """第 1 章 300 个概念，第 2、3 章各 8 个：不设上限时第 1 章会占满整张图。"""
+    out = []
+    for ch, n in ((1, 300), (2, 8), (3, 8)):
+        hub = f"枢纽{ch}章概念"
+        for i in range(n):
+            out.append({"集合ID": f"{ch}-{i}", "章节": f"Ch{ch:02d}", "主体": hub, "关系": "hasPart", "客体": f"概念{ch}章{i:03d}号", "公理": ""})
+            out.append({"集合ID": f"{ch}-s{i}", "章节": f"Ch{ch:02d}", "主体": f"概念{ch}章{i:03d}号", "关系": "hasFeature", "客体": f"特征{ch}章{i:03d}", "公理": ""})
+    return _prep(out)
+
+
+def test_per_chapter_cap_keeps_the_most_connected_and_every_chapter_stays_visible():
+    _, graph, rep = g.build(_big_rows(), n_words=10, reveal=0.3, per_chapter=40)
+    from collections import Counter
+    per = Counter(n["c"] for n in graph["nodes"])
+    assert per[1] == 40 and per[2] <= 40 and per[3] <= 40 and set(per) == {1, 2, 3}
+    assert graph["totals"]["concepts"] == len(graph["nodes"]) == sum(per.values()) < graph["totals"]["concepts_total"]
+    assert per[1] == 40 and per[1] < 300 and per[1] / sum(per.values()) < 300 / 316 - 0.1       # 第 1 章从 300 个压到 40 个，占比明显下降（不设上限时占 95%）
+    hub = [n for n in graph["nodes"] if n.get("n") == "枢纽1章概念"]
+    assert len(hub) == 1 and hub[0]["d"] == max(n["d"] for n in graph["nodes"] if n["c"] == 1)      # 保留的是关联度最高的那些
+
+
+def test_capped_graph_keeps_about_thirty_percent_names_per_chapter_and_edges_stay_inside_the_kept_nodes():
+    _, graph, _ = g.build(_big_rows(), n_words=10, reveal=0.3, per_chapter=40)
+    from collections import Counter
+    per, named = Counter(n["c"] for n in graph["nodes"]), Counter(n["c"] for n in graph["nodes"] if "n" in n)
+    assert named[1] == 12 and all(abs(named[c] - round(per[c] * 0.3)) <= 1 for c in per)
+    ids = {n["i"] for n in graph["nodes"]}
+    assert ids == set(range(len(ids))) and all(e[0] in ids and e[1] in ids for e in graph["edges"])      # 编号连续、连线两端都在保留的节点里
+    assert 0.25 <= graph["totals"]["shown_ratio"] <= 0.35
+
+
+def test_node_degree_shown_to_users_is_the_real_relevance_count_not_the_count_inside_the_capped_graph():
+    _, graph, _ = g.build(_big_rows(), n_words=10, reveal=1.0, per_chapter=40)
+    hub = next(n for n in graph["nodes"] if n.get("n") == "枢纽1章概念")
+    drawn = sum(1 for e in graph["edges"] if hub["i"] in (e[0], e[1]))
+    assert hub["d"] == 300 and drawn == 39 and drawn < hub["d"]          # 点击卡片里的“关联数”是全图真实数；图里只画保留下来的连线
+
+
+def test_cap_is_reproducible_and_the_committed_json_is_exactly_what_the_script_generates_from_the_same_rows():
+    a, b = g.build(_big_rows(), 10, 0.3, 40), g.build(_big_rows(), 10, 0.3, 40)
+    assert json.dumps(a[1], ensure_ascii=False) == json.dumps(b[1], ensure_ascii=False)
+    src = Path("/Users/yizhimianyang/Desktop/NJU_ra/11.2update/三层集合/纯粹知识集合.xlsx")
+    if not src.is_file():
+        pytest.skip("源 xlsx 不在本机（只在开发机上校验提交的 JSON 与脚本输出一致）")
+    cloud, graph, _ = g.build(g.load(src), 72, 0.3)
+    committed = json.loads((WEB / "data" / "graph.json").read_text(encoding="utf-8"))
+    assert graph == committed and cloud == json.loads((WEB / "data" / "wordcloud.json").read_text(encoding="utf-8"))
+
+
+def test_committed_graph_has_a_visible_share_for_every_chapter():
+    graph = json.loads((WEB / "data" / "graph.json").read_text(encoding="utf-8"))
+    from collections import Counter
+    per = Counter(n["c"] for n in graph["nodes"])
+    assert set(per) == set(range(1, 12)) and max(per.values()) <= 70 and max(per.values()) / len(graph["nodes"]) <= 0.25
+    assert graph["totals"]["concepts_total"] > graph["totals"]["concepts"]
+
+
+# ---------------------------------------------------------------- 网页打磨：词云不压字 / 图谱适配视口 / 窄屏顶栏
+
+def test_wordcloud_container_grows_with_its_content_and_has_clear_padding_and_spacing_below():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = css[css.index(".wordcloud {"):css.index(".wordcloud[hidden]")]
+    assert "overflow: visible" in block and "max-height" not in block and "padding: 22px 28px" in block and "margin: 18px auto 16px" in block
+    assert "isolation: isolate" in block and "radial-gradient" in block and "linear-gradient(rgba(99, 102, 241" in block      # 光晕 + 网格背景
+
+
+def test_wordcloud_colour_layers_by_tier_in_light_and_dark():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for t in range(1, 6):
+        assert css.count(f".wc-{t} {{") >= 2                                              # 浅色一套、深色一套
+    light = css[css.index(".wc-1 { font-size"):css.index("/* 颜色按层级加深")]
+    assert "--wc-a: #4c1d95" in light and "--wc-a: #6366f1" in light                      # 重要的词颜色更深
+
+
+def test_graph_fits_the_whole_graph_into_the_viewport_after_layout():
+    js = (WEB / "graph.js").read_text(encoding="utf-8")
+    seg = js[js.index("function fit()"):js.index("chart.on('finished'")]
+    assert "graphRoam" in seg and "dataToPoint" in seg and "0.03" in seg and "0.97" in seg and "originX" in seg and "dx:" in seg
+    assert "chart.on('finished'" in js and "setTimeout(fit" in js and "state._refit = true" in js                     # 初次加载与切换章节后都重新适配
+    assert "concepts_total" in js and "图中示意" in js                                                                  # 统计栏仍显示总概念数
+
+
+def test_narrow_screen_topbar_never_wraps_the_button_or_stacks_the_status_text():
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    tail = css[css.index("/* ---- 窄屏顶栏"):]
+    assert ".new-chat, .status, #status-text { white-space: nowrap; }" in tail and "flex: none" in tail
+    assert "@media (max-width: 640px)" in tail and "flex-wrap: nowrap" in tail and "#status-text { display: none; }" in tail
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "st.title = text" in js                                                       # 只剩圆点时，悬停 / 长按仍能看到状态文字

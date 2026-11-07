@@ -96,6 +96,8 @@ function pushHistory(q, a) {
 /* ---- 探活 ---- */
 function setStatus(ok, text) {
   statusText.textContent = text;
+  const st = document.getElementById('status');
+  if (st) st.title = text;                      // 窄屏只显示圆点时，悬停 / 长按仍能看到文字
   statusDot.classList.toggle('off', !ok);
 }
 

@@ -40,7 +40,8 @@
     function option(first) {
       const { nodes, links } = build();
       const pct = Math.round((g.totals.shown_names / g.totals.concepts) * 100);
-      statsEl.innerHTML = `<span>共 <b>${g.totals.chapters}</b> 章 · <b>${g.totals.concepts}</b> 个概念 · <b>${g.totals.relations}</b> 条关系 · 当前展示名称 <b>${g.totals.shown_names}</b> 个（<b>${pct}%</b>）`
+      const total = g.totals.concepts_total || g.totals.concepts;
+      statsEl.innerHTML = `<span>共 <b>${g.totals.chapters}</b> 章 · <b>${total}</b> 个概念（图中示意 <b>${g.totals.concepts}</b> 个） · <b>${g.totals.relations}</b> 条关系 · 当前展示名称 <b>${g.totals.shown_names}</b> 个（<b>${pct}%</b>）`
         + (state.chapter ? ` · 筛选：第${state.chapter}章 ${chapters[state.chapter]}（${nodes.length} 个节点）` : '') + '</span>';
       return {
         backgroundColor: 'transparent',
@@ -51,7 +52,7 @@
           type: 'graph', layout: 'force', roam: true, draggable: true, nodes, links,
           categories: chKeys.map((c) => ({ name: chapters[c], itemStyle: { color: colorOf(c) } })),
           scaleLimit: { min: 0.3, max: 6 },
-          force: { repulsion: 55, gravity: 0.07, edgeLength: [18, 70], friction: 0.2, layoutAnimation: !reduce },
+          force: { repulsion: 110, gravity: 0.12, edgeLength: [22, 80], friction: 0.2, layoutAnimation: !reduce },
           edgeSymbol: ['none', 'none'],
           lineStyle: { color: 'source', width: 0.7, opacity: 0.32, curveness: 0.08 },
           emphasis: { focus: 'adjacency', scale: 1.35, lineStyle: { width: 1.8, opacity: 0.9 }, label: { show: true } },
@@ -68,6 +69,39 @@
     }
     render(true);
     msg.style.display = 'none';
+
+    /* 适配视口：力导向布局会把离群节点推得很远。布局稳定后读所有节点的坐标算包围盒，
+       用 graphRoam 的 zoom 与 dx/dy 一次性把整张图缩放并平移进“避开顶部统计栏与底部筛选”的可视区。 */
+    let fitted = 0;
+    function fit() {
+      try {
+        const sm = chart.getModel().getSeriesByIndex(0);
+        const data = sm.getData(), cs = sm.coordinateSystem;
+        const W = chart.getWidth(), H = chart.getHeight();
+        // 节点现在的屏幕坐标：cs.dataToPoint 已经带上当前的缩放 / 平移
+        const px = [], py = [];
+        for (let i = 0; i < data.count(); i++) {
+          const l = data.getItemLayout(i);
+          const p = l && cs.dataToPoint(l);
+          if (p && isFinite(p[0]) && isFinite(p[1])) { px.push(p[0]); py.push(p[1]); }
+        }
+        if (px.length < 2) return;
+        px.sort((a, b) => a - b); py.sort((a, b) => a - b);
+        const q = (a, f) => a[Math.min(a.length - 1, Math.max(0, Math.round((a.length - 1) * f)))];
+        const x0 = q(px, 0.03), x1 = q(px, 0.97), y0 = q(py, 0.03), y1 = q(py, 0.97);       // 分位数而非极值：少数离群光点不该把整张图缩成一团
+        const top = 96, bottom = 104, side = 28;
+        const k = Math.min((W - 2 * side) / Math.max(x1 - x0, 1), (H - top - bottom) / Math.max(y1 - y0, 1));
+        const z = Math.max(0.3 / cs.getZoom(), Math.min(4 / cs.getZoom(), k));                  // graphRoam 的 zoom 是相对当前缩放的倍数
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const tx = W / 2, ty = top + (H - top - bottom) / 2;
+        chart.dispatchAction({ type: 'graphRoam', seriesIndex: 0, zoom: z, originX: cx, originY: cy });   // 以内容中心为原点缩放，中心位置不动
+        chart.dispatchAction({ type: 'graphRoam', seriesIndex: 0, dx: tx - cx, dy: ty - cy });             // 再把内容中心平移到可视区中心
+        fitted += 1;
+      } catch (e) { /* 适配失败不影响使用 */ }
+    }
+    chart.on('finished', function once() { if (fitted === 0 || state._refit) { state._refit = false; setTimeout(fit, 60); } });
+    setTimeout(fit, reduce ? 300 : 2600);               // 兜底：动画结束后再适配一次
+
 
     /* 连线上的流动光点：在 canvas 上层叠一层轻量绘制太重，这里用 ECharts 的 lines 系列 effect 复刻不方便（graph 不支持），
        改为让连线随时间做“呼吸”式明暗流动：定时轻微改变 lineStyle.opacity / dash 偏移，开销很小。 */
@@ -119,6 +153,8 @@
         b.classList.add('on');
         info.classList.remove('show');
         render(false);
+        state._refit = true;
+        setTimeout(fit, reduce ? 300 : 1200);
       });
       filtersEl.appendChild(b);
     };

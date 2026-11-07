@@ -33,6 +33,7 @@ GENERIC = {"数据", "小结", "总结", "概述", "引言", "本章小结", "�
 BAD_SUFFIX = ("模块", "小结", "难量化")
 NAME_MIN, NAME_MAX = 2, 14
 MIN_PER_CH, MAX_PER_CH = 3, 22          # 词云：每章至少 3 个、至多 22 个
+GRAPH_PER_CHAPTER = 70                  # 图谱：每章最多保留的节点数（按关联度取前几名），否则第 4 章（约六成概念）把整张图染成一个颜色
 CHAPTER_NAMES = {1: "数据要素", 2: "数据权属", 3: "数据价值", 4: "数据政策", 5: "数据产品", 6: "数据市场",
                  7: "数据交易", 8: "数据安全", 9: "隐私保护", 10: "数据治理", 11: "数据工程师"}
 # 5 档字号对应的权重阈值在生成时按分位数决定（见 tiers）
@@ -66,7 +67,7 @@ def load(xlsx: Path) -> list[dict]:
     return rows
 
 
-def build(rows: list[dict], n_words: int = 72, reveal: float = 0.3) -> tuple[dict, dict, dict]:
+def build(rows: list[dict], n_words: int = 72, reveal: float = 0.3, per_chapter: int = GRAPH_PER_CHAPTER) -> tuple[dict, dict, dict]:
     """返回 (wordcloud, graph, report)。report 只用于打印统计，不写进网页。"""
     subjects = {r["主体"] for r in rows if r["主体"]}
     concepts = {s for s in subjects if is_concept_name(s)}
@@ -120,7 +121,10 @@ def build(rows: list[dict], n_words: int = 72, reveal: float = 0.3) -> tuple[dic
     # ---------- 图谱（打码在这里完成）----------
     by_ch: dict[int, list[str]] = defaultdict(list)
     for c in order:
-        by_ch[home[c]].append(c)
+        if len(by_ch[home[c]]) < per_chapter:             # order 已按重要性降序：每章只留前 per_chapter 个
+            by_ch[home[c]].append(c)
+    kept = {c for cs in by_ch.values() for c in cs}
+    order = [c for c in order if c in kept]
     revealed: set[str] = set()
     for ch, cs in by_ch.items():
         k = max(1, round(len(cs) * reveal))
@@ -141,10 +145,11 @@ def build(rows: list[dict], n_words: int = 72, reveal: float = 0.3) -> tuple[dic
     for (a, b), cnt in sorted(pair.items()):
         rel = sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
         g_edges.append([index[a], index[b], rel])
-    totals = {"chapters": len({home[c] for c in nodes}), "concepts": len(nodes), "relations": len(g_edges),
-              "shown_names": len(revealed), "shown_ratio": round(len(revealed) / max(len(nodes), 1), 3)}
+    totals = {"chapters": len(by_ch), "concepts": len(order), "relations": len(g_edges),
+              "shown_names": len(revealed), "shown_ratio": round(len(revealed) / max(len(order), 1), 3),
+              "concepts_total": len(nodes), "per_chapter_cap": per_chapter}
     graph = {"chapters": {str(k): CHAPTER_NAMES.get(k, f"第{k}章") for k in sorted(by_ch)}, "nodes": g_nodes, "edges": g_edges, "totals": totals}
-    report = {"concepts_total": len(concepts), "concepts_in_graph": len(nodes), "words": len(words), "word_tiers": dict(Counter(w["s"] for w in cloud["words"])),
+    report = {"concepts_total": len(concepts), "concepts_in_graph": len(order), "words": len(words), "word_tiers": dict(Counter(w["s"] for w in cloud["words"])),
               "score_range": [round(lo, 2), round(hi, 2)], "edges": len(g_edges), "revealed": len(revealed), "ratio": totals["shown_ratio"],
               "per_chapter": {str(k): {"concepts": len(v), "named": sum(1 for c in v if c in revealed)} for k, v in sorted(by_ch.items())},
               "top_words": words[:12]}
@@ -170,9 +175,10 @@ def main(argv=None) -> None:
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "rag" / "web" / "data"))
     ap.add_argument("--words", type=int, default=72)
     ap.add_argument("--reveal", type=float, default=0.3)
+    ap.add_argument("--per-chapter", type=int, default=GRAPH_PER_CHAPTER)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-    cloud, graph, report = build(load(Path(a.xlsx)), a.words, a.reveal)
+    cloud, graph, report = build(load(Path(a.xlsx)), a.words, a.reveal, a.per_chapter)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if a.dry_run:
         return
