@@ -57,7 +57,97 @@ def read_keys_file(path: Path) -> list[str]:
     return out
 
 
+def _lookup_by_student(student: str) -> list[str]:
+    """从 logs/api_keys_*.json 里按学号找回 key（分配表是唯一的反查途径）。"""
+    found = []
+    for f in sorted((ROOT / "logs").glob("api_keys_*.json")):
+        try:
+            rows = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for r in rows:
+            if str(r.get("student")) == student:
+                found.append(r.get("key", ""))
+    return [k for k in found if k]
+
+
+def revoke(argv: list[str]) -> int:
+    """撤销 key：从密钥文件（或 .env）里删掉匹配的行。
+
+    支持三种定位方式：--key 明文、--student 学号（查分配表）、--key-id 指纹。
+    删完不必重启：服务端按 mtime 热加载，默认 5 秒内生效。
+    """
+    ap = argparse.ArgumentParser(description="撤销 API key")
+    ap.add_argument("--key", default="", help="要撤销的 key 明文")
+    ap.add_argument("--student", default="", help="按学号撤销（查 logs/api_keys_*.json）")
+    ap.add_argument("--key-id", default="", help="按 key_id（sha256 前 8 位）撤销")
+    ap.add_argument("--keys-file", default="", help="密钥文件路径；不给则改 .env")
+    ap.add_argument("--env", default=str(ENV), help=".env 路径（默认项目根）")
+    ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
+    a = ap.parse_args(argv)
+
+    targets: set[str] = set()
+    if a.key:
+        targets.add(a.key.strip())
+    if a.student:
+        got = _lookup_by_student(a.student)
+        if not got:
+            raise SystemExit(f"分配表里找不到学号 {a.student}，请直接用 --key")
+        targets.update(got)
+    if not targets and not a.key_id:
+        raise SystemExit("需要 --key / --student / --key-id 之一")
+
+    to_file = bool(a.keys_file)
+    path = Path(a.keys_file).expanduser() if to_file else Path(a.env)
+    if not path.is_file():
+        raise SystemExit(f"{path} 不存在")
+    old = read_keys_file(path) if to_file else existing_keys(path.read_text(encoding="utf-8"))
+
+    if a.key_id:
+        targets.update(k for k in old if key_id(k) == a.key_id.strip())
+    if not targets:
+        raise SystemExit("没有匹配到任何 key（文件里不存在？）")
+
+    kept = [k for k in old if k not in targets]
+    removed = len(old) - len(kept)
+    print(f"待撤销 {len(targets)} 把：")
+    for k in targets:
+        print(f"  {k[:14]}…  key_id={key_id(k)}")
+    print(f"撤销后剩余 {len(kept)} 把")
+
+    if a.dry_run:
+        print("[dry-run] 未写入")
+        return 0
+    if removed == 0:
+        print("文件里没有这些 key（可能已撤销），未做改动。")
+        return 0
+
+    if to_file:
+        backup = path.with_name(f"{path.name}.bak.{int(time.time())}")
+        shutil.copy2(path, backup)
+        header = f"# API keys（{time.strftime('%Y-%m-%d %H:%M:%S')} 撤销 {removed} 把，共 {len(kept)} 条）\n" \
+                 "# 每行一个 key；# 开头为注释。改动后需重启服务。\n"
+        path.write_text(header + "\n".join(kept) + "\n", encoding="utf-8")
+        os.chmod(path, 0o600)
+        print(f"已写入 {path}（备份 {backup.name}）")
+    else:
+        env = path
+        backup = env.with_name(f".env.bak.{int(time.time())}")
+        shutil.copy2(env, backup)
+        text = env.read_text(encoding="utf-8")
+        env.write_text(LINE.sub(lambda _m: "API_KEYS=" + ",".join(kept) if kept else "API_KEYS=",
+                                text, count=1), encoding="utf-8")
+        print(f"已写入 {env}（备份 {backup.name}）")
+
+    print("服务端按 mtime 热加载：默认 5 秒内生效，无需重启。")
+    print("注意：被撤销 key 创建的会话仍归属原 key_id，撤销后无人能访问（可 reassign 或删除）。")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "revoke":
+        return revoke(argv[1:])
     ap = argparse.ArgumentParser(description="生成 API key（写入密钥文件或 .env）")
     ap.add_argument("--count", type=int, required=True, help="生成数量")
     ap.add_argument("--prefix", default="sk-futurx", help="key 前缀（默认 sk-futurx）")

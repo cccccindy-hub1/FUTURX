@@ -1,6 +1,7 @@
 """会话存储与接口的离线测试（SQLite 落临时目录，不联网、不加载模型）。"""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -345,3 +346,107 @@ def test_standalone_question_keeps_long_self_contained_question():
 
     q = "我想研究地方政府公共数据开放对企业创新的影响，应该采用什么样的研究设计？"
     assert U._standalone_question(q, [{"role": "user", "content": "前文"}], None) == q
+
+
+# ---------------------------------------------------------------- 消息级 key 与月份
+
+def test_message_records_key_and_month():
+    """每轮消息都要带 key_id 与 YYYY-MM，便于按人、按月审计。"""
+    import time
+
+    c = store.create(key_id="k1")
+    store.append_turn(conversation_id=c["id"], question="问", answer="答", key_id="k1")
+    msgs = store.messages(c["id"])
+    assert [m["key_id"] for m in msgs] == ["k1", "k1"]
+    assert all(m["month"] == time.strftime("%Y-%m", time.localtime(m["created_at"])) for m in msgs)
+
+
+def test_message_key_follows_conversation_when_not_passed():
+    """调用方没传 key_id 时，用会话的归属，不要落成 None。"""
+    c = store.create(key_id="k1")
+    store.append_turn(conversation_id=c["id"], question="问", answer="答")
+    assert {m["key_id"] for m in store.messages(c["id"])} == {"k1"}
+
+
+def test_messages_rejects_foreign_key():
+    """存储层也要校验归属：以前只有 API 层校验，裸调能读到别人的消息。"""
+    a = store.create(key_id="k1")
+    store.append_turn(conversation_id=a["id"], question="A 的隐私", answer="A 的答案", key_id="k1")
+    assert len(store.messages(a["id"])) == 2                 # 不传 key_id：不过滤（内部/运维用）
+    assert store.messages(a["id"], key_id="k1")
+    assert store.messages(a["id"], key_id="k2") == []        # 别人的 key 读不到
+
+
+def test_monthly_stats_groups_by_key_and_month():
+    c1 = store.create(key_id="k1")
+    c2 = store.create(key_id="k2")
+    store.append_turn(conversation_id=c1["id"], question="q1", answer="a1", key_id="k1", latency_ms=100)
+    store.append_turn(conversation_id=c1["id"], question="q2", answer="a2", key_id="k1", latency_ms=300)
+    store.append_turn(conversation_id=c2["id"], question="q3", answer="a3", key_id="k2")
+
+    rows = {r["key_id"]: r for r in store.monthly_stats()}
+    assert rows["k1"]["messages"] == 4 and rows["k1"]["turns"] == 2
+    assert rows["k1"]["avg_latency_ms"] == 200.0
+    assert rows["k2"]["messages"] == 2 and rows["k2"]["turns"] == 1
+    only = store.monthly_stats(key_id="k2")
+    assert len(only) == 1 and only[0]["key_id"] == "k2"
+
+
+def test_reassign_key_moves_anonymous_conversations():
+    """配 key 之前产生的匿名会话，人工归置到某个 key 名下。"""
+    anon = store.create(key_id=None, title="匿名时期的会话")
+    store.append_turn(conversation_id=anon["id"], question="旧问题", answer="旧答案")
+    mine = store.create(key_id="k1", title="我的")
+    store.append_turn(conversation_id=mine["id"], question="新问题", answer="新答案", key_id="k1")
+
+    assert store.list_conversations(key_id="k1")["items"] and len(store.list_conversations(key_id="k1")["items"]) == 1
+    assert store.get(anon["id"], key_id="k1") is None            # 归置前打不开
+
+    dry = store.reassign_key(src_key_id=None, dst_key_id="k1", dry_run=True)
+    assert dry["conversations"] == 1 and store.get(anon["id"], key_id="k1") is None
+
+    got = store.reassign_key(src_key_id=None, dst_key_id="k1")
+    assert got["conversations"] == 1 and got["messages"] == 2
+    assert store.get(anon["id"], key_id="k1") is not None
+    assert store.list_conversations(key_id="k1")["items"].__len__() == 2
+    # 消息级 key 也补上了，按人审计口径一致
+    assert {m["key_id"] for m in store.messages(anon["id"])} == {"k1"}
+
+
+def test_reassign_keeps_later_messages_key():
+    """归置只补 NULL，不能覆盖「换人后新写入」的消息归属。"""
+    c = store.create(key_id=None)
+    store.append_turn(conversation_id=c["id"], question="旧", answer="旧答")
+    store.append_turn(conversation_id=c["id"], question="新", answer="新答", key_id="k2")
+    store.reassign_key(src_key_id=None, dst_key_id="k1")
+    keys = [m["key_id"] for m in store.messages(c["id"])]
+    assert keys == ["k1", "k1", "k2", "k2"]
+
+
+def test_rest_message_includes_key_and_month(client):
+    """接口返回里要带 key_id / month，前端与审计脚本都靠它。"""
+    import hashlib
+
+    cid = client.post("/v1/conversations", json={}).json()["id"]
+    store.append_turn(conversation_id=cid, question="q", answer="a", key_id="k1")
+    got = client.get(f"/v1/conversations/{cid}/messages").json()["data"]
+    assert [m["key_id"] for m in got] == ["k1", "k1"]
+    assert all(m["month"] for m in got)
+
+
+def test_rest_messages_hides_foreign_conversation(client, monkeypatch):
+    """B 的 key 读 A 的会话消息：404，不给内容。"""
+    import rag.api as api
+
+    monkeypatch.setattr(api, "API_KEYS", {"key-a", "key-b"})
+    hdr_a = {"Authorization": "Bearer key-a"}
+    cid = client.post("/v1/conversations", json={}, headers=hdr_a).json()["id"]
+    # 建会话时没带 key 归属信息：用存储层补一次，模拟真实的「A 建的会话」
+    store.reassign_key(src_key_id=None, dst_key_id=hashlib.sha256(b"key-a").hexdigest()[:8])
+    store.append_turn(conversation_id=cid, question="A 的隐私", answer="A 的答案",
+                      key_id=hashlib.sha256(b"key-a").hexdigest()[:8])
+
+    resp = client.get(f"/v1/conversations/{cid}/messages",
+                      headers={"Authorization": "Bearer key-b"})
+    assert resp.status_code == 404
+    assert "A 的隐私" not in resp.text

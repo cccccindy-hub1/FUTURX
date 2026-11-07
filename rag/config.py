@@ -1,6 +1,9 @@
 """全局配置。所有可调参数均支持通过环境变量覆盖（或写入项目根目录 .env）。"""
+import hashlib
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -57,22 +60,19 @@ CONTEXT_EXPAND_ENABLED = os.environ.get("CONTEXT_EXPAND_ENABLED", "false").lower
 
 # ---- HTTP 对外接口（OpenAI 兼容层：POST /v1/chat/completions）----
 # 逗号分隔的密钥列表；留空则不校验（仅建议在内网/本机时留空）。
-# 用 set 而非 list：按人发 key 时（例如一个班一千人）每个请求都要查一次，
-# 列表是 O(n) 的字符串比较，集合是 O(1) 哈希查找。
-_API_KEYS_INLINE = [k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()]
+_API_KEYS_INLINE = frozenset(k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip())
+API_KEYS_FILE = os.environ.get("API_KEYS_FILE", "").strip()
+# 密钥文件的重新读取间隔（秒）：0 = 每次都读（不建议），-1 = 只在启动时读一次。
+# 按人发 key 时撤销/轮换是常态，重启服务要中断 30-60 秒；热加载把这件事变成「改文件即生效」。
+API_KEYS_RELOAD_S = float(os.environ.get("API_KEYS_RELOAD_S", "5"))
 
 
-def _load_api_keys_file(path: str) -> list[str]:
-    """从文件读密钥：每行一个，# 开头为注释。
-
-    人数上千后把 key 全塞进 .env 的一行（约 48KB）既难维护也容易被误提交；
-    文件可以单独放到 .env 之外、由部署方管权限。
-    """
+def _read_keys_file(path: str) -> list[str]:
+    """从文件读密钥：每行一个，# 开头为注释。"""
     if not path:
         return []
     p = Path(path).expanduser()
     if not p.is_file():
-        logger.warning("API_KEYS_FILE 指向的文件不存在：%s（只用 API_KEYS）", p)
         return []
     out = []
     for line in p.read_text(encoding="utf-8").splitlines():
@@ -82,7 +82,122 @@ def _load_api_keys_file(path: str) -> list[str]:
     return out
 
 
-API_KEYS = frozenset(_API_KEYS_INLINE + _load_api_keys_file(os.environ.get("API_KEYS_FILE", "")))
+_load_api_keys_file = _read_keys_file        # 兼容旧引用
+
+
+class ApiKeySet:
+    """API key 集合，按文件内容哈希自动重载。
+
+    用 set 而非 list：按人发 key 时（例如一个班一千人）每个请求都要查一次，
+    列表是 O(n) 的字符串比较，集合是 O(1) 哈希查找。
+
+    热加载是这里的关键：1000 人里必然有人泄露 key，而重启服务要中断所有人
+    30-60 秒。改成「文件变了就重读」，撤销/新增/轮换都不再需要重启。
+    """
+
+    def __init__(self, inline: frozenset[str], path: str, reload_s: float) -> None:
+        self._inline = inline
+        self._path = Path(path).expanduser() if path else None
+        self._reload_s = reload_s
+        self._lock = threading.Lock()
+        self._stamp: str | None = None                  # 文件内容哈希（见 load 里的说明）
+        self._next_check = 0.0
+        self._keys: frozenset[str] = frozenset()
+        self.load(force=True)
+
+    # -- 读取 --
+    def load(self, *, force: bool = False) -> None:
+        """按需重读文件；force=True 忽略节流。"""
+        now = time.monotonic()
+        # reload_s <= 0 表示每次都查，不能走节流：monotonic 在同一微秒内可能相等，
+        # 用 `<` 比较会把「刚改完文件」的那次查询挡掉。
+        if not force and self._reload_s > 0 and now < self._next_check:
+            return
+        with self._lock:
+            self._next_check = now + max(0.0, self._reload_s)
+            if self._reload_s < 0 and not force:
+                return
+            stamp, rows = None, []
+            if self._path is not None:
+                try:
+                    raw = self._path.read_bytes()
+                    # 用内容哈希而不是 mtime：文件系统时间戳精度有限，
+                    # 「撤销一把再加一把」大小不变、mtime 也可能落在同一刻度，
+                    # 只靠时间戳会漏掉改动。1000 把 key 约 48KB，哈希开销可忽略。
+                    stamp = hashlib.sha256(raw).hexdigest()
+                except OSError:
+                    stamp = None
+                if stamp is not None and stamp != self._stamp:
+                    rows = [ln.split("#", 1)[0].strip() for ln in raw.decode("utf-8").splitlines()]
+                    rows = [k for k in rows if k]
+                elif stamp is not None:
+                    return                              # 内容没变，什么都不用做
+            else:
+                rows = []
+            self._stamp = stamp
+            if stamp is None and self._path is not None:
+                # 文件被删/不可读：不要静默退回空集合（那等于放开鉴权），保留上一次的集合。
+                # 只在状态变化时打一次日志，否则每个请求都会刷屏。
+                if self._stamp is not None:
+                    logger.error("API_KEYS_FILE 读取失败：%s（沿用上一次的 %d 把 key）",
+                                 self._path, len(self._keys))
+                self._stamp = None
+                return
+            self._keys = frozenset(self._inline | frozenset(rows))
+
+    # -- 对外 --
+    def __contains__(self, item: object) -> bool:
+        self.load()                                     # 每个请求走到这里，节流后才真的 stat
+        return item in self._keys
+
+    def __len__(self) -> int:
+        self.load()
+        return len(self._keys)
+
+    def __bool__(self) -> bool:
+        return len(self) > 0
+
+    def __iter__(self):
+        self.load()
+        return iter(self._keys)
+
+    def __repr__(self) -> str:
+        return f"ApiKeySet({len(self)} keys, file={self._path})"
+
+    # -- 运维 --
+    def reload(self) -> int:
+        self.load(force=True)
+        return len(self._keys)
+
+    @property
+    def path(self) -> Path | None:
+        return self._path
+
+    def file_keys(self) -> frozenset[str]:
+        self.load()
+        return frozenset(_read_keys_file(str(self._path))) if self._path else frozenset()
+
+
+API_KEYS = ApiKeySet(_API_KEYS_INLINE, API_KEYS_FILE, API_KEYS_RELOAD_S)
+
+
+def _check_api_key_config() -> None:
+    """启动自检：显式配了 API_KEYS_FILE 却读不到/为空时拒绝启动。
+
+    这一条防的是运维手滑：文件被误删或路径写错时，静默退回「空集合 = 不鉴权」
+    意味着服务对公网完全敞开，且没人会收到告警。
+    """
+    if not API_KEYS_FILE:
+        return
+    p = Path(API_KEYS_FILE).expanduser()
+    if not p.is_file():
+        raise RuntimeError(f"API_KEYS_FILE 指向的文件不存在：{p}（为避免不鉴权，拒绝启动）")
+    if not _read_keys_file(str(p)) and not _API_KEYS_INLINE:
+        raise RuntimeError(f"API_KEYS_FILE 里没有任何 key：{p}（为避免不鉴权，拒绝启动）")
+
+
+_check_api_key_config()
+
 # 对外暴露的模型名，客户端 model 字段填它即可（实际生成模型由 LLM_MODEL 决定）。
 API_MODEL_NAME = os.environ.get("API_MODEL_NAME", "ai-li-teacher")
 

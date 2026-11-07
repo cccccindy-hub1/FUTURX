@@ -14,6 +14,7 @@ A 的 key 看不到 B 的会话；未配置 API_KEYS 时 key_id 为 None，该�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -21,6 +22,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "rag" / "conversation_db" / "conversations.sqlite3"
@@ -55,11 +58,24 @@ CREATE TABLE IF NOT EXISTS messages (
     sources         TEXT,
     latency_ms      REAL,
     prompt_tokens   INTEGER,
-    completion_tokens INTEGER
+    completion_tokens INTEGER,
+    key_id          TEXT,
+    month           TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_msg_seq ON messages (conversation_id, seq);
 CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages (conversation_id, seq);
 """
+# (key_id, month) 的索引放在 _migrate 里建：老库此时还没有这两列，
+# 写在这里会让 executescript 整段失败，连建表都做不成。
+
+# 后加的列：老库要就地补，不能只改 _SCHEMA（CREATE TABLE IF NOT EXISTS 对已有表不生效）。
+# key_id：这一轮是哪个 API key 问的。会话级已有，但会话可能被改归属（迁移/转让），
+#   消息级记一份才是「当时的调用方」的真实记录，按人审计不依赖会话表。
+# month：YYYY-MM，按周期（月）统计不用每次算时间，直接命中索引。
+_MIGRATIONS = (
+    ("messages", "key_id", "TEXT"),
+    ("messages", "month", "TEXT"),
+)
 
 
 def db_path() -> Path:
@@ -101,9 +117,42 @@ def _connect() -> sqlite3.Connection:
     with _init_lock:                           # 建表只需一次，但多线程同时启动时要串行
         if key not in _ready:
             conn.executescript(_SCHEMA)
+            _migrate(conn)
             _ready.add(key)
     _local.conn, _local.key = conn, key
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """给老库补列并回填。幂等：列已存在则跳过。
+
+    回填规则：
+    - messages.key_id：优先取本会话的 key_id（同一次对话都是同一个人问的）；
+      老数据的会话 key_id 也可能是 NULL，那就保持 NULL。
+    - messages.month：从 created_at 算 YYYY-MM（按本地时区，与使用者的「月份」直觉一致）。
+    """
+    for table, column, ctype in _MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
+        logger.info("会话库迁移：%s.%s 已新增", table, column)
+
+    conn.execute(
+        "UPDATE messages SET key_id = (SELECT key_id FROM conversations c WHERE c.id = messages.conversation_id) "
+        "WHERE key_id IS NULL AND EXISTS (SELECT 1 FROM conversations c "
+        "WHERE c.id = messages.conversation_id AND c.key_id IS NOT NULL)"
+    )
+    # 只补 month 为空的行，避免每次启动重算全表
+    rows = conn.execute("SELECT id, created_at FROM messages WHERE month IS NULL").fetchall()
+    for r in rows:
+        conn.execute("UPDATE messages SET month = ? WHERE id = ?", (_month_of(r["created_at"]), r["id"]))
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_msg_key_month ON messages (key_id, month)")
+
+
+def _month_of(ts: float | None = None) -> str:
+    """时间戳 → 'YYYY-MM'（本地时区）。"""
+    return time.strftime("%Y-%m", time.localtime(_now() if ts is None else ts))
 
 
 def reset_connections() -> None:
@@ -192,8 +241,15 @@ def list_conversations(*, key_id: str | None = None, limit: int = 20,
     return {"items": [_conv(r) for r in rows], "next_cursor": nxt}
 
 
-def messages(conversation_id: str, *, after_seq: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
-    """取消息；after_seq 用于增量拉取（前端断线重连）。"""
+def messages(conversation_id: str, *, after_seq: int | None = None, limit: int = 200,
+             key_id: str | None = None) -> list[dict[str, Any]]:
+    """取消息；after_seq 用于增量拉取（前端断线重连）。
+
+    key_id 不为 None 时校验会话归属，不属于该 key 直接返回空列表。
+    以前只有 API 层校验归属，存储层裸着——任何新接口忘了先查就会串号。
+    """
+    if key_id is not None and get(conversation_id, key_id=key_id) is None:
+        return []
     limit = max(1, min(int(limit), 500))
     sql = "SELECT * FROM messages WHERE conversation_id = ?"
     args: list[Any] = [conversation_id]
@@ -203,6 +259,57 @@ def messages(conversation_id: str, *, after_seq: int | None = None, limit: int =
     sql += " ORDER BY seq ASC LIMIT ?"
     args.append(limit)
     return [_msg(r) for r in _connect().execute(sql, args).fetchall()]
+
+
+def monthly_stats(*, key_id: str | None = None, months: int = 12) -> list[dict[str, Any]]:
+    """按 (key_id, 月) 统计：消息数、提问轮数、平均耗时。
+
+    回答「每人每月用了多少」，走 ix_msg_key_month 索引，比翻 messages 快得多。
+    """
+    sql = ("SELECT key_id, month, COUNT(*) AS messages, "
+           "SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS turns, "
+           "AVG(CASE WHEN role = 'assistant' THEN latency_ms END) AS avg_latency_ms "
+           "FROM messages WHERE month IS NOT NULL")
+    args: list[Any] = []
+    if key_id is not None:
+        sql += " AND key_id = ?"
+        args.append(key_id)
+    sql += " GROUP BY key_id, month ORDER BY month DESC, key_id LIMIT ?"
+    args.append(max(1, int(months)) * (1 if key_id else 500))
+    return [{"key_id": r["key_id"], "month": r["month"], "messages": r["messages"],
+             "turns": r["turns"],
+             "avg_latency_ms": None if r["avg_latency_ms"] is None else round(r["avg_latency_ms"], 1)}
+            for r in _connect().execute(sql, args).fetchall()]
+
+
+def reassign_key(*, src_key_id: str | None, dst_key_id: str, dry_run: bool = False) -> dict[str, int]:
+    """把一批会话（及其消息）改挂到另一个 key。
+
+    用途：配置 API_KEYS 之前产生、key_id 为 NULL 的匿名会话谁都打不开，只能人工归置。
+    src_key_id 传 None 表示选所有 key_id 为 NULL 的会话。
+    """
+    conn = _connect()
+    if src_key_id is None:
+        where, args = "key_id IS NULL", []
+    else:
+        where, args = "key_id = ?", [src_key_id]
+    ids = [r["id"] for r in conn.execute(f"SELECT id FROM conversations WHERE {where}", args).fetchall()]
+    if dry_run or not ids:
+        return {"conversations": len(ids), "messages": 0, "dry_run": int(bool(dry_run))}
+    marks = ",".join("?" * len(ids))
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        n = conn.execute(f"SELECT COUNT(*) AS n FROM messages WHERE conversation_id IN ({marks})",
+                         ids).fetchone()["n"]
+        conn.execute(f"UPDATE conversations SET key_id = ? WHERE id IN ({marks})", [dst_key_id] + ids)
+        # 只补 key_id 为 NULL 的消息，避免覆盖后来「换人后新写入」的记录
+        conn.execute(f"UPDATE messages SET key_id = ? WHERE conversation_id IN ({marks}) AND key_id IS NULL",
+                     [dst_key_id] + ids)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return {"conversations": len(ids), "messages": n, "dry_run": 0}
 
 
 def history(conversation_id: str, *, max_turns: int, max_chars: int | None = None) -> list[tuple[str, str]]:
@@ -270,20 +377,24 @@ def append_turn(*, conversation_id: str, question: str, answer: str, key_id: str
     answer = (answer or "")[:_MAX_CONTENT]
     q = (question or "")[:_MAX_CONTENT]
     title = conv["title"] or _title_of(q)
+    # 消息级也记 key：会话的归属可能被迁移（老数据归置、换人接手），
+    # 而「这一轮当时是谁问的」不该跟着变。
+    owner = key_id if key_id is not None else conv["key_id"]
+    month = _month_of(now)
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute(
             "INSERT INTO messages (id, conversation_id, seq, role, content, created_at, route, status, "
-            "error, search_query, sources, latency_ms, prompt_tokens, completion_tokens) "
-            "VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL)",
-            (uid, conversation_id, seq, q, now, route, status, search_query, "[]"),
+            "error, search_query, sources, latency_ms, prompt_tokens, completion_tokens, key_id, month) "
+            "VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?, ?)",
+            (uid, conversation_id, seq, q, now, route, status, search_query, "[]", owner, month),
         )
         conn.execute(
             "INSERT INTO messages (id, conversation_id, seq, role, content, created_at, route, status, "
-            "error, search_query, sources, latency_ms, prompt_tokens, completion_tokens) "
-            "VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+            "error, search_query, sources, latency_ms, prompt_tokens, completion_tokens, key_id, month) "
+            "VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
             (uuid.uuid4().hex, conversation_id, seq + 1, answer, now, route, status, error,
-             src_json, latency_ms, prompt_tokens, completion_tokens),
+             src_json, latency_ms, prompt_tokens, completion_tokens, owner, month),
         )
         conn.execute(
             "UPDATE conversations SET updated_at = ?, turn_count = turn_count + 1, title = ? WHERE id = ?",
@@ -385,7 +496,8 @@ def _msg(row: sqlite3.Row) -> dict[str, Any]:
             "route": row["route"], "status": row["status"], "error": row["error"],
             "search_query": row["search_query"], "sources": sources,
             "latency_ms": row["latency_ms"], "prompt_tokens": row["prompt_tokens"],
-            "completion_tokens": row["completion_tokens"]}
+            "completion_tokens": row["completion_tokens"],
+            "key_id": row["key_id"], "month": row["month"]}
 
 
 def _title_of(question: str) -> str:
@@ -395,4 +507,4 @@ def _title_of(question: str) -> str:
 
 __all__ = ["db_path", "retention_days", "create", "get", "ensure", "list_conversations", "messages",
            "history", "append_turn", "rename", "set_archived", "delete", "clear_messages",
-           "purge_expired", "reset_connections"]
+           "purge_expired", "reset_connections", "monthly_stats", "reassign_key"]

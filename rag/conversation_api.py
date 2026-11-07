@@ -74,6 +74,9 @@ def _msg_obj(row: dict[str, Any]) -> dict[str, Any]:
         "search_query": row["search_query"],
         "sources": row["sources"],
         "latency_ms": row["latency_ms"],
+        # 审计用：哪个 key 问的（指纹，不是原文）、YYYY-MM
+        "key_id": row.get("key_id"),
+        "month": row.get("month"),
     }
 
 
@@ -122,7 +125,8 @@ def get_conversation(conversation_id: str, request: Request,
         raise _not_found(conversation_id)
     out = _conv_obj(row)
     if include_messages:
-        out["messages"] = [_msg_obj(m) for m in store.messages(conversation_id, limit=limit)]
+        out["messages"] = [_msg_obj(m) for m in store.messages(conversation_id, limit=limit,
+                                                               key_id=_owner(request))]
     return out
 
 
@@ -151,7 +155,9 @@ def list_messages(conversation_id: str, request: Request, after_seq: int | None 
                   limit: int = Query(200, ge=1, le=500)):
     if store.get(conversation_id, key_id=_owner(request)) is None:
         raise _not_found(conversation_id)
-    items = [_msg_obj(m) for m in store.messages(conversation_id, after_seq=after_seq, limit=limit)]
+    # key_id 一起传下去：存储层也校验归属，不只靠上面的 get()
+    items = [_msg_obj(m) for m in store.messages(conversation_id, after_seq=after_seq, limit=limit,
+                                                key_id=_owner(request))]
     return {"object": "list", "data": items,
             "next_cursor": None if len(items) < limit else items[-1]["seq"]}
 

@@ -43,7 +43,11 @@ Authorization: Bearer <API_KEY>
   两者同时存在取并集。**两者都为空时不校验**，该实例内所有调用视为同一匿名身份。
 - 按人发 key（例如一个班上千个）时用 `API_KEYS_FILE`：1000 个 key 塞进 `.env` 一行约 48KB，
   既难维护也容易误提交。生成方式见 12.3。
-- 校验用集合查找（`frozenset`），千级 key 下每次请求仍是 O(1)。
+- **改了密钥文件不用重启**：服务端按文件内容哈希检查，默认 5 秒内生效（`API_KEYS_RELOAD_S`）。
+  撤销/新增/轮换都是「改文件即生效」，见 12.4。
+- 校验用集合查找，千级 key 下每次请求仍是 O(1)。
+- **启动自检**：配了 `API_KEYS_FILE` 但文件不存在或里面没有任何 key 时**拒绝启动**。
+  这是为了防止「文件被误删 → 静默变成不鉴权」。
 - 失败返回 `401`：
 
 ```json
@@ -323,6 +327,12 @@ route  →  (stage)*  →  (materials | delta)*  →  done  →  (followups)?
 | `search_query` | 改写后的检索问题 | — |
 | `sources` | `[]` | 引用列表 |
 | `latency_ms` | — | 本轮耗时 |
+| `key_id` | 发起这次调用的 API key 指纹 | 同 user |
+| `month` | `YYYY-MM`（本地时区） | 同 user |
+
+`key_id` 在消息级也记一份，而不是只靠会话的归属：会话可能被迁移（老数据归置、换人接手），
+但「这一轮当时是谁问的」不该跟着变。会话被 `reassign_key` 改归属时，只补 `key_id IS NULL`
+的消息，不会覆盖后来新写入的记录。
 
 重试同一请求按 `request_id` 去重，不会插两条。
 
@@ -396,11 +406,15 @@ route  →  (stage)*  →  (materials | delta)*  →  done  →  (followups)?
     "seq": 1, "role": "user", "content": "...", "created_at": 1762500000,
     "route": "course", "status": "ok", "error": null,
     "search_query": "数据资产估值有哪些方法？",
-    "sources": [], "latency_ms": null
+    "sources": [], "latency_ms": null,
+    "key_id": "c72f2e45", "month": "2026-11"
   }],
   "next_cursor": 2
 }
 ```
+
+`key_id` 是这一轮提问所用 API key 的指纹（sha256 前 8 位，**不是 key 原文**），
+`month` 是 `YYYY-MM`（本地时区）。两者都按人/按月留档，重算统计不用扫时间戳。
 
 `next_cursor` 是**最后一条的 seq**，下一轮直接当 `after_seq` 传。
 分页判断：`len(data) == limit` 说明可能还有。
@@ -563,22 +577,66 @@ python scripts/gen_api_keys.py --count 1000 --keys-file /etc/futurx/api_keys.txt
 
 ```bash
 echo 'API_KEYS_FILE=/etc/futurx/api_keys.txt' >> .env
-systemctl restart futurx
+systemctl restart futurx        # 只有第一次要重启，之后改文件即可
 ```
 
 - 密钥文件权限自动设为 `600`，内容每行一个 key。
 - 分配表写到 `logs/api_keys_<时间>.json` 与 `.csv`（`logs/` 已忽略），**这两份是唯一能反查
-  学号与 key 对应关系的地方**，务必在分发前妥善保存。
+  学号与 key 对应关系的地方**，务必在分发前妥善保存（注意：表里是明文 key）。
 - 追加生成时是「已有 + 新增」，不会重复造 key。
-- **key 泄露后的处理**：从文件里删掉那一行 → 重启。该 key 立即失效，
-  但它历史创建的会话仍归属该 key_id，删除 key 后无人能再访问（可人工改 `key_id` 或删除）。
 
-### 12.4 会话归属与 key 的关系
+### 12.4 撤销 / 轮换（热加载，不重启）
 
-会话记的是 `key_id`（key 的 sha256 前 8 位），不是 key 原文。因此：
+服务端按**文件内容哈希**检查密钥文件，默认每 5 秒一次（`API_KEYS_RELOAD_S`），
+改动后 5 秒内生效，**不需要重启，不中断正在进行的对话**。
+
+```bash
+# 按学号撤销（查 logs/api_keys_*.json 找到对应的 key）
+python scripts/gen_api_keys.py revoke --student 2023101 --keys-file /etc/futurx/api_keys.txt
+
+# 按明文撤销
+python scripts/gen_api_keys.py revoke --key sk-futurx-xxxx --keys-file /etc/futurx/api_keys.txt
+
+# 按指纹撤销（日志里看到的 key_id，只知道 8 位也能撤）
+python scripts/gen_api_keys.py revoke --key-id c72f2e45 --keys-file /etc/futurx/api_keys.txt
+
+# 先看看会删什么
+python scripts/gen_api_keys.py revoke --student 2023101 --keys-file /etc/futurx/api_keys.txt --dry-run
+```
+
+改动前自动备份为 `api_keys.txt.bak.<时间戳>`。
+
+> **注意**：50 分钟内改完不重启也能生效，但 `API_KEYS_RELOAD_S=-1` 可关掉热加载
+> （只在启动时读一次）；`0` 表示每个请求都检查（仅调试用）。
+
+### 12.5 会话归属与 key 的关系
+
+会话与消息都记 `key_id`（key 的 sha256 前 8 位），不记 key 原文。因此：
 
 - 轮换一把 key（删旧建新）= 换了一个人，**旧会话看不到**。
-- 想让学生换 key 后仍看到历史，只能保持 key 不变，或人工改库里那一列的 `key_id`。
+- 想让学生换 key 后仍看到历史，只能保持 key 不变，或人工改库里 `key_id`。
+- 撤销一把 key 后，它创建的会话仍归属那个 `key_id`，**无人能再访问**（可 `reassign_key` 或删除）。
+
+配 `API_KEYS` 之前产生的匿名会话（`key_id` 为 NULL）谁都打不开，可用存储层函数归置：
+
+```python
+from rag import conversation as c
+c.reassign_key(src_key_id=None, dst_key_id="c72f2e45", dry_run=True)   # 先看数量
+c.reassign_key(src_key_id=None, dst_key_id="c72f2e45")
+```
+
+### 12.6 按人 / 按月审计
+
+`messages` 表存 `key_id` 与 `month`（YYYY-MM），走 `ix_msg_key_month` 索引：
+
+```python
+from rag import conversation as c
+c.monthly_stats()                    # 全部人、全部月份
+c.monthly_stats(key_id="c72f2e45")   # 某一把 key 的逐月用量
+```
+
+返回每行 `{key_id, month, messages, turns, avg_latency_ms}`。
+`turns` 是提问轮数（`messages` 的一半，含失败轮）。
 
 ---
 
