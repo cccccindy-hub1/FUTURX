@@ -112,17 +112,25 @@ class UnifiedService:
         question = question.strip()
         history = (rec.qa_meta.get("history") if rec is not None else None) or None
         t0 = time.perf_counter()
-        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
-        if solved is not None:
-            solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
-            solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
-            return solved
-        solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client, history=history)
-        if solve:
-            d = self._solve_route(d)
         orig = question
-        question = self._standalone(orig, d, rec)                  # 路由之后的检索、作答、追问都用补全后的问题
+        solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        d: RouteDecision | None = None
+        if solved is None:
+            solve = self._solve_flag(question)
+            d = classify(question, self.router_client, history=history)
+            if solve:
+                d = self._solve_route(d)
+            question = self._standalone(orig, d, rec)              # 路由之后的检索、作答、追问都用补全后的问题
+            if question != orig:
+                solved = self._prematch(question)                  # 指代补全后带上了题干（“讲解这道题”）：再查一次题库，0 次调用
+        if solved is not None:
+            if self._wants_explain(orig, question):
+                return self._explain(orig, solved, t0, d)          # 要讲解：参考答案 + 课程讲解
+            solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
+            if d is not None:
+                solved["trace"]["router"] = d.to_dict()
+            solved["followups"] = self._followups(orig, solved)    # 命中题库：零调用模板
+            return solved
         out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                "answer": None, "sources": [], "status": "ok"}
         trace: dict[str, Any] = {"router": d.to_dict()}
@@ -240,30 +248,50 @@ class UnifiedService:
         question = question.strip()
         history = rec.qa_meta.get("history") or None
         t0 = time.perf_counter()
+        orig = question
         solved = self._prematch(question)                          # 解题先查题库：命中就不路由、不调用任何模型
+        d: RouteDecision | None = None
+        solve: bool | str = False
+        if solved is None:
+            solve = self._solve_flag(question)
+            d = classify(question, self.router_client, history=history)
+            if solve:
+                d = self._solve_route(d)
+            question = self._standalone(orig, d, rec)              # 路由之后的检索、作答、追问都用补全后的问题
+            if question != orig:
+                solved = self._prematch(question)                  # 指代补全后带上了题干（“讲解这道题”）：再查一次题库，0 次调用
+        explain = None
         if solved is not None:
-            solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
-            yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
-                   "reason": solved["reason"], "router_s": 0.0}
-            yield {"type": "done", **{k: solved.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
-                   "trace": solved["trace"]}
-            got = self._followups(question, solved)                # exam 命中题库：零调用模板
-            if got:
-                solved["followups"] = got
-                yield {"type": "followups", "items": got}
-            rec.pending_out = dict(solved)
-            return
-        solve = self._solve_flag(question)
-        d: RouteDecision = classify(question, self.router_client, history=history)
-        if solve:
-            d = self._solve_route(d)
-        question = self._standalone(question, d, rec)              # 路由之后的检索、作答、追问都用补全后的问题
-        yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
-               "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
-        if d.combined and not self._available(d.routes):
+            if self._wants_explain(orig, question):
+                explain = solved                                   # 要讲解：参考答案 + 课程讲解（下面走课程流式）
+            else:
+                solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
+                if d is not None:
+                    solved["trace"]["router"] = d.to_dict()
+                yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
+                       "reason": solved["reason"], "router_s": 0.0 if d is None else round(d.latency_s, 3)}
+                yield {"type": "done", **{k: solved.get(k) for k in ("route", "routes", "complexity", "status", "answer", "sources", "exam")},
+                       "trace": solved["trace"]}
+                got = self._followups(orig, solved)                # exam 命中题库：零调用模板
+                if got:
+                    solved["followups"] = got
+                    yield {"type": "followups", "items": got}
+                rec.pending_out = dict(solved)
+                return
+        if explain is not None:
+            solve = "explain"
+            router_s = 0.0 if d is None else round(d.latency_s, 3)
+            d = RouteDecision("course", "simple", "题库命中，按课程讲解", "prematch", 0.0, routes=["course"])
+            question = self._explain_question(explain)
+            yield {"type": "route", "route": "course", "routes": ["exam", "course"], "complexity": "simple", "count": 1,
+                   "chapter": None, "reason": d.reason, "router_s": router_s}
+        else:
+            yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
+                   "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
+        if explain is None and d.combined and not self._available(d.routes):
             yield from self._stream_combined(question, d, t0, rec)
             return
-        if d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None:
+        if explain is None and (d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None):
             out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                    "answer": None, "sources": [], "status": "ok", "routes": list(d.routes)}
             trace: dict[str, Any] = {"router": d.to_dict()}
@@ -337,19 +365,25 @@ class UnifiedService:
                         continue
                     res = result_to_json(val)
                     trace = {"router": d.to_dict(), "course": res.pop("trace", None)}
+                    if explain is not None:
+                        trace["prematch"] = explain["trace"]["prematch"]
                     trace["total_s"] = round(time.perf_counter() - t0, 4)
                     ans = res.get("answer")
                     if ans:
                         status, text, sources = "ok", ans.get("text"), ans.get("sources", [])
                     else:
                         status, text, sources = "insufficient", config.ADAPTIVE_INSUFFICIENT_TEXT, []
+                    routes = ["exam", "course"] if explain is not None else [d.route]
+                    extra = {"routes": routes, "exam": explain["exam"], "explain": True} if explain is not None else {}
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
                            "answer": text, "sources": sources,
-                           "practice": self._practice(res.get("selected_concepts") or []), "trace": trace}
-                    got = self._followups(question, {"route": d.route, "status": status, "answer": text, "exam": None})
+                           "practice": [] if explain is not None else self._practice(res.get("selected_concepts") or []),
+                           "trace": trace, **extra}
+                    got = self._followups(orig if explain is not None else question,
+                                          {"route": d.route, "status": status, "answer": text, "exam": None})
                     if got:
                         yield {"type": "followups", "items": got}
-                    rec.pending_out = {"route": d.route, "routes": [d.route], "complexity": d.complexity,
+                    rec.pending_out = {"route": d.route, "routes": routes, "complexity": d.complexity,
                                        "status": status, "answer": text, "sources": sources,
                                        "followups": got or [], "trace": trace}
                 else:
@@ -544,6 +578,41 @@ class UnifiedService:
 
 
     # ---------------------------------------------------------------- 解题：先查题库
+    def _wants_explain(self, *questions: str) -> bool:
+        """命中题库后学生要的是讲解（怎么理解 / 讲解 / 为什么……）而不只是答案；课程库不可用时退回只给答案。"""
+        if self.course_ctx is None or self.course_llm is None:
+            return False
+        from .exam.solve import wants_explanation
+        return any(wants_explanation(q) for q in questions if q)
+
+    def _explain_question(self, solved: dict) -> str:
+        """交给课程作答的问题：程序拼上题干、选项、参考答案与评分要点（讲解必须与参考答案一致）。"""
+        qv = (solved.get("exam") or {}).get("questions") or [{}]
+        v = qv[0]
+        opts = v.get("options") or {}
+        lines = [f"请从课程角度讲解这道{v.get('qtype_cn') or ''}题：{v.get('stem', '')}"]
+        if opts:
+            lines.append("选项：" + "；".join(f"{k}. {opts[k]}" for k in sorted(opts)))
+        lines.append(f"参考答案：{v.get('answer', '')}")
+        if v.get("analysis"):
+            lines.append(f"评分要点与解析：{v['analysis']}")
+        return "\n".join(lines)
+
+    def _explain(self, orig: str, solved: dict, t0: float, d: "RouteDecision | None") -> dict[str, Any]:
+        """非流式：题库命中 + 要讲解 → 课程讲解（选概念 + 筛选 + 作答；路由已跳过或已用于补全指代），附上题目与参考答案。"""
+        out: dict[str, Any] = {"route": "course", "routes": ["exam", "course"], "complexity": "simple",
+                               "reason": "题库命中，按课程讲解", "answer": None, "sources": [], "status": "ok",
+                               "count": 1, "chapter": None, "explain": True, "exam": solved["exam"]}
+        trace: dict[str, Any] = {"prematch": solved["trace"]["prematch"]}
+        if d is not None:
+            trace["router"] = d.to_dict()
+        self._course(self._explain_question(solved), out, trace, solve="explain")
+        out["exam"] = solved["exam"]
+        trace["total_s"] = round(time.perf_counter() - t0, 4)
+        out["trace"] = trace
+        out["followups"] = self._followups(orig, out)
+        return out
+
     def _solve_flag(self, question: str) -> bool:
         """带具体题干的解题问题（没命中题库时才会走到这里）：课程作答的提示词因此追加“先给结论”一条。"""
         from .exam.solve import is_solve_question
@@ -561,8 +630,8 @@ class UnifiedService:
         耗时 ms 级，写进 trace.prematch；命中时 0 次模型调用（连路由也不调）。没命中返回 None，走原来的路由。"""
         if self.exam is None:
             return None
-        from .exam.solve import StemMatcher, is_solve_question
-        if not is_solve_question(question):
+        from .exam.solve import StemMatcher, is_prematch_candidate
+        if not is_prematch_candidate(question):
             return None
         if self._stems is None:
             self._stems = StemMatcher(self.exam.items)

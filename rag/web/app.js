@@ -437,7 +437,8 @@ async function send() {
       });
       const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
       // 试卷库结果：题目、选项和默认折叠的答案由下面的结构化列表渲染，气泡里只留一句提示，避免题干重复显示
-      text = examQs.length ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
+      // 题库命中且要讲解（explain）：正文是课程讲解，题目与参考答案仍由下面的折叠块给出
+      text = examQs.length && !ev.explain ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
       if (ev.status && ev.status !== 'ok') bubble.classList.add('note');
       paint();
       if (examQs.length) body.appendChild(examList(examQs, '', true));
@@ -456,7 +457,7 @@ async function send() {
       }
       if (ev.practice && ev.practice.length) body.appendChild(practiceList(ev.practice));
       body.appendChild(meta());
-      if (ev.status === 'ok' && !(ev.exam && ev.exam.questions && ev.exam.questions.length)) pushHistory(q, ev.answer || '');   // 失败 / 拒答 / 找题不进历史
+      if (ev.status === 'ok' && (ev.explain || !(ev.exam && ev.exam.questions && ev.exam.questions.length))) pushHistory(q, ev.answer || '');   // 失败 / 拒答 / 找题不进历史
       scrollBottom();
     } else if (ev.type === 'followups') {
       // 追问在 done 之后单独一帧到达（后端不阻塞主答案）。点击填入输入框并自动发送。
