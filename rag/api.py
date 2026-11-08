@@ -86,6 +86,7 @@ class ChatCompletionRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=80)
     # 非标准扩展：true = 不落库（临时试探性提问）
     store: bool = True
+    user: str | None = None          # OpenAI 标准字段：终端用户标识（记入永久问答记录，限长 64、只含 [A-Za-z0-9_-]）
 
 
 def _text_of(content: Any) -> str:
@@ -194,9 +195,24 @@ def _chunk(cid: str, created: int, model: str, delta: dict, finish: str | None =
     }
 
 
+def _qa_meta(req: "ChatCompletionRequest", request: Request, history: list[tuple[str, str]],
+             conversation_id: str | None) -> dict:
+    """永久问答记录用：user（标准字段）/ X-User-Id；会话号取 X-Session-Id，没有就用 conversation_id；本轮实际用到的历史。"""
+    try:
+        from .qa_store import clean_id, request_meta
+
+        meta = request_meta(request.headers, body_user=req.user,
+                            history=[{"role": r, "content": c} for r, c in history or []])
+        if not meta.get("session_id") and conversation_id:
+            meta["session_id"] = clean_id(conversation_id)
+        return meta
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _log(question: str, request: Request, cid: str, model: str, answer: str, sources: list,
          t0: float, *, status: str = "ok", error: str | None = None,
-         first_at: float | None = None) -> None:
+         first_at: float | None = None, meta: dict | None = None) -> None:
     """OpenAI 兼容层的轻量调用日志（route 固定 thesis：本接口只走论文 RAG）。日志失败不影响响应。"""
     try:
         from .usage_log import simple_record
@@ -205,7 +221,8 @@ def _log(question: str, request: Request, cid: str, model: str, answer: str, sou
                       route="thesis", status=status, answer=answer, sources=sources,
                       started=t0, error=error, request_id=cid,
                       stages={"answer": round((time.time() - t0) * 1000, 1)},
-                      time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1))
+                      time_to_first_delta_ms=None if first_at is None else round((first_at - t0) * 1000, 1),
+                      qa_meta=meta)
     except Exception:  # noqa: BLE001 - 日志失败不影响响应
         pass
 
@@ -281,12 +298,13 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
     conversation_id = _resolve_conversation(req.conversation_id, request, req.store)
     history = _merge_history(_server_history(conversation_id), client_history)
     extra_headers = {"X-Conversation-Id": conversation_id} if conversation_id else None
+    meta = _qa_meta(req, request, history, conversation_id)
 
     if req.stream:
         # 只有明确没有 LLM 客户端时才提前 503；替身服务（测试或其它实现）不声明 llm 属性时照常走流。
         if getattr(svc, "llm", _MISSING) is None:
             # 配置缺失是启动期事实，直接 503，别让客户端等一个必然失败的流
-            _log(question, request, cid, model, "", [], t0, status="unavailable", error="RuntimeError")
+            _log(question, request, cid, model, "", [], t0, status="unavailable", error="RuntimeError", meta=meta)
             raise HTTPException(status_code=503, detail={"error": {
                 "message": "未配置 LLM_API_KEY，服务只能检索、不能生成", "type": "service_unavailable"}})
 
@@ -329,7 +347,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
                         {"error": {"message": f"生成中断：{e}", "type": "upstream_error"}}, ensure_ascii=False
                     ).encode() + b"\n\n"
                     _log(question, request, cid, model, "".join(parts), sources, t0,
-                         status="error", error=type(e).__name__, first_at=first_at)
+                         status="error", error=type(e).__name__, first_at=first_at, meta=meta)
                     save("error", type(e).__name__)
                     return
             except GeneratorExit:                 # 客户端断开：保留已生成的半截，标记 partial
@@ -339,7 +357,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
                 yield b"data: " + json.dumps(
                     {"error": {"message": f"检索失败：{type(e).__name__}", "type": "upstream_error"}},
                     ensure_ascii=False).encode() + b"\n\n"
-                _log(question, request, cid, model, "", [], t0, status="error", error=type(e).__name__)
+                _log(question, request, cid, model, "", [], t0, status="error", error=type(e).__name__, meta=meta)
                 save("error", type(e).__name__)
                 return
             # 末帧附带来源，标准客户端会忽略这个额外字段
@@ -349,7 +367,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
                 final["conversation_id"] = conversation_id
             yield b"data: " + json.dumps(final, ensure_ascii=False).encode() + b"\n\n"
             yield b"data: [DONE]\n\n"
-            _log(question, request, cid, model, "".join(parts), sources, t0, first_at=first_at)
+            _log(question, request, cid, model, "".join(parts), sources, t0, first_at=first_at, meta=meta)
             save("ok")
 
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **(extra_headers or {})}
@@ -362,12 +380,12 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
     search_query = _search_query(question, history, svc)
     ans, sources, _docs = svc.answer(question, top_k, history=history, search_query=search_query)
     if ans is None:
-        _log(question, request, cid, model, "", sources, t0, status="unavailable")
+        _log(question, request, cid, model, "", sources, t0, status="unavailable", meta=meta)
         raise HTTPException(
             status_code=503,
             detail={"error": {"message": "未配置 LLM_API_KEY，服务只能检索、不能生成", "type": "service_unavailable"}},
         )
-    _log(question, request, cid, model, ans, sources, t0)
+    _log(question, request, cid, model, ans, sources, t0, meta=meta)
     _save_turn(conversation_id, question=question, answer=ans, request=request, route="thesis",
                status="ok", error=None, search_query=search_query, sources=sources,
                latency_ms=time.time() - t0, request_id=cid)

@@ -67,9 +67,31 @@ if (keyInput) {
   });
 }
 
+/* ---- 用户标识：随机 ID 存在本浏览器（长期），随请求放在 X-User-Id 头里，只用于永久问答记录（rag.qa_store）。多轮对话由 conversation_id 负责 ---- */
+const UID_STORE = 'futurx_user_id';
+let sessionUid = '';
+function randomId(prefix) {
+  let s = '';
+  try {
+    const a = new Uint8Array(12);
+    crypto.getRandomValues(a);
+    s = Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { s = Math.random().toString(16).slice(2) + Date.now().toString(16); }
+  return `${prefix}-${s}`;
+}
+function userId() {
+  try {
+    let v = localStorage.getItem(UID_STORE);
+    if (!v || !/^[A-Za-z0-9_-]{1,64}$/.test(v)) { v = randomId('u'); localStorage.setItem(UID_STORE, v); }
+    return v;
+  } catch { return sessionUid || (sessionUid = randomId('u')); }   // 隐私模式：本页面生命周期内稳定
+}
+
 /* ---- 探活 ---- */
 function setStatus(ok, text) {
   statusText.textContent = text;
+  const st = document.getElementById('status');
+  if (st) st.title = text;                      // 窄屏只显示圆点时，悬停 / 长按仍能看到文字
   statusDot.classList.toggle('off', !ok);
 }
 
@@ -128,7 +150,7 @@ function sourceCard(i, s, ctx) {
 
   const num = document.createElement('span');
   num.className = 'src-num';
-  num.textContent = '来源' + (i + 1);
+  num.textContent = `[${i + 1}]`;
 
   const path = document.createElement('span');
   path.className = 'src-path';
@@ -327,8 +349,10 @@ function showError(text) {
 
 /* 把 [n] -> 来源路径 填进 cites，正文渲染前必须先调用，否则引用没有悬停提示 */
 function fillCites(sources, cites) {
-  (sources || []).forEach((s) => {
-    if (s && s.n !== undefined) cites.set(Number(s.n), s.path || s.title || s.source || '');
+  (sources || []).forEach((s, i) => {
+    if (!s) return;
+    if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || s.source || '');
+    else cites.set(i + 1, s.section ? `${s.source} · ${s.section}` : (s.source || ''));   // 论文库来源没有 n：按顺序编号，与正文 [n] 对应
   });
   return cites;
 }
@@ -480,7 +504,8 @@ async function send() {
       fillCites(sources, cites);
       const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
       // 试卷库结果：题目、选项和默认折叠的答案由下面的结构化列表渲染，气泡里只留一句提示，避免题干重复显示
-      text = examQs.length ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
+      // 题库命中且要讲解（explain）：正文是课程讲解，题目与参考答案仍由下面的折叠块给出
+      text = examQs.length && !ev.explain ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
       if (ev.status && ev.status !== 'ok') bubble.classList.add('note');
       paint();
       appendAnswerParts(body, ev, cites);
@@ -503,6 +528,7 @@ async function send() {
 
   try {
     const headers = authHeaders({ 'Content-Type': 'application/json' });
+    headers['X-User-Id'] = userId();                                  // 永久问答记录用的浏览器标识
     const payload = { question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false };
     if (conversationId) payload.conversation_id = conversationId;   // 不传就会每轮新建一个会话
     const r = await fetch('/auto/ask/stream', {

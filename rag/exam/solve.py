@@ -29,6 +29,9 @@ SOLVE_SHELLS = (
     r"这道题(?:怎么(?:做|答|选)|选什么|的答案|答案)?", r"(?:答案|解析)(?:是什么|是啥|是多少)?", r"参考答案", r"选哪个", r"选什么",
 )
 _SHELL_RE = re.compile("(?:" + "|".join(SOLVE_SHELLS) + ")")
+# 讲解类外壳：只用于剥离题干（预匹配），不参与 is_solve_question 的判定（否则普通课程问题也会被当成解题、改动课程提示词）
+_EXPLAIN_RE = re.compile(r"(?:从课程(?:的)?角度[，,]?\s*)?(?:请|帮我|帮忙|麻烦)?(?:讲解|讲讲|讲一下|解释|分析|理解)(?:一下)?(?:这道题|这个题|这题)?"
+                         r"|这道题(?:怎么|如何)理解|(?:怎么|如何)理解(?:这道题|这个题|这题)?")
 _SHELL_WORDS = ("判断", "这句话", "正确吗", "对吗", "对不对", "是否正确", "名词解释", "这道题", "这个题", "这题", "答案", "解析", "怎么做", "选什么", "选哪个", "帮我做", "解答")
 _NUM_PREFIX = re.compile(r"^(?:第\s*\d{1,3}\s*[题道]|[（(]?\d{1,3}[）).、．.])")
 _TYPE_PREFIX = re.compile(r"^(?:【[^】]{1,12}】|(?:单选题|多选题|选择题|判断题|名词解释|简答题|论述题|案例题)[：:])")
@@ -51,7 +54,7 @@ def strip_shell(question: str) -> tuple[str, bool]:
         rest = _TYPE_PREFIX.sub("", _NUM_PREFIX.sub("", rest.strip())).strip()
         if rest == prev:
             break
-    rest = _SHELL_RE.sub(" ", rest)
+    rest = _SHELL_RE.sub(" ", _EXPLAIN_RE.sub(" ", rest))
     rest = re.sub(r"^\s*(?:请|帮我|帮忙|麻烦|下面|以下|这道题|这个题)\s*", "", rest)
     return rest.strip(), had
 
@@ -64,6 +67,21 @@ def is_solve_question(question: str) -> bool:
     """带具体题干的解题问题：出现解题外壳，且剩余题干 ≥12 个字，且不是“出题 / 找题”的说法。"""
     rest, had = strip_shell(question)
     return had and len(normalize(rest)) >= SOLVE_MIN_CHARS and not any(w in question for w in _FIND_WORDS)
+
+
+# 要讲解而不只是要答案：命中题库后先给参考答案，再走课程流程讲解
+EXPLAIN_WORDS = ("怎么理解", "如何理解", "讲解", "讲讲", "讲一下", "解释", "为什么", "为啥", "分析一下", "分析这", "从课程角度", "理解一下")
+
+
+def wants_explanation(question: str) -> bool:
+    return any(w in (question or "") for w in EXPLAIN_WORDS)
+
+
+def is_prematch_candidate(question: str) -> bool:
+    """值得去题库预匹配的问题：解题问题，或要讲解且带着一段题干（≥12 字）；出题 / 找题的说法除外。"""
+    rest, had = strip_shell(question)
+    return (had or wants_explanation(question)) and len(normalize(rest)) >= SOLVE_MIN_CHARS \
+        and not any(w in question for w in _FIND_WORDS)
 
 
 def _ngrams(s: str) -> set[str]:

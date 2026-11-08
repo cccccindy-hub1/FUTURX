@@ -75,3 +75,6 @@ rag/chroma_db.empty_bak/
 
 # ---- 调用日志（含用户真实问答全文，public 仓库绝不能进）----
 logs/
+
+# 问答永久记录（SQLite，含用户提问与回答，不入库）；只忽略仓库根的 data/，不影响 rag/web/data/
+/data/

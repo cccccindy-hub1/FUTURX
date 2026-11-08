@@ -19,7 +19,7 @@ EXAM_STUDENT_SET = Path(os.environ.get("EXAM_STUDENT_SET", OntologyPaths(COURSE_
 # 11.2 版教材：题库第4章《数据政策》对应教材第4章；题库第11章《数据工程师》教材没有，只跨章挂接
 EXAM_CONCEPT_TABLE = Path(os.environ.get("EXAM_CONCEPT_TABLE", OntologyPaths(COURSE_ONTO_ROOT).concept_xlsx))
 # 题库版本号写入 question_id，换版本时 id 整体换代
-EXAM_BANK_VERSION = os.environ.get("EXAM_BANK_VERSION", "1031")
+EXAM_BANK_VERSION = os.environ.get("EXAM_BANK_VERSION", "1107")
 
 # ---- 输出（与 rag/chroma_db、rag/course_cache 分开）----
 EXAM_CACHE_DIR = Path(os.environ.get("EXAM_CACHE_DIR", RAG_DIR / "exam_cache"))

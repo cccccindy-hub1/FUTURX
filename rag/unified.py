@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
-from . import usage_log
+from . import qa_store, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
 from .router import RouteDecision, classify
@@ -99,6 +99,21 @@ def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
                                reasoning_effort="none", timeout=CONTEXTUALIZE_TIMEOUT)
 
 
+def _qa_ids(fn, request: Request, conversation_id: str | None) -> dict:
+    """永久问答记录（rag.qa_store）的调用方标识：X-User-Id（网页随机 ID）；会话号取 X-Session-Id，没有就用 conversation_id。
+    只在服务实现接受这两个参数时才传（测试替身 / 其它实现的 ask 签名里没有它们）。"""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "user_id" not in params or "session_id" not in params:
+        return {}
+    meta = qa_store.request_meta(request.headers)
+    return {"user_id": meta["user_id"], "session_id": meta["session_id"] or qa_store.clean_id(conversation_id)}
+
+
 def _save_turn(conversation_id: str | None, out: dict, request: Request) -> None:
     """把统一入口的一轮结果落库；失败只记日志。"""
     if not conversation_id:
@@ -129,7 +144,7 @@ def auto_ask(req: AutoAskRequest, request: Request):
     context = _history_messages(conversation_id)
     try:
         out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                      history=context)
+                      history=context, **_qa_ids(svc.ask, request, conversation_id))
     except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
@@ -167,7 +182,7 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
     def gen():
         final: dict | None = None
         events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                                history=context)
+                                history=context, **_qa_ids(svc.ask_stream, request, conversation_id))
         try:
             for ev in events:
                 if ev.get("type") == "done":
@@ -254,22 +269,30 @@ class UnifiedService:
         return bad
 
     def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-            key_id: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
+            key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
+            session_id: str | None = None) -> dict[str, Any]:
         """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。
-        history：之前几轮的 [{"role","content"}]，只作为作答上下文，不参与检索与路由判断。"""
+        history：之前几轮的 [{"role","content"}]，只作为作答上下文，不参与检索与路由判断。
+        user_id/session_id：永久问答记录（rag.qa_store）用；都可省略。"""
         with usage_log.record(question, origin, key_id) as rec:
-            out = self._ask(question, top_k, history=history)
+            rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
+            out = self._ask(question, top_k, history=history, rec=rec)
             rec.finish(out)
             return out
 
-    def _ask(self, question: str, top_k: int | None = None, *, history: list[dict] | None = None) -> dict[str, Any]:
+    def _ask(self, question: str, top_k: int | None = None, *, history: list[dict] | None = None,
+             rec=None) -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
         # 路由 / 题库匹配用「独立问题」：把「那它适用什么情形」补全成完整问句，
         # 否则只有指代的追问会被路由判成 off_topic 直接拒答。
         routed_q = _standalone_question(question, history, self.lib_llm)
+        if rec is not None and routed_q != question:
+            rec.qa_meta["standalone"] = routed_q
         solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
+            if self._wants_explain(question, routed_q):
+                return self._explain(question, solved, t0, history)   # 要讲解：参考答案 + 课程讲解
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
             return solved
@@ -343,8 +366,8 @@ class UnifiedService:
             return []
 
     def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
-                   key_id: str | None = None,
-                   history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
+                   key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
+                   session_id: str | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
@@ -358,6 +381,7 @@ class UnifiedService:
         生成器内设置的 contextvar 会被丢弃（流式日志只剩第一条 route 调用）。所以整条链都显式传 rec，
         不依赖 contextvar。"""
         rec = usage_log.start(question, origin, key_id)
+        rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
         inner = self._ask_stream(question, top_k, rec, history)
         try:
             while True:
@@ -386,11 +410,15 @@ class UnifiedService:
 
     def _ask_stream(self, question: str, top_k: int | None, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
         question = question.strip()
+        orig = question
         t0 = time.perf_counter()
         # 同 _ask：路由与题库匹配用补全后的独立问题，作答与检索资料仍对应本轮原话。
         routed_q = _standalone_question(question, history, self.lib_llm)
+        if routed_q != question:
+            rec.qa_meta["standalone"] = routed_q
         solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
-        if solved is not None:
+        explain = solved if solved is not None and self._wants_explain(question, routed_q) else None
+        if solved is not None and explain is None:
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
                    "reason": solved["reason"], "router_s": 0.0}
@@ -402,16 +430,23 @@ class UnifiedService:
                 yield {"type": "followups", "items": got}
             rec.pending_out = dict(solved)
             return
-        solve = self._solve_flag(routed_q)
-        d: RouteDecision = classify(routed_q, self.router_client)
-        if solve:
-            d = self._solve_route(d)
-        yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
-               "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
-        if d.combined and not self._available(d.routes):
+        if explain is not None:                                    # 题库命中 + 要讲解：路由跳过，直接走课程流式讲解
+            solve: bool | str = "explain"
+            d = RouteDecision("course", "simple", "题库命中，按课程讲解", "prematch", 0.0, routes=["course"])
+            question = self._explain_question(explain)
+            yield {"type": "route", "route": "course", "routes": ["exam", "course"], "complexity": "simple", "count": 1,
+                   "chapter": None, "reason": d.reason, "router_s": 0.0}
+        else:
+            solve = self._solve_flag(routed_q)
+            d = classify(routed_q, self.router_client)
+            if solve:
+                d = self._solve_route(d)
+            yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
+                   "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
+        if explain is None and d.combined and not self._available(d.routes):
             yield from self._stream_combined(question, d, t0, rec, history)
             return
-        if d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None:
+        if explain is None and (d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None):
             out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                    "answer": None, "sources": [], "status": "ok", "routes": list(d.routes)}
             trace: dict[str, Any] = {"router": d.to_dict()}
@@ -485,19 +520,25 @@ class UnifiedService:
                         continue
                     res = result_to_json(val)
                     trace = {"router": d.to_dict(), "course": res.pop("trace", None)}
+                    if explain is not None:
+                        trace["prematch"] = explain["trace"]["prematch"]
                     trace["total_s"] = round(time.perf_counter() - t0, 4)
                     ans = res.get("answer")
                     if ans:
                         status, text, sources = "ok", ans.get("text"), ans.get("sources", [])
                     else:
                         status, text, sources = "insufficient", config.ADAPTIVE_INSUFFICIENT_TEXT, []
+                    routes = ["exam", "course"] if explain is not None else [d.route]
+                    extra = {"routes": routes, "exam": explain["exam"], "explain": True} if explain is not None else {}
                     yield {"type": "done", "route": d.route, "complexity": d.complexity, "status": status,
                            "answer": text, "sources": sources,
-                           "practice": self._practice(res.get("selected_concepts") or []), "trace": trace}
-                    got = self._followups(question, {"route": d.route, "status": status, "answer": text, "exam": None})
+                           "practice": [] if explain is not None else self._practice(res.get("selected_concepts") or []),
+                           "trace": trace, **extra}
+                    got = self._followups(orig if explain is not None else question,
+                                          {"route": d.route, "status": status, "answer": text, "exam": None})
                     if got:
                         yield {"type": "followups", "items": got}
-                    rec.pending_out = {"route": d.route, "routes": [d.route], "complexity": d.complexity,
+                    rec.pending_out = {"route": d.route, "routes": routes, "complexity": d.complexity,
                                        "status": status, "answer": text, "sources": sources,
                                        "followups": got or [], "trace": trace}
                 else:
@@ -695,6 +736,39 @@ class UnifiedService:
 
 
     # ---------------------------------------------------------------- 解题：先查题库
+    def _wants_explain(self, *questions: str) -> bool:
+        """命中题库后学生要的是讲解（怎么理解 / 讲解 / 为什么……）而不只是答案；课程库不可用时退回只给答案。"""
+        if self.course_ctx is None or self.course_llm is None:
+            return False
+        from .exam.solve import wants_explanation
+        return any(wants_explanation(q) for q in questions if q)
+
+    def _explain_question(self, solved: dict) -> str:
+        """交给课程作答的问题：程序拼上题干、选项、参考答案与评分要点（讲解必须与参考答案一致）。"""
+        qv = (solved.get("exam") or {}).get("questions") or [{}]
+        v = qv[0]
+        opts = v.get("options") or {}
+        lines = [f"请从课程角度讲解这道{v.get('qtype_cn') or ''}题：{v.get('stem', '')}"]
+        if opts:
+            lines.append("选项：" + "；".join(f"{k}. {opts[k]}" for k in sorted(opts)))
+        lines.append(f"参考答案：{v.get('answer', '')}")
+        if v.get("analysis"):
+            lines.append(f"评分要点与解析：{v['analysis']}")
+        return "\n".join(lines)
+
+    def _explain(self, orig: str, solved: dict, t0: float, history: list[dict] | None = None) -> dict[str, Any]:
+        """非流式：题库命中 + 要讲解 → 课程讲解（选概念 + 筛选 + 作答，路由跳过），附上题目与参考答案。"""
+        out: dict[str, Any] = {"route": "course", "routes": ["exam", "course"], "complexity": "simple",
+                               "reason": "题库命中，按课程讲解", "answer": None, "sources": [], "status": "ok",
+                               "count": 1, "chapter": None, "explain": True, "exam": solved["exam"]}
+        trace: dict[str, Any] = {"prematch": solved["trace"]["prematch"]}
+        self._course(self._explain_question(solved), out, trace, solve="explain", history=history)
+        out["exam"] = solved["exam"]
+        trace["total_s"] = round(time.perf_counter() - t0, 4)
+        out["trace"] = trace
+        out["followups"] = self._followups(orig, out)
+        return out
+
     def _solve_flag(self, question: str) -> bool:
         """带具体题干的解题问题（没命中题库时才会走到这里）：课程作答的提示词因此追加“先给结论”一条。"""
         from .exam.solve import is_solve_question
@@ -712,8 +786,8 @@ class UnifiedService:
         耗时 ms 级，写进 trace.prematch；命中时 0 次模型调用（连路由也不调）。没命中返回 None，走原来的路由。"""
         if self.exam is None:
             return None
-        from .exam.solve import StemMatcher, is_solve_question
-        if not is_solve_question(question):
+        from .exam.solve import StemMatcher, is_prematch_candidate
+        if not is_prematch_candidate(question):
             return None
         if self._stems is None:
             self._stems = StemMatcher(self.exam.items)

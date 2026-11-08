@@ -81,6 +81,7 @@ class OpenAICompatClient:
 
     def chat(self, step: str, messages: list[dict], *, model: str,
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
+        _note_prompt(step, messages)
         kwargs: dict = {"model": model, "messages": messages, "temperature": 0}
         if tools:
             kwargs["tools"] = tools
@@ -100,6 +101,7 @@ class OpenAICompatClient:
 
     def chat_stream(self, step: str, messages: list[dict], *, model: str, on_delta) -> LLMResult:
         """流式生成（只用于作答）：content 片段逐段回调 on_delta；reasoning 片段只计长度。返回汇总后的 LLMResult。"""
+        _note_prompt(step, messages)
         kwargs: dict = {"model": model, "messages": messages, "temperature": 0, "stream": True,
                         "stream_options": {"include_usage": True}}
         reasoning = reasoning_param(self.reasoning_for(step))
@@ -128,6 +130,15 @@ class OpenAICompatClient:
                         latency_s=time.perf_counter() - t0)
         _report(step, model, res)
         return res
+
+
+def _note_prompt(step: str, messages) -> None:
+    """把本次调用的 system prompt 登记到当前请求（rag.qa_store 按 sha256 去重存库）；失败不影响调用。"""
+    try:
+        from .. import usage_log
+        usage_log.note_prompt(step, messages)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _report(step: str, model: str, res: LLMResult) -> None:
@@ -246,6 +257,7 @@ class TracingLLM:
 
     def chat(self, step: str, messages: list[dict], *, model: str,
              tools: list[dict] | None = None, json_mode: bool = False) -> LLMResult:
+        _note_prompt(step, messages)                       # 测试替身 / 未自行登记的内层客户端也要留下 prompt
         t0 = time.perf_counter()
         res = self.inner.chat(step, messages, model=model, tools=tools, json_mode=json_mode)
         return self._record(step, model, bool(tools), json_mode, res, t0)
@@ -253,6 +265,7 @@ class TracingLLM:
     def __getattr__(self, name):
         if name == "chat_stream" and hasattr(self.inner, "chat_stream"):   # 内层支持流式时才对外暴露
             def chat_stream(step, messages, *, model, on_delta):
+                _note_prompt(step, messages)
                 t0 = time.perf_counter()
                 res = self.inner.chat_stream(step, messages, model=model, on_delta=on_delta)
                 return self._record(step, model, False, False, res, t0, stream=True)

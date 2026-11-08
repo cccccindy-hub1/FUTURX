@@ -441,13 +441,45 @@ body {
 .send:disabled { opacity: .6; cursor: not-allowed; }
 
 @media (max-width: 560px) {
-  .topbar { padding: 12px 14px; }
+  .topbar { padding: 12px 14px; flex-wrap: wrap; gap: 8px 10px; }
   .bubble { max-width: 92%; }
 }
 
 /* 试卷库：选项与默认收起的答案 */
 .exam-q { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
 .exam-options { margin-left: 22px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
-.exam-answer { margin-left: 22px; font-size: 13px; }
-.exam-answer summary { cursor: pointer; color: var(--accent, #2563eb); user-select: none; }
-.exam-answer-row { margin-top: 4px; color: var(--ink-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* “查看答案”：灰色小按钮，不加粗，与题干左对齐；展开后整体缩进、浅色底块，每项各占一行。巩固练习 / 找题 / 解题命中共用 */
+.exam-answer { margin-left: 22px; font-size: 12px; }
+.exam-answer summary {
+  display: inline-flex; align-items: center; gap: 4px; list-style: none; cursor: pointer; user-select: none;
+  font-size: 12px; font-weight: 400; color: var(--ink-soft); line-height: 1.6;
+  padding: 1px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+}
+.exam-answer summary::-webkit-details-marker { display: none; }
+.exam-answer summary::before { content: "▸"; font-size: 10px; transition: transform .15s; }
+.exam-answer[open] summary::before { transform: rotate(90deg); }
+.exam-answer summary:hover { color: var(--accent-ink); border-color: var(--accent); }
+.exam-answer[open] summary { margin-bottom: 6px; }
+.exam-answer-row {
+  font-size: 13px; color: var(--ink); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--accent-soft); padding: 6px 12px; margin-left: 4px;
+}
+.exam-answer-row:first-of-type { border-radius: 8px 8px 0 0; padding-top: 8px; }
+.exam-answer-row:last-child { border-radius: 0 0 8px 8px; padding-bottom: 8px; }
+.exam-answer-row:first-of-type:last-child { border-radius: 8px; }
+
+/* ---- 顶栏：知识图谱入口 ---- */
+.kg-link { margin-left: 10px; color: var(--accent-ink); text-decoration: none; border-bottom: 1px dashed currentColor; white-space: nowrap; }
+.kg-link:hover { color: var(--accent); }
+@media (max-width: 520px) { .kg-link { display: block; margin: 2px 0 0; } }
+
+/* ---- 窄屏顶栏：按钮和状态不换行、不竖排 ---- */
+.status, #status-text { white-space: nowrap; }
+.status { flex: none; }
+@media (max-width: 640px) {
+  .topbar { flex-wrap: nowrap; gap: 8px; }
+  .brand { min-width: 0; flex: 1 1 auto; }
+  .brand-text { min-width: 0; }
+  #status-text { display: none; }                    /* 窄屏状态只显示圆点（颜色表示在线 / 离线），文字放进 title */
+  .status { gap: 6px; }
+}
