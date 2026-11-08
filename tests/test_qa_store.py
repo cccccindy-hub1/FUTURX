@@ -322,6 +322,28 @@ def test_dirty_uuid_and_over_long_name_never_fail_the_request(db):
     assert r["user_id"] == "anon-none" and r["user_name"] == "李" * 32
 
 
+def test_students_sharing_one_key_cannot_see_each_other(db):
+    """共享一把 key：会话按 (key, uuid) 归属，追问、列表、读消息全部隔离。"""
+    from rag.conversation_api import router as conv_router
+
+    app = FastAPI()
+    app.state.unified = UnifiedService(router_client=_Reporting(RouterLLM(("off_topic",))))
+    app.include_router(unified_router)
+    app.include_router(conv_router)
+    c = TestClient(app)
+
+    zh = c.post("/auto/ask", json={"question": "张三的问题", "uuid": "stu-zhang", "user_name": "张三"}).json()["conversation_id"]
+    li = c.post("/auto/ask", json={"question": "李四的问题", "uuid": "stu-li", "user_name": "李四"}).json()["conversation_id"]
+    hz, hl = {"X-User-Uuid": "stu-zhang"}, {"X-User-Uuid": "stu-li"}
+    assert [x["id"] for x in c.get("/v1/conversations", headers=hz).json()["data"]] == [zh]
+    assert [x["id"] for x in c.get("/v1/conversations", headers=hl).json()["data"]] == [li]
+    assert c.get(f"/v1/conversations/{zh}", headers=hl).status_code == 404
+    assert c.get(f"/v1/conversations/{zh}/messages", headers=hl).status_code == 404
+    assert c.post("/auto/ask", json={"question": "蹭", "uuid": "stu-li", "conversation_id": zh}).status_code == 404
+    assert c.post("/auto/ask", json={"question": "继续", "uuid": "stu-zhang", "conversation_id": zh}).status_code == 200
+    assert len(c.get(f"/v1/conversations/{zh}", headers=hz).json()["messages"]) == 4
+
+
 def test_export_csv_includes_user_name_and_filters_by_it(db, tmp_path):
     import importlib.util
     from pathlib import Path

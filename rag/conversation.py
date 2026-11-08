@@ -8,8 +8,12 @@
 连接按线程持有（threading.local）：流式回答在 Starlette 的线程池里逐段恢复，跨线程共用
 一个 connection 会报 "SQLite objects created in a thread..."。
 
-归属：会话记 key_id（API key 的 sha256 前 8 位，见 rag.usage_log.key_id）。查询按 key_id 过滤，
-A 的 key 看不到 B 的会话；未配置 API_KEYS 时 key_id 为 None，该实例内所有匿名调用共享。
+归属：会话记 key_id（API key 的 sha256 前 8 位，见 rag.usage_log.key_id）与 user_id（调用方传的 uuid）。
+查询按 (key_id, user_id) 过滤：A 的 key、A 的 uuid 都看不到 B 的会话。
+- user_id 为 None：不按人过滤（脚本 / 运维用）；
+- user_id 为 ""：只取「没有人员标识」的老会话（key 内共享），供未传身份的老调用方；
+- user_id 有值：只取这个人的会话。
+未配置 API_KEYS 时 key_id 为 None，该实例内所有匿名调用共享；一人一 key 时 key 已经隔离，不传 uuid 也不串号。
 """
 from __future__ import annotations
 
@@ -35,6 +39,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id          TEXT PRIMARY KEY,
     key_id      TEXT,
+    user_id     TEXT,
     title       TEXT,
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
@@ -65,7 +70,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_msg_seq ON messages (conversation_id, seq);
 CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages (conversation_id, seq);
 """
-# (key_id, month) 的索引放在 _migrate 里建：老库此时还没有这两列，
+# (key_id, month) 与 (key_id, user_id) 的索引放在 _migrate 里建：老库此时还没有这些列，
 # 写在这里会让 executescript 整段失败，连建表都做不成。
 
 # 后加的列：老库要就地补，不能只改 _SCHEMA（CREATE TABLE IF NOT EXISTS 对已有表不生效）。
@@ -75,6 +80,8 @@ CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages (conversation_id, seq);
 _MIGRATIONS = (
     ("messages", "key_id", "TEXT"),
     ("messages", "month", "TEXT"),
+    # 调用方传的 uuid：共享一把 key 时按人隔离会话，见模块头「归属」
+    ("conversations", "user_id", "TEXT"),
 )
 
 
@@ -110,15 +117,18 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    # busy_timeout 要最先设：后面切 WAL / 建表都可能撞上别的连接，没有它就直接抛 database is locked
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
     with _init_lock:                           # 建表只需一次，但多线程同时启动时要串行
         if key not in _ready:
+            # 切 WAL 要独占锁：空库从 delete 模式切换时尤其如此。放在锁外会让两个线程同时首连就报
+            # database is locked（测试用全新临时库时必现），所以和建表一起放进初始化锁。
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
             _migrate(conn)
             _ready.add(key)
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     _local.conn, _local.key = conn, key
     return conn
 
@@ -148,6 +158,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for r in rows:
         conn.execute("UPDATE messages SET month = ? WHERE id = ?", (_month_of(r["created_at"]), r["id"]))
     conn.execute("CREATE INDEX IF NOT EXISTS ix_msg_key_month ON messages (key_id, month)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_conv_owner_user "
+                 "ON conversations (key_id, user_id, deleted_at, updated_at DESC)")
 
 
 def _month_of(ts: float | None = None) -> str:
@@ -169,6 +181,27 @@ def reset_connections() -> None:
 
 # ---------------------------------------------------------------- 读写
 
+def _owner_sql(key_id: str | None, user_id: str | None) -> tuple[str, list[Any]]:
+    """conversations 的归属过滤条件（key_id + user_id），返回 (SQL 片段, 参数)。
+
+    key_id  None：不按 key 过滤（脚本 / 运维）
+    user_id None：不按人过滤（脚本 / 运维）
+    user_id ""：只看没有人员标识的老会话（未传 uuid 的老调用方；迁移后是 NULL）
+    user_id 有值：只看这个人的会话
+    """
+    sql, args = "", []
+    if key_id is not None:
+        sql += " AND key_id = ?"
+        args.append(key_id)
+    if user_id is not None:
+        if user_id == "":
+            sql += " AND COALESCE(user_id, '') = ''"
+        else:
+            sql += " AND user_id = ?"
+            args.append(user_id)
+    return sql, args
+
+
 def _now() -> float:
     return time.time()
 
@@ -178,50 +211,53 @@ def _new_id() -> str:
 
 
 def create(*, key_id: str | None = None, title: str | None = None,
-           conversation_id: str | None = None) -> dict[str, Any]:
-    """建会话；conversation_id 由调用方指定（便于客户端自己生成）。"""
+           conversation_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
+    """建会话；conversation_id 由调用方指定（便于客户端自己生成）。
+    user_id：调用方的人员标识（uuid），共享 key 时按人隔离。"""
     cid = conversation_id or _new_id()
     now = _now()
     conn = _connect()
     conn.execute(
-        "INSERT INTO conversations (id, key_id, title, created_at, updated_at, turn_count, archived) "
-        "VALUES (?, ?, ?, ?, ?, 0, 0)",
-        (cid, key_id, (title or None), now, now),
+        "INSERT INTO conversations (id, key_id, user_id, title, created_at, updated_at, turn_count, archived) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
+        (cid, key_id, user_id or None, (title or None), now, now),
     )
-    return {"id": cid, "key_id": key_id, "title": title, "created_at": now,
+    return {"id": cid, "key_id": key_id, "user_id": user_id or None, "title": title, "created_at": now,
             "updated_at": now, "turn_count": 0, "archived": False}
 
 
-def get(conversation_id: str, *, key_id: str | None = None) -> dict[str, Any] | None:
-    """取会话；key_id 不为 None 时校验归属（别人的会话当作不存在）。"""
+def get(conversation_id: str, *, key_id: str | None = None,
+        user_id: str | None = None) -> dict[str, Any] | None:
+    """取会话；key_id / user_id 不为 None 时校验归属（别人的会话当作不存在）。"""
     sql = "SELECT * FROM conversations WHERE id = ? AND deleted_at IS NULL"
     args: list[Any] = [conversation_id]
-    if key_id is not None:
-        sql += " AND key_id = ?"
-        args.append(key_id)
-    row = _connect().execute(sql, args).fetchone()
+    extra, more = _owner_sql(key_id, user_id)
+    row = _connect().execute(sql + extra, args + more).fetchone()
     return _conv(row) if row else None
 
 
-def ensure(conversation_id: str | None, *, key_id: str | None = None) -> dict[str, Any]:
-    """有则取、无则建；已删除或不属于该 key 时抛 LookupError（调用方转 404）。"""
+def ensure(conversation_id: str | None, *, key_id: str | None = None,
+           user_id: str | None = None) -> dict[str, Any]:
+    """有则取、无则建；已删除或不属于该 key / 该人时抛 LookupError（调用方转 404）。"""
     if conversation_id:
-        got = get(conversation_id, key_id=key_id)
+        got = get(conversation_id, key_id=key_id, user_id=user_id)
         if got is None:
             raise LookupError(conversation_id)
         return got
-    return create(key_id=key_id)
+    return create(key_id=key_id, user_id=user_id)
 
 
 def list_conversations(*, key_id: str | None = None, limit: int = 20,
-                       cursor: str | None = None, archived: bool | None = False) -> dict[str, Any]:
-    """按最近更新倒序分页。cursor 为上一页最后一条的 "updated_at:id"。"""
+                       cursor: str | None = None, archived: bool | None = False,
+                       user_id: str | None = None) -> dict[str, Any]:
+    """按最近更新倒序分页。cursor 为上一页最后一条的 "updated_at:id"。
+    user_id 语义同 get：None 不过滤，"" 只看无人员标识的老会话，有值只看这个人。"""
     limit = max(1, min(int(limit), 100))
     sql = "SELECT * FROM conversations WHERE deleted_at IS NULL"
     args: list[Any] = []
-    if key_id is not None:
-        sql += " AND key_id = ?"
-        args.append(key_id)
+    extra, more = _owner_sql(key_id, user_id)
+    sql += extra
+    args += more
     if archived is not None:
         sql += " AND archived = ?"
         args.append(1 if archived else 0)
@@ -242,13 +278,13 @@ def list_conversations(*, key_id: str | None = None, limit: int = 20,
 
 
 def messages(conversation_id: str, *, after_seq: int | None = None, limit: int = 200,
-             key_id: str | None = None) -> list[dict[str, Any]]:
+             key_id: str | None = None, user_id: str | None = None) -> list[dict[str, Any]]:
     """取消息；after_seq 用于增量拉取（前端断线重连）。
 
-    key_id 不为 None 时校验会话归属，不属于该 key 直接返回空列表。
+    key_id / user_id 不为 None 时校验会话归属，不属于该 key 或该人直接返回空列表。
     以前只有 API 层校验归属，存储层裸着——任何新接口忘了先查就会串号。
     """
-    if key_id is not None and get(conversation_id, key_id=key_id) is None:
+    if (key_id is not None or user_id is not None) and get(conversation_id, key_id=key_id, user_id=user_id) is None:
         return []
     limit = max(1, min(int(limit), 500))
     sql = "SELECT * FROM messages WHERE conversation_id = ?"
@@ -351,7 +387,8 @@ def append_turn(*, conversation_id: str, question: str, answer: str, key_id: str
                 route: str | None = None, status: str = "ok", error: str | None = None,
                 search_query: str | None = None, sources: Iterable[dict] | None = None,
                 latency_ms: float | None = None, prompt_tokens: int | None = None,
-                completion_tokens: int | None = None, request_id: str | None = None) -> dict[str, Any]:
+                completion_tokens: int | None = None, request_id: str | None = None,
+                user_id: str | None = None) -> dict[str, Any]:
     """追加一轮：user 消息 + assistant 消息，同一事务内完成（避免只写进半轮）。
 
     request_id 作 user 消息 id：同一请求重试不会重复插入（已存在则跳过）。
@@ -362,6 +399,9 @@ def append_turn(*, conversation_id: str, question: str, answer: str, key_id: str
     if conv is None:
         raise LookupError(conversation_id)
     if key_id is not None and conv["key_id"] is not None and conv["key_id"] != key_id:
+        raise PermissionError(conversation_id)
+    # 共享一把 key 时再校验人：别人的会话绝不能被写进来
+    if user_id is not None and (conv["user_id"] or "") != (user_id or ""):
         raise PermissionError(conversation_id)
 
     seq = (conn.execute("SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?",
@@ -407,38 +447,41 @@ def append_turn(*, conversation_id: str, question: str, answer: str, key_id: str
     return {"conversation_id": conversation_id, "seq": seq, "title": title, "turn_count": conv["turn_count"] + 1}
 
 
-def rename(conversation_id: str, title: str, *, key_id: str | None = None) -> dict[str, Any] | None:
+def rename(conversation_id: str, title: str, *, key_id: str | None = None,
+           user_id: str | None = None) -> dict[str, Any] | None:
     conn = _connect()
-    if get(conversation_id, key_id=key_id) is None:
+    if get(conversation_id, key_id=key_id, user_id=user_id) is None:
         return None
     conn.execute("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
                  ((title or "")[:200], _now(), conversation_id))
-    return get(conversation_id, key_id=key_id)
+    return get(conversation_id, key_id=key_id, user_id=user_id)
 
 
-def set_archived(conversation_id: str, archived: bool, *, key_id: str | None = None) -> dict[str, Any] | None:
+def set_archived(conversation_id: str, archived: bool, *, key_id: str | None = None,
+                 user_id: str | None = None) -> dict[str, Any] | None:
     conn = _connect()
-    if get(conversation_id, key_id=key_id) is None:
+    if get(conversation_id, key_id=key_id, user_id=user_id) is None:
         return None
     conn.execute("UPDATE conversations SET archived = ?, updated_at = ? WHERE id = ?",
                  (1 if archived else 0, _now(), conversation_id))
-    return get(conversation_id, key_id=key_id)
+    return get(conversation_id, key_id=key_id, user_id=user_id)
 
 
-def delete(conversation_id: str, *, key_id: str | None = None) -> bool:
+def delete(conversation_id: str, *, key_id: str | None = None, user_id: str | None = None) -> bool:
     """软删除：列表与详情不再可见，数据保留到清理任务；便于误删恢复。"""
     conn = _connect()
-    if get(conversation_id, key_id=key_id) is None:
+    if get(conversation_id, key_id=key_id, user_id=user_id) is None:
         return False
     conn.execute("UPDATE conversations SET deleted_at = ?, updated_at = ? WHERE id = ?",
                  (_now(), _now(), conversation_id))
     return True
 
 
-def clear_messages(conversation_id: str, *, key_id: str | None = None) -> int | None:
+def clear_messages(conversation_id: str, *, key_id: str | None = None,
+                   user_id: str | None = None) -> int | None:
     """清空消息但保留会话（重开话题）；会话不存在或不属于该 key 返回 None。"""
     conn = _connect()
-    if get(conversation_id, key_id=key_id) is None:
+    if get(conversation_id, key_id=key_id, user_id=user_id) is None:
         return None
     n = conn.execute("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?",
                      (conversation_id,)).fetchone()["n"]
@@ -483,7 +526,8 @@ def purge_expired(*, days: int | None = None) -> int:
 def _conv(row: sqlite3.Row) -> dict[str, Any]:
     return {"id": row["id"], "title": row["title"], "created_at": row["created_at"],
             "updated_at": row["updated_at"], "turn_count": row["turn_count"],
-            "archived": bool(row["archived"]), "key_id": row["key_id"]}
+            "archived": bool(row["archived"]), "key_id": row["key_id"],
+            "user_id": row["user_id"]}
 
 
 def _msg(row: sqlite3.Row) -> dict[str, Any]:

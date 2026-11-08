@@ -47,23 +47,27 @@ class AutoAskRequest(BaseModel):
     user_name: str | None = None
 
 
-def _conversation_context(conversation_id: str | None, request: Request, store: bool) -> str | None:
-    """校验/新建会话，返回可用的会话 id（不落库返回 None）。显式传入但不存在的 id → 404。"""
+def _conversation_context(conversation_id: str | None, request: Request, store: bool,
+                          uuid_value: str | None = None) -> str | None:
+    """校验/新建会话，返回可用的会话 id（不落库返回 None）。显式传入但不存在的 id、或不属于本人 → 404。
+
+    归属按 (key_id, uuid)：共享一把 key 时学生之间互不可见；没传 uuid 的老调用方按 "" 处理。
+    """
     if not store:
         return None
     from . import conversation as cstore
-    from .api import key_fingerprint
+    from .api import conversation_owner
 
-    owner = key_fingerprint(request)
+    owner, user = conversation_owner(request, uuid_value)
     if conversation_id:
         try:
-            cstore.ensure(conversation_id, key_id=owner)
+            cstore.ensure(conversation_id, key_id=owner, user_id=user or "")
         except LookupError:
             raise HTTPException(status_code=404, detail={"error": {
                 "message": f"conversation not found: {conversation_id}",
                 "type": "invalid_request_error", "code": "not_found"}}) from None
         return conversation_id
-    return cstore.create(key_id=owner)["id"]
+    return cstore.create(key_id=owner, user_id=user or "")["id"]
 
 
 def _history_messages(conversation_id: str | None) -> list[dict]:
@@ -129,19 +133,22 @@ def _qa_ids(fn, request: Request, conversation_id: str | None, req=None) -> dict
     return out
 
 
-def _save_turn(conversation_id: str | None, out: dict, request: Request) -> None:
+def _save_turn(conversation_id: str | None, out: dict, request: Request,
+               uuid_value: str | None = None) -> None:
     """把统一入口的一轮结果落库；失败只记日志。"""
     if not conversation_id:
         return
     try:
         from . import conversation as cstore
-        from .api import key_fingerprint
+        from .api import conversation_owner
 
+        owner, user = conversation_owner(request, uuid_value)
         cstore.append_turn(conversation_id=conversation_id, question=out.get("question") or "",
-                           answer=out.get("answer") or "", key_id=key_fingerprint(request),
+                           answer=out.get("answer") or "", key_id=owner,
                            route=out.get("route"), status=out.get("status") or "ok",
                            error=out.get("error"), sources=out.get("sources") or [],
-                           latency_ms=(out.get("trace") or {}).get("total_s", 0) * 1000 or None)
+                           latency_ms=(out.get("trace") or {}).get("total_s", 0) * 1000 or None,
+                           user_id=user or "")
     except Exception as e:  # noqa: BLE001 - 落库失败不影响响应
         import logging
 
@@ -155,7 +162,7 @@ def auto_ask(req: AutoAskRequest, request: Request):
         raise HTTPException(status_code=503, detail={"error": {"message": "统一入口未就绪", "type": "service_unavailable"}})
     from .api import key_fingerprint
 
-    conversation_id = _conversation_context(req.conversation_id, request, req.store)
+    conversation_id = _conversation_context(req.conversation_id, request, req.store, req.uuid)
     context = _history_messages(conversation_id)
     try:
         out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
@@ -164,7 +171,7 @@ def auto_ask(req: AutoAskRequest, request: Request):
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
     out["question"] = req.question
-    _save_turn(conversation_id, out, request)
+    _save_turn(conversation_id, out, request, req.uuid)
     out.pop("question", None)
     if conversation_id:
         out["conversation_id"] = conversation_id
@@ -191,7 +198,7 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
 
     from .api import key_fingerprint
 
-    conversation_id = _conversation_context(req.conversation_id, request, req.store)
+    conversation_id = _conversation_context(req.conversation_id, request, req.store, req.uuid)
     context = _history_messages(conversation_id)
 
     def gen():
@@ -214,7 +221,7 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
         finally:
             events.close()
             _save_turn(conversation_id, final or {"question": req.question, "status": "error",
-                                                  "error": "client_disconnect", "answer": ""}, request)
+                                                  "error": "client_disconnect", "answer": ""}, request, req.uuid)
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     if conversation_id:

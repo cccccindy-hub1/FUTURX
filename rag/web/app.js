@@ -528,7 +528,8 @@ async function send() {
 
   try {
     const headers = authHeaders({ 'Content-Type': 'application/json' });
-    headers['X-User-Id'] = userId();                                  // 永久问答记录用的浏览器标识
+    headers['X-User-Id'] = userId();                                  // 浏览器标识（同一浏览器长期不变）
+    headers['X-User-Uuid'] = userId();                                // 会话归属也用它：共享 key 时按人隔离历史
     const payload = { question: q, top_k: parseInt(topkSel.value, 10) || 4, include_trace: false };
     if (conversationId) payload.conversation_id = conversationId;   // 不传就会每轮新建一个会话
     const r = await fetch('/auto/ask/stream', {
@@ -588,6 +589,12 @@ async function send() {
 
 /* ---- 历史会话：列表 + 回填 ---- */
 
+async function convHeaders() {
+  const h = authHeaders();
+  h['X-User-Uuid'] = userId();          // 与问答请求同一个标识，才能看到「自己」的会话
+  return h;
+}
+
 async function refreshConversations() {
   const list = document.getElementById('conv-list');
   const empty = document.getElementById('conv-empty');
@@ -599,7 +606,7 @@ async function refreshConversations() {
     return;
   }
   try {
-    const r = await fetch('/v1/conversations?limit=30', { headers: authHeaders() });
+    const r = await fetch('/v1/conversations?limit=30', { headers: convHeaders() });
     if (!r.ok) {
       // 鉴权失败：侧栏保持空态，不打扰主流程
       if (empty) empty.textContent = r.status === 401 ? '访问密钥无效，无法查看历史' : '历史加载失败';
@@ -627,7 +634,7 @@ function convItem(c) {
 async function openConversation(cid) {
   if (sendBtn.disabled) return;              // 正在生成，不打断
   try {
-    const r = await fetch(`/v1/conversations/${cid}?limit=500`, { headers: authHeaders() });
+    const r = await fetch(`/v1/conversations/${cid}?limit=500`, { headers: convHeaders() });
     if (!r.ok) {
       if (r.status === 404) {
         // 会话已被删除（或换了 key）：丢掉本地 id，直接开始新对话。

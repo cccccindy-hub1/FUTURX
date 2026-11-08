@@ -8,7 +8,9 @@
 - GET    /v1/conversations/{id}/messages  消息列表（after_seq 增量拉取）
 - DELETE /v1/conversations/{id}/messages  清空消息（保留会话）
 
-归属：一律按调用方 API key 的指纹过滤，别人的会话返回 404（不泄露存在性）。
+归属：按 (API key 指纹, 调用方 uuid) 过滤，别人的会话返回 404（不泄露存在性）。
+uuid 取 X-User-Uuid / X-User-Id 请求头（与问答接口的入参同名，取头是因为本组接口只有 GET/PATCH/DELETE）。
+没传 uuid 时只看到「没有人员标识」的老会话，不会串到别人的会话里。
 """
 from __future__ import annotations
 
@@ -42,6 +44,14 @@ def _not_found(cid: str) -> HTTPException:
 
 def _owner(request: Request) -> str | None:
     return key_fingerprint(request)
+
+
+def _user(request: Request) -> str:
+    """调用方 uuid（X-User-Uuid 优先，其次 X-User-Id）；没传返回 ""（只看无人员标识的老会话）。"""
+    from .qa_store import clean_id
+
+    h = request.headers
+    return clean_id(h.get("x-user-uuid")) or clean_id(h.get("x-user-id")) or ""
 
 
 def _conv_obj(row: dict[str, Any]) -> dict[str, Any]:
@@ -97,7 +107,8 @@ def list_conversations(request: Request, limit: int = Query(20, ge=1, le=100),
     else:
         raise HTTPException(status_code=400, detail={"error": {
             "message": "archived 只能是 true / false / all", "type": "invalid_request_error"}})
-    got = store.list_conversations(key_id=_owner(request), limit=limit, cursor=cursor, archived=only)
+    got = store.list_conversations(key_id=_owner(request), limit=limit, cursor=cursor, archived=only,
+                                  user_id=_user(request))
     return {
         "object": "list",
         "data": [_conv_obj(c) for c in got["items"]],
@@ -109,7 +120,8 @@ def list_conversations(request: Request, limit: int = Query(20, ge=1, le=100),
 @router.post("/v1/conversations", dependencies=[Depends(require_api_key)])
 def create_conversation(req: ConversationCreate, request: Request):
     try:
-        row = store.create(key_id=_owner(request), title=req.title, conversation_id=req.id)
+        row = store.create(key_id=_owner(request), title=req.title, conversation_id=req.id,
+                           user_id=_user(request))
     except Exception as e:  # noqa: BLE001 - 同 id 已存在等
         raise HTTPException(status_code=409, detail={"error": {
             "message": f"无法创建会话：{type(e).__name__}", "type": "invalid_request_error",
@@ -120,32 +132,32 @@ def create_conversation(req: ConversationCreate, request: Request):
 @router.get("/v1/conversations/{conversation_id}", dependencies=[Depends(require_api_key)])
 def get_conversation(conversation_id: str, request: Request,
                      include_messages: bool = True, limit: int = Query(100, ge=1, le=500)):
-    row = store.get(conversation_id, key_id=_owner(request))
+    row = store.get(conversation_id, key_id=_owner(request), user_id=_user(request))
     if row is None:
         raise _not_found(conversation_id)
     out = _conv_obj(row)
     if include_messages:
         out["messages"] = [_msg_obj(m) for m in store.messages(conversation_id, limit=limit,
-                                                               key_id=_owner(request))]
+                                                               key_id=_owner(request), user_id=_user(request))]
     return out
 
 
 @router.patch("/v1/conversations/{conversation_id}", dependencies=[Depends(require_api_key)])
 def update_conversation(conversation_id: str, req: ConversationUpdate, request: Request):
-    owner = _owner(request)
-    row = store.get(conversation_id, key_id=owner)
+    owner, user = _owner(request), _user(request)
+    row = store.get(conversation_id, key_id=owner, user_id=user)
     if row is None:
         raise _not_found(conversation_id)
     if req.title is not None:
-        row = store.rename(conversation_id, req.title, key_id=owner)
+        row = store.rename(conversation_id, req.title, key_id=owner, user_id=user)
     if req.archived is not None:
-        row = store.set_archived(conversation_id, req.archived, key_id=owner)
-    return _conv_obj(row or store.get(conversation_id, key_id=owner))
+        row = store.set_archived(conversation_id, req.archived, key_id=owner, user_id=user)
+    return _conv_obj(row or store.get(conversation_id, key_id=owner, user_id=user))
 
 
 @router.delete("/v1/conversations/{conversation_id}", dependencies=[Depends(require_api_key)])
 def delete_conversation(conversation_id: str, request: Request):
-    if not store.delete(conversation_id, key_id=_owner(request)):
+    if not store.delete(conversation_id, key_id=_owner(request), user_id=_user(request)):
         raise _not_found(conversation_id)
     return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
 
@@ -153,11 +165,11 @@ def delete_conversation(conversation_id: str, request: Request):
 @router.get("/v1/conversations/{conversation_id}/messages", dependencies=[Depends(require_api_key)])
 def list_messages(conversation_id: str, request: Request, after_seq: int | None = Query(None, ge=0),
                   limit: int = Query(200, ge=1, le=500)):
-    if store.get(conversation_id, key_id=_owner(request)) is None:
+    if store.get(conversation_id, key_id=_owner(request), user_id=_user(request)) is None:
         raise _not_found(conversation_id)
-    # key_id 一起传下去：存储层也校验归属，不只靠上面的 get()
+    # key_id / user_id 一起传下去：存储层也校验归属，不只靠上面的 get()
     items = [_msg_obj(m) for m in store.messages(conversation_id, after_seq=after_seq, limit=limit,
-                                                key_id=_owner(request))]
+                                                key_id=_owner(request), user_id=_user(request))]
     return {"object": "list", "data": items,
             "next_cursor": None if len(items) < limit else items[-1]["seq"]}
 
@@ -165,7 +177,7 @@ def list_messages(conversation_id: str, request: Request, after_seq: int | None 
 @router.delete("/v1/conversations/{conversation_id}/messages", dependencies=[Depends(require_api_key)])
 def clear_messages(conversation_id: str, request: Request):
     """清空消息但保留会话本身（学生想重开一个话题时用）。"""
-    n = store.clear_messages(conversation_id, key_id=_owner(request))
+    n = store.clear_messages(conversation_id, key_id=_owner(request), user_id=_user(request))
     if n is None:
         raise _not_found(conversation_id)
     return {"id": conversation_id, "object": "conversation.messages.cleared", "deleted_messages": n}

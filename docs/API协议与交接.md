@@ -83,7 +83,12 @@ Authorization: Bearer <API_KEY>
 
 ### 1.5 会话归属
 
-会话按 API key 的指纹（sha256 前 8 位）归属。**A 的 key 查不到 B 的会话，一律 404**（不泄露存在性）。
+会话按 **(API key 指纹, 调用方 uuid)** 归属。**A 查不到 B 的会话，一律 404**（不泄露存在性）。
+
+- 传了 `uuid`（问答接口的请求体字段，或 `X-User-Uuid` / `X-User-Id` 请求头）：只看到自己的会话。
+  这是**多个学生共用一把 key** 时的正确用法。
+- 没传 `uuid`：只看到「没有人员标识」的老会话，**不会串到带 uuid 的会话里**；同一 key 下多个无身份调用方之间共享。
+- 一人一 key 时 key 本身已经隔离，`uuid` 可以不传。
 
 ---
 
@@ -378,6 +383,11 @@ requests.post("http://<服务器>:8000/auto/ask",
 同一个人的多次提问只要 `uuid` 一致，在库里就能按 `user_id` 聚合；姓名只是给人看的标签，
 以调用方传入的为准，服务端不做实名校验（同一个人两次传不同姓名会各记各的）。
 
+**`uuid` 同时决定会话归属**，不只是记录字段：多轮对话、历史列表、读消息都按 (key, uuid) 过滤。
+共用一把 key 时，学生 A 拿不到学生 B 的 `conversation_id` 也读不到 B 的会话（一律 404）。
+因此**换 uuid = 换人**：uuid 变了，之前的历史就看不到了；客户端要把 uuid 持久化（微信小程序可用
+`openid`，或首次生成后存本地），不要每次请求重新生成。
+
 **兼容性**：两个字段都可以不传。老调用方继续用 `user` / `X-User-Id`，记录行为与改动前完全一致；
 老库（已存在的 `data/qa_log.sqlite`）在服务启动后首次写入时自动补 `user_name` 列，旧行取空串，**不重建表、不丢数据**。
 
@@ -503,12 +513,13 @@ python scripts/export_qa.py --out qa.csv --user-name 张三          # 按姓名
 ### 8.1 新会话 + 追问（推荐）
 
 ```
-① POST /auto/ask        {"question":"数据资产估值有哪些方法？"}
+① POST /auto/ask        {"question":"数据资产估值有哪些方法？","uuid":"stu-0001","user_name":"张三"}
    ← {"conversation_id":"conv_A", "answer":"...", ...}
 
-② 客户端存 conv_A
+② 客户端存 conv_A（同一个 uuid 才会被认成同一个人）
 
-③ POST /auto/ask        {"conversation_id":"conv_A", "question":"第二种具体怎么算？"}
+③ POST /auto/ask        {"conversation_id":"conv_A", "question":"第二种具体怎么算？",
+                         "uuid":"stu-0001","user_name":"张三"}
    ← 服务端取 conv_A 历史 → 改写为「市场法具体怎么算」→ 路由 → 作答
 ```
 
@@ -527,7 +538,9 @@ GET /v1/conversations/{id}/messages?after_seq=<本地最后一条 seq>
 
 ### 8.4 网页前端的历史会话
 
-`rag/web/` 的页面已经接上会话，行为如下（改前端时按这个约束走）：
+`rag/web/` 的页面已经接上会话，行为如下（改前端时按这个约束走）。
+网页把浏览器里长期保存的随机标识同时放在 `X-User-Id` 与 `X-User-Uuid` 上，所以浏览器之间互看不到历史
+（同一个浏览器不填姓名也能一直看到自己之前的问答）。
 
 | 动作 | 行为 |
 |---|---|
@@ -535,7 +548,7 @@ GET /v1/conversations/{id}/messages?after_seq=<本地最后一条 seq>
 | 继续追问 | 请求体带 `conversation_id`，服务端取历史 → 改写 → 作答 |
 | 刷新页面 | 会话 id 从 `localStorage` 恢复，侧栏从 `/v1/conversations` 重新拉 |
 | 点侧栏某条 | `GET /v1/conversations/{id}` 取 `messages`，逐条回填；**回填的消息不带耗时行与追问胶囊** |
-| 换访问密钥 | 清空对话区，历史列表按新 key 重新拉（会话按 key 隔离） |
+| 换访问密钥 | 清空对话区，历史列表按新 key 重新拉（会话按 key + uuid 隔离） |
 | 新对话 | 只清掉当前会话 id，历史列表照旧 |
 | 会话已被删 / 换了 key | `/auto/ask/stream` 返回 404 时自动丢弃本地 id 并提示重发 |
 
@@ -714,3 +727,5 @@ FROM qa_log WHERE user_id = 'stu-0001' ORDER BY id DESC LIMIT 20;
 - 鉴权：`API_KEYS` 改 `frozenset`，新增 `API_KEYS_FILE` 支持千级 key。
 - 问答记录按人归属：四个问答接口新增可选入参 `uuid` / `user_name`（也可用 `X-User-Uuid` / `X-User-Name` 头），
   `uuid` 记进 `user_id` 列，姓名单独一列 `user_name`；老库自动补列，旧调用方与旧数据都不受影响。
+- 会话归属改为 (key_id, user_id)：共用一把 key 时学生之间互不可见（列表、详情、消息、追问、删除全部校验）；
+  `conversations.user_id` 由迁移就地补列，老会话作为「无人员标识」仍可见；网页同时带 `X-User-Uuid`。

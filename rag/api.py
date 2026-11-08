@@ -251,40 +251,57 @@ def list_models():
     }
 
 
-def _resolve_conversation(conversation_id: str | None, request: Request, store: bool) -> str | None:
+def conversation_owner(request: Request, user: str | None = None) -> tuple[str | None, str | None]:
+    """会话归属的 (key_id, user_id)。user_id 取请求体的 uuid，没传则退回 X-User-Uuid / X-User-Id。
+
+    共享一把 key 时，仅靠 key_id 无法区分人（学生会看到彼此的会话），所以 uuid 也参与归属；
+    没传 uuid 的老调用方按 "" 处理，仍只在同一 key 内共享，不串到带 uuid 的会话。
+    """
+    from .qa_store import clean_id
+
+    if user is None:
+        from .qa_store import request_meta
+
+        user = request_meta(request.headers)["user_id"]
+    return key_fingerprint(request), clean_id(user)
+
+
+def _resolve_conversation(conversation_id: str | None, request: Request, store: bool,
+                          uuid_value: str | None = None) -> str | None:
     """校验/创建会话，返回可用的会话 id（不落库时返回 None）。
 
-    显式传入但不存在 → 404（客户端拼错了 id 不该被静默新建一个，否则历史会莫名丢失）。
+    显式传入但不存在或不属于本人 → 404（客户端拼错了 id 不该被静默新建一个，否则历史会莫名丢失）。
     """
     if not store:
         return None
     from . import conversation as cstore
 
-    owner = key_fingerprint(request)
+    owner, user = conversation_owner(request, uuid_value)
     if conversation_id:
         try:
-            cstore.ensure(conversation_id, key_id=owner)
+            cstore.ensure(conversation_id, key_id=owner, user_id=user or "")
         except LookupError:
             raise HTTPException(status_code=404, detail={"error": {
                 "message": f"conversation not found: {conversation_id}",
                 "type": "invalid_request_error", "code": "not_found"}}) from None
         return conversation_id
-    return cstore.create(key_id=owner)["id"]
+    return cstore.create(key_id=owner, user_id=user or "")["id"]
 
 
 def _save_turn(conversation_id: str | None, *, question: str, answer: str, request: Request,
                route: str, status: str, error: str | None, search_query: str | None,
-               sources: list, latency_ms: float, request_id: str) -> None:
+               sources: list, latency_ms: float, request_id: str, uuid_value: str | None = None) -> None:
     """把一轮问答写进会话库；任何失败都只记日志，绝不影响已经发出去的回答。"""
     if not conversation_id:
         return
     try:
         from . import conversation as cstore
 
+        owner, user = conversation_owner(request, uuid_value)
         cstore.append_turn(conversation_id=conversation_id, question=question, answer=answer,
-                           key_id=key_fingerprint(request), route=route, status=status, error=error,
+                           key_id=owner, route=route, status=status, error=error,
                            search_query=search_query, sources=sources, latency_ms=round(latency_ms * 1000, 1),
-                           request_id=request_id)
+                           request_id=request_id, user_id=user or "")
     except Exception as e:  # noqa: BLE001 - 落库失败不影响响应
         import logging
 
@@ -300,7 +317,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
     created = int(time.time())
     model = req.model or API_MODEL_NAME
     t0 = time.time()
-    conversation_id = _resolve_conversation(req.conversation_id, request, req.store)
+    conversation_id = _resolve_conversation(req.conversation_id, request, req.store, req.uuid)
     history = _merge_history(_server_history(conversation_id), client_history)
     extra_headers = {"X-Conversation-Id": conversation_id} if conversation_id else None
     meta = _qa_meta(req, request, history, conversation_id)
@@ -327,7 +344,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
                 saved = True
                 _save_turn(conversation_id, question=question, answer="".join(parts), request=request,
                            route="thesis", status=status, error=error, search_query=search_query,
-                           sources=sources, latency_ms=time.time() - t0, request_id=cid)
+                           sources=sources, latency_ms=time.time() - t0, request_id=cid, uuid_value=req.uuid)
 
             # 首帧只带 role，符合 OpenAI 流式约定。
             # 先发这一帧再做改写 / 检索：这两步要几秒，旧实现连响应头都要等它们做完，
@@ -393,7 +410,7 @@ def chat_completions(req: ChatCompletionRequest, request: Request):
     _log(question, request, cid, model, ans, sources, t0, meta=meta)
     _save_turn(conversation_id, question=question, answer=ans, request=request, route="thesis",
                status="ok", error=None, search_query=search_query, sources=sources,
-               latency_ms=time.time() - t0, request_id=cid)
+               latency_ms=time.time() - t0, request_id=cid, uuid_value=req.uuid)
     out = {
         "id": cid,
         "object": "chat.completion",

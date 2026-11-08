@@ -29,6 +29,16 @@ def isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_DATA_DIR", str(data_dir))
     monkeypatch.setenv("STORE_DIR", str(store_dir))
     monkeypatch.setenv("CACHE_DIR", str(cache_dir))
+    # 会话库与问答记录库同样落临时目录：它们默认写在 rag/conversation_db、data/ 下，
+    # 不隔离的话每跑一次测试就往真实库里塞几十条假问答。
+    monkeypatch.setenv("CONVERSATION_DB", str(tmp_path / "conversations.sqlite3"))
+    monkeypatch.setenv("RAG_QA_DB", str(tmp_path / "qa_log.sqlite3"))
+    monkeypatch.setenv("RAG_LOG_DIR", str(tmp_path / "usage"))
+    try:
+        import rag.conversation as conv_store
+        conv_store.reset_connections()
+    except ImportError:
+        pass
 
     # 让已导入的 config 模块重新读取环境变量；同时刷新各模块里 from-import 的名字
     import rag.config as cfg

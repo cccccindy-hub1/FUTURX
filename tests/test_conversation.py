@@ -450,3 +450,83 @@ def test_rest_messages_hides_foreign_conversation(client, monkeypatch):
                       headers={"Authorization": "Bearer key-b"})
     assert resp.status_code == 404
     assert "A 的隐私" not in resp.text
+
+
+# ---------------------------------------------------------------- 按人隔离（共享 key + uuid）
+
+def test_user_id_filter_semantics():
+    """None 不过滤 / "" 只看无人员标识的老会话 / 有值只看这个人。"""
+    a = store.create(key_id="k1", user_id="alice")
+    b = store.create(key_id="k1", user_id="bob")
+    legacy = store.create(key_id="k1")
+    assert {c["id"] for c in store.list_conversations(key_id="k1")["items"]} == {a["id"], b["id"], legacy["id"]}
+    assert [c["id"] for c in store.list_conversations(key_id="k1", user_id="alice")["items"]] == [a["id"]]
+    assert [c["id"] for c in store.list_conversations(key_id="k1", user_id="")["items"]] == [legacy["id"]]
+
+
+def test_get_and_messages_reject_other_user_same_key():
+    c = store.create(key_id="k1", user_id="alice")
+    store.append_turn(conversation_id=c["id"], question="alice 的隐私", answer="答", key_id="k1", user_id="alice")
+    assert store.get(c["id"], key_id="k1", user_id="alice") is not None
+    assert store.get(c["id"], key_id="k1", user_id="bob") is None
+    assert store.messages(c["id"], key_id="k1", user_id="bob") == []
+    assert len(store.messages(c["id"], key_id="k1", user_id="alice")) == 2
+
+
+def test_append_turn_rejects_other_user_same_key():
+    c = store.create(key_id="k1", user_id="alice")
+    with pytest.raises(PermissionError):
+        store.append_turn(conversation_id=c["id"], question="q", answer="a", key_id="k1", user_id="bob")
+    store.append_turn(conversation_id=c["id"], question="q", answer="a", key_id="k1", user_id="alice")
+    assert len(store.messages(c["id"])) == 2
+
+
+def test_ensure_creates_with_user_and_reuses_only_own():
+    got = store.ensure(None, key_id="k1", user_id="alice")
+    assert got["user_id"] == "alice" and store.ensure(got["id"], key_id="k1", user_id="alice")["id"] == got["id"]
+    with pytest.raises(LookupError):
+        store.ensure(got["id"], key_id="k1", user_id="bob")
+
+
+def test_old_database_gets_user_id_column(monkeypatch, tmp_path):
+    """老库（没有 conversations.user_id）迁移后就地补列，老会话仍是「无人员标识」。"""
+    import sqlite3
+
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(path)
+    con.executescript("CREATE TABLE conversations (id TEXT PRIMARY KEY, key_id TEXT, title TEXT, created_at REAL NOT NULL,"
+                      " updated_at REAL NOT NULL, turn_count INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,"
+                      " deleted_at REAL);")
+    con.execute("INSERT INTO conversations VALUES ('conv_old','k1','老会话',1,1,0,0,NULL)")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("CONVERSATION_DB", str(path))
+    store.reset_connections()
+    assert "user_id" in {r["name"] for r in store._connect().execute("PRAGMA table_info(conversations)")}
+    assert store.get("conv_old", key_id="k1")["user_id"] is None
+    assert len(store.list_conversations(key_id="k1", user_id="")["items"]) == 1       # 老会话按「无人员标识」可见
+    assert store.list_conversations(key_id="k1", user_id="alice")["items"] == []
+
+
+def test_rest_isolates_students_sharing_one_key(client):
+    """共享一把 key：两个 uuid 各自只看自己的会话，读别人的一律 404。"""
+    hz, hl = {"X-User-Uuid": "stu-zhang"}, {"X-User-Uuid": "stu-li"}
+    zh = client.post("/v1/conversations", json={"title": "张三"}, headers=hz).json()["id"]
+    li = client.post("/v1/conversations", json={"title": "李四"}, headers=hl).json()["id"]
+    store.append_turn(conversation_id=zh, question="张三问", answer="张三答", user_id="stu-zhang")
+    assert [c["id"] for c in client.get("/v1/conversations", headers=hz).json()["data"]] == [zh]
+    assert [c["id"] for c in client.get("/v1/conversations", headers=hl).json()["data"]] == [li]
+    assert client.get(f"/v1/conversations/{zh}", headers=hl).status_code == 404
+    assert client.get(f"/v1/conversations/{zh}/messages", headers=hl).status_code == 404
+    assert client.delete(f"/v1/conversations/{zh}", headers=hl).status_code == 404
+    assert "张三问" not in client.get(f"/v1/conversations/{zh}/messages", headers=hl).text
+    assert client.get(f"/v1/conversations/{zh}", headers=hz).status_code == 200
+
+
+def test_rest_without_uuid_sees_only_legacy_conversations(client):
+    """没传 uuid 的老调用方：只看无人员标识的会话，不会串到带 uuid 的会话里。"""
+    legacy = client.post("/v1/conversations", json={"title": "老"}).json()["id"]
+    withuid = client.post("/v1/conversations", json={}, headers={"X-User-Uuid": "stu-1"}).json()["id"]
+    ids = [c["id"] for c in client.get("/v1/conversations").json()["data"]]
+    assert ids == [legacy] and withuid not in ids
+    assert client.get(f"/v1/conversations/{withuid}").status_code == 404
