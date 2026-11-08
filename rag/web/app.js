@@ -9,7 +9,7 @@ const keyInput = document.getElementById('apikey');
 const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
 
-const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', exam: '试卷', off_topic: '拒答' };
+const ROUTE_LABELS = { course: '课程', thesis: '论文', policy: '政策', case: '判例', quote: '名言', exam: '试卷', meta: '助手介绍', off_topic: '拒答' };
 const KIND_LABELS = { course: '教材', case: '判例', quote: '讲话', policy: '政策' };
 const KEY_STORE = 'futurx_api_key';
 const CONV_STORE = 'futurx_conv_by_key';   // { "<api key>": "conv_xxx" }，会话按 key 隔离

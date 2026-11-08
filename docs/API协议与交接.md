@@ -162,9 +162,16 @@ Authorization: Bearer <API_KEY>
 | `case` | 判例库 |
 | `quote` | 讲话/名言库（原文照录，不生成） |
 | `exam` | 试卷库（默认只给题目） |
+| `meta` | 问助手自身（能做什么 / 知识库有哪些内容）→ 按实际加载的库返回能力说明，不检索不调模型 |
 | `off_topic` | 超出范围，固定拒答，不检索不调模型 |
 
 组合（`routes` 有两个）仅在 `course` / `case` / `quote` / `policy` 之间发生，只调一次作答模型。
+`meta` 与 `exam`、`off_topic`、`thesis` 一样只能单独出现。
+
+**`meta` 与 `off_topic` 的边界**：「你好」这种单纯打招呼仍是 `off_topic`（拒答）；
+「你好，你的知识库有哪些内容」「你能做什么」「介绍一下你自己」因为问的是助手能力，归 `meta`。
+`meta` 的答案由程序按**实际加载的库**拼装（缺数据的库不会列进清单），零检索、零模型调用，
+所以不消耗额度也不会答偏。
 
 ### 2.3 `status`
 
@@ -729,3 +736,5 @@ FROM qa_log WHERE user_id = 'stu-0001' ORDER BY id DESC LIMIT 20;
   `uuid` 记进 `user_id` 列，姓名单独一列 `user_name`；老库自动补列，旧调用方与旧数据都不受影响。
 - 会话归属改为 (key_id, user_id)：共用一把 key 时学生之间互不可见（列表、详情、消息、追问、删除全部校验）；
   `conversations.user_id` 由迁移就地补列，老会话作为「无人员标识」仍可见；网页同时带 `X-User-Uuid`。
+- 新增 `meta` 路由：问助手自身（能做什么 / 知识库有哪些内容）不再拒答，按实际加载的库返回能力说明，
+  零检索、零模型调用；单纯打招呼仍按 `off_topic` 拒答。

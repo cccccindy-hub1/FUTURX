@@ -1,5 +1,6 @@
 """统一入口：POST /auto/ask —— 先路由，再分发到对应知识库。现有 /ask、/v1/*、/course/ask 不变。
 
+- meta：问助手自身（能做什么 / 知识库有哪些内容）-> 按实际加载的库拼说明，不检索、不调用模型；
 - off_topic：固定拒答文案，不检索、不调用任何作答模型；
 - policy：政策库（agentic：点名直达文件 / 条 → BM25 ≤15 块 → 模型选块 1 次 → 作答 1 次）；
 - course：走 rag.course.pipeline.ask（需要课程上下文与课程 LLM，未加载时返回 unavailable）；
@@ -240,6 +241,21 @@ class _Cancelled(Exception):
     """客户端断开后用来中止 pipeline 回调链（内部使用，不对外暴露）。"""
 
 
+# meta 路由（问助手自身）的固定片段。能力清单按实际加载情况拼装，见 UnifiedService._meta。
+META_INTRO = "我是 AI 李老师，数字治理科研团队的学术数字人。"
+META_SCOPES = [
+    ("thesis", "学位论文写作与指导", "选题、开题报告、文献综述、研究设计、研究方法（扎根理论 / 问卷 / 访谈 / 统计）、"
+                                    "论文结构与格式、答辩、学术规范"),
+    ("course", "《数据要素》课程知识", "数据要素、数据确权与数据产权、数据价值、数据政策、数据产品、数据市场、"
+                                     "数据交易、数据安全、隐私保护、数据治理"),
+    ("exam", "课程试题", "按知识点或题型出练习题，也能查题库里某道题的参考答案、解析与评分要点"),
+    ("policy", "数据政策法规", "数据安全法、个人信息保护法、数据二十条等法律与政策文件的条文、适用范围、发布时间"),
+    ("case", "数据法律判例", "具体案件的案情、裁判要点，以及按章节列判例"),
+    ("quote", "总书记关于数字领域的讲话名言", "按主题查讲话原文、金句，原文照录不改写"),
+]
+META_TAIL = ("回答都会标注依据来源：课程与论文类给页码 / 章节，政策与判例给文件名与条款，讲话给年份与场合。"
+             "直接输入问题就行；追问时可以接着上一轮问。")
+
 CASE_UNAVAILABLE = "判例库未加载（服务器上缺少判例原始 docx，见 CASE_DOC）。"
 PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
 POLICY_UNAVAILABLE = "政策库未加载（服务器上缺少数据政策汇编 docx，见 POLICY_DOC）。"
@@ -344,6 +360,8 @@ class UnifiedService:
             self._case(q, d, out, trace, history)
         elif d.route == "quote":
             self._quote(q, d, out, trace)
+        elif d.route == "meta":
+            self._meta(out, trace)
         else:
             self._thesis(q, top_k, d.complexity, out, trace, history)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
@@ -489,6 +507,8 @@ class UnifiedService:
                     self._case(routed_q, d, out, trace, history)       # 单库判例：不流式，结果放进 done
                 elif d.route == "quote":
                     self._quote(routed_q, d, out, trace)      # 单库名言：不流式，结果放进 done
+                elif d.route == "meta":
+                    self._meta(out, trace)                    # 问助手自身：零调用，说明直接放进 done
                 else:
                     self._thesis(routed_q, top_k, d.complexity, out, trace, history)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -617,6 +637,46 @@ class UnifiedService:
         out.update(answer=render_quote_answer(picks, numbered=True),                    # 程序原文照录，不含任何模型文字
                    sources=[{"n": k, "kind": "quote", "chunk_id": p.speech.speech_id, "path": source_line(p.speech),
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
+
+    # ---------------------------------------------------------------- 助手自身（不检索、不调用模型）
+    def _meta(self, out: dict, trace: dict) -> None:
+        """「你能做什么 / 知识库有哪些内容」：按实际加载的库拼能力清单。
+
+        不检索、不调用任何模型：这类问题问的是系统本身，检索出来的教材片段只会答偏。
+        某个库没加载（数据缺失 / key 未配置）时如实不列，避免承诺做不到的能力。
+        """
+        names = {"thesis": "论文", "course": "课程", "exam": "试卷", "policy": "政策", "case": "判例", "quote": "名言"}
+        lines = [META_INTRO, "我能回答以下范围内的内容："]
+        shown: list[str] = []
+        for i, (route, title, detail) in enumerate(META_SCOPES, 1):
+            if not self._route_ready(route):
+                continue                      # 没加载的库不列，避免让学生问了才发现不可用
+            shown.append(names[route])
+            lines.append(f"{i}. {title}：{detail}。")
+        if not shown:
+            out.update(status="unavailable", answer="知识库尚未加载，暂时无法作答。", sources=[])
+            trace["meta"] = {"scopes": []}
+            return
+        body = "\n".join(lines)                                  # 列举项之间用单换行，读起来紧凑
+        tail = META_TAIL + "\n\n您想了解哪方面？可以直接提问，例如「什么是数据确权」「数据安全法第二十一条规定了什么」。"
+        out.update(answer=body + "\n\n" + tail, sources=[])
+        trace["meta"] = {"scopes": shown, "llm_calls": 0}
+
+    def _route_ready(self, route: str) -> bool:
+        """该库现在能不能真的作答（没加载 / 没配 key 都算不能）。"""
+        if route == "course":
+            return self.course_ctx is not None and self.course_llm is not None
+        if route == "thesis":
+            return self.adaptive is not None
+        if route == "exam":
+            return self.exam is not None
+        if route == "policy":
+            return self.policy_retriever is not None
+        if route == "case":
+            return self.case_retriever is not None
+        if route == "quote":
+            return self.quote_retriever is not None
+        return False
 
     # ---------------------------------------------------------------- 政策（单库，不流式）
     def _policy(self, question, out, trace, history: list[dict] | None = None) -> None:

@@ -857,6 +857,27 @@ def test_router_prompt_lists_new_categories_and_output_format():
 
 # ---------------------------------------------------------------- 规则兜底：case / quote / 组合 / count / chapter / 列表
 
+@pytest.mark.parametrize("q", ["你好，你的知识库目前具备哪些内容呢", "你好，介绍一下你自己", "你能做什么", "你有哪些功能",
+                                "你是谁", "怎么用你", "你的资料来源是什么", "这个系统能回答什么"])
+def test_meta_questions_are_recognized_by_rules(q):
+    """问助手自身能力 / 知识库 -> meta（不拒答、不检索）。"""
+    d = rule_route(q)
+    assert d.route == "meta" and d.routes == ["meta"] and d.source == "rules"
+
+
+def test_ability_question_with_self_reference_is_meta():
+    """「你的能力体现在哪」这种换词问法也要认出来（只是不能把正文里的「能力」也算进来）。"""
+    assert rule_route("你的能力体现在哪").route == "meta"
+    assert rule_route("你帮我把这段论文的能力要求改一下").route == "thesis"
+
+
+@pytest.mark.parametrize("q", ["你好", "在吗？", "今天天气怎么样", "数据能做什么", "帮我写一首关于数据的诗",
+                               "你帮我把这段论文的能力要求改一下", "你能帮我把这篇论文的摘要润色一下吗"])
+def test_greetings_and_unrelated_questions_are_still_refused(q):
+    """只打招呼、或与助手无关的，不能被判成 meta：放宽边界时不能把正文问题也算进来。"""
+    assert rule_route(q).route in ("off_topic", "thesis")
+
+
 @pytest.mark.parametrize("q,routes", [
     ("举三个关于数据爬取的判例", ["case"]), ("微博诉云智联案是怎么判的", ["case"]), ("指导性案例262号讲了什么", ["case"]),
     ("大数据搬家软件案的争议焦点是什么", ["case"]), ("（2021）浙8601民初309号案怎么判的", ["case"]),
@@ -967,3 +988,63 @@ def test_llm_policy_combinations_are_accepted():
     for routes in (["course", "policy"], ["case", "policy"], ["quote", "policy"]):
         d = classify("q", routes_llm(routes))
         assert d.routes == routes and d.combined
+
+
+# ---------------------------------------------------------------- meta 路由：零检索、零模型调用
+
+def _meta_app(svc=None):
+    from rag.unified import UnifiedService, router as unified_router
+    app = FastAPI()
+    app.state.unified = svc or UnifiedService(router_client=route_llm("meta"))
+    app.include_router(unified_router)
+    return TestClient(app)
+
+
+def test_meta_answers_capabilities_without_any_llm_or_retrieval():
+    """「你能做什么」不该拒答，也不该检索或调用模型（路由调用本身除外）。"""
+    class Boom:
+        def chat(self, *a, **k):
+            raise AssertionError("meta 不该调用作答模型")
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), Boom()
+    svc.exam, svc.adaptive = object(), object()
+    svc.case_retriever = svc.quote_retriever = svc.policy_retriever = object()
+    out = svc.ask("你好，你的知识库目前具备哪些内容呢")
+    assert out["route"] == "meta" and out["status"] == "ok" and out["sources"] == []
+    assert out["trace"]["meta"]["llm_calls"] == 0 and len(out["trace"]["meta"]["scopes"]) == 6
+    for w in ("学位论文", "《数据要素》", "课程试题", "政策法规", "判例", "讲话"):
+        assert w in out["answer"]
+    assert "抱歉" not in out["answer"]
+
+
+def test_meta_lists_only_loaded_libraries():
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), object()
+    svc.exam, svc.adaptive = None, object()          # 试卷库未加载
+    svc.case_retriever, svc.quote_retriever, svc.policy_retriever = object(), object(), None
+    out = svc.ask("你能做什么")
+    assert out["trace"]["meta"]["scopes"] == ["论文", "课程", "判例", "名言"]
+    assert "课程试题" not in out["answer"] and "数据政策法规" not in out["answer"]
+
+
+def test_meta_with_nothing_loaded_says_unavailable():
+    out = UnifiedService(router_client=route_llm("meta")).ask("你能做什么")
+    assert out["status"] == "unavailable" and out["answer"] == "知识库尚未加载，暂时无法作答。"
+
+
+def test_meta_stream_puts_the_answer_in_done_event():
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), object()
+    svc.exam, svc.adaptive = object(), object()
+    svc.case_retriever = svc.quote_retriever = svc.policy_retriever = object()
+    ev = list(svc.ask_stream("你有哪些功能"))
+    assert ev[0]["type"] == "route" and ev[0]["route"] == "meta"
+    done = [e for e in ev if e.get("type") == "done"][0]
+    assert done["status"] == "ok" and "学位论文" in done["answer"] and done["sources"] == []
+    assert not [e for e in ev if e.get("type") == "followups"]      # 拒答类不生成追问，meta 同处理
+
+
+def test_meta_route_is_never_combined():
+    from rag.router import normalize_routes
+    assert normalize_routes(["meta", "course"]) == ["meta"]
+    assert normalize_routes(["course", "meta"]) == ["course"]
