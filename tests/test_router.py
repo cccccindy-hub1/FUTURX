@@ -907,6 +907,20 @@ def test_greetings_are_meta_not_refusal(q):
     assert d.route == "meta" and d.source == "rules"
 
 
+@pytest.mark.parametrize("q", ["我之前都问过你哪些内容呢", "我之前问过你哪些问题", "我们刚才聊了什么",
+                               "咱俩聊过什么", "我的提问记录", "你记得我问过什么吗"])
+def test_asking_what_i_asked_before_is_meta(q):
+    """问自己之前问过什么也归 meta：线上真的这么问了，却拿到一整篇能力清单（答非所问）。"""
+    d = rule_route(q)
+    assert d.route == "meta" and d.source == "rules"
+
+
+@pytest.mark.parametrize("q", ["论文答辩老师会问哪些问题", "开题报告要回答哪些内容", "老师问我为什么选这个题目怎么答"])
+def test_content_questions_about_being_asked_are_not_meta(q):
+    """「问哪些」沾上答辩 / 开题就不能当 meta：主体得是「我 / 我们问过你」。"""
+    assert rule_route(q).route != "meta"
+
+
 @pytest.mark.parametrize("q,route", [("你好，我想问数据确权", "course"), ("你好，你的知识库有哪些内容", "meta"),
                                      ("你好我想了解一下数据资产", "course")])
 def test_greeting_prefix_does_not_swallow_the_real_question(q, route):
@@ -1108,3 +1122,62 @@ def test_meta_route_is_never_combined():
     from rag.router import normalize_routes
     assert normalize_routes(["meta", "course"]) == ["meta"]
     assert normalize_routes(["course", "meta"]) == ["course"]
+
+
+# ---------------------------------------------------------------- 「我之前问过什么」：按问答记录作答
+
+def _recall_service(tmp_path, monkeypatch):
+    from rag import qa_store
+    from rag.unified import UnifiedService
+
+    db = tmp_path / "qa.sqlite"
+    monkeypatch.setenv("RAG_QA_DB", str(db))
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    qa_store._inited.discard(str(db))
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), object()
+    return svc, db
+
+
+def test_recall_lists_my_own_questions_without_llm(tmp_path, monkeypatch):
+    """「我之前都问过你哪些内容」列的是这个人问过的问题，不是能力清单；零检索、零模型调用。"""
+    svc, db = _recall_service(tmp_path, monkeypatch)
+    from rag import qa_store
+    for q in ("什么是数据确权", "数据安全法第二十一条规定了什么"):
+        qa_store.write({"request_id": "r", "question": q, "answer": "a", "status": "ok"}, user_id="stu-1")
+    qa_store.write({"request_id": "r", "question": "别人的问题", "answer": "a", "status": "ok"}, user_id="stu-2")
+    out = svc.ask("我之前都问过你哪些内容呢", user_id="stu-1")
+    assert out["route"] == "meta" and out["status"] == "ok" and out["sources"] == []
+    assert "什么是数据确权" in out["answer"] and "数据安全法第二十一条" in out["answer"]
+    assert "别人的问题" not in out["answer"] and "我能回答以下范围内的内容" not in out["answer"]
+    assert out["trace"]["meta"]["recall"]["llm_calls"] == 0
+    assert out["followups"] == []                      # 回顾类不再顺带生成追问（会跑偏成别的知识点）
+
+
+def test_recall_with_no_records_says_so_plainly(tmp_path, monkeypatch):
+    svc, _ = _recall_service(tmp_path, monkeypatch)
+    out = svc.ask("我之前问过你哪些问题", user_id="stu-new")
+    assert out["route"] == "meta" and out["status"] == "ok"
+    assert "还没有提问记录" in out["answer"]
+
+
+def test_recall_scoped_to_current_conversation(tmp_path, monkeypatch):
+    """带 X-Session-Id / conversation 时只列本次对话（「我们刚才聊了什么」）。"""
+    svc, _ = _recall_service(tmp_path, monkeypatch)
+    from rag import qa_store
+    qa_store.write({"request_id": "r", "question": "这次会话里的问题", "answer": "a", "status": "ok"},
+                   user_id="stu-1", session_id="conv-a")
+    qa_store.write({"request_id": "r", "question": "另一次会话的问题", "answer": "a", "status": "ok"},
+                   user_id="stu-1", session_id="conv-b")
+    out = svc.ask("我们刚才聊了什么", user_id="stu-1", session_id="conv-a")
+    assert "这次会话里的问题" in out["answer"] and "另一次会话的问题" not in out["answer"]
+
+
+def test_recall_stream_puts_answer_in_done(tmp_path, monkeypatch):
+    svc, _ = _recall_service(tmp_path, monkeypatch)
+    from rag import qa_store
+    qa_store.write({"request_id": "r", "question": "什么是数据资产", "answer": "a", "status": "ok"}, user_id="stu-1")
+    ev = list(svc.ask_stream("我之前问过什么", user_id="stu-1"))
+    assert ev[0]["type"] == "route" and ev[0]["route"] == "meta"
+    done = [e for e in ev if e.get("type") == "done"][0]
+    assert done["status"] == "ok" and "什么是数据资产" in done["answer"]

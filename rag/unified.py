@@ -31,7 +31,7 @@ from . import config
 from . import qa_store, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
-from .router import RouteDecision, classify
+from .router import RouteDecision, classify, looks_recall
 
 router = APIRouter()
 
@@ -260,6 +260,8 @@ META_TAIL = ("回答都会标注依据来源：课程与论文类给页码 / 章
              "直接输入问题就行；追问时可以接着上一轮问。")
 META_GREETING = "您好！我是 AI 李老师，数字治理科研团队的学术数字人。可以直接问我问题，例如" \
                 "「什么是数据确权」「文献综述怎么写」「数据安全法第二十一条规定了什么」。"
+# 问「我之前问过哪些」时最多列多少条：只是给个回顾，不把几十条翻出来。
+RECALL_MAX = 20
 
 # 纯打招呼用短欢迎语（用户只是打个招呼，不该甩一整篇清单）；问了能力才给完整清单。
 _GREETING_RE = __import__("re").compile(
@@ -329,12 +331,14 @@ class UnifiedService:
         with usage_log.record(question, origin, key_id) as rec:
             rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
                            "history": qa_store.normalize_history(history)}
-            out = self._ask(question, top_k, history=history, rec=rec)
+            out = self._ask(question, top_k, history=history, rec=rec, user_id=user_id,
+                            session_id=session_id, key_id=key_id)
             rec.finish(out)
             return out
 
     def _ask(self, question: str, top_k: int | None = None, *, history: list[dict] | None = None,
-             rec=None) -> dict[str, Any]:
+             rec=None, user_id: str | None = None, session_id: str | None = None,
+             key_id: str | None = None) -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
         # 路由 / 题库匹配用「独立问题」：把「那它适用什么情形」补全成完整问句，
@@ -375,7 +379,7 @@ class UnifiedService:
         elif d.route == "quote":
             self._quote(q, d, out, trace)
         elif d.route == "meta":
-            self._meta(out, trace, q)
+            self._meta(out, trace, q, {"user_id": user_id, "session_id": session_id, "key_id": key_id})
         else:
             self._thesis(q, top_k, d.complexity, out, trace, history)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
@@ -408,6 +412,8 @@ class UnifiedService:
             return []
         if out.get("route") in self._SKIP_FOLLOWUP:
             return []
+        if (out.get("trace") or {}).get("meta", {}).get("recall"):
+            return []                                  # 「我之前问过什么」只做回顾，别顺带推销别的知识点
         try:
             from .followups import exam_followups, make_followups
             ex = out.get("exam") or {}
@@ -438,7 +444,7 @@ class UnifiedService:
         rec = usage_log.start(question, origin, key_id)
         rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
                        "history": qa_store.normalize_history(history)}
-        inner = self._ask_stream(question, top_k, rec, history)
+        inner = self._ask_stream(question, top_k, rec, history, user_id=user_id, session_id=session_id, key_id=key_id)
         try:
             while True:
                 # 关键：每段恢复都在线程池的新上下文里，必须在本段内重新激活 rec，
@@ -464,7 +470,9 @@ class UnifiedService:
             usage_log.clear()
         rec.finish(rec.pending_out)                          # 最终结果由 _ask_stream 在 done 时留在 rec 上
 
-    def _ask_stream(self, question: str, top_k: int | None, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
+    def _ask_stream(self, question: str, top_k: int | None, rec, history: list[dict] | None = None,
+                    *, user_id: str | None = None, session_id: str | None = None,
+                    key_id: str | None = None) -> Iterator[dict[str, Any]]:
         question = question.strip()
         orig = question
         t0 = time.perf_counter()
@@ -525,7 +533,8 @@ class UnifiedService:
                 elif d.route == "quote":
                     self._quote(routed_q, d, out, trace)      # 单库名言：不流式，结果放进 done
                 elif d.route == "meta":
-                    self._meta(out, trace, routed_q)          # 问助手自身：零调用，说明直接放进 done
+                    self._meta(out, trace, routed_q, {"user_id": user_id, "session_id": session_id,
+                                                      "key_id": key_id or getattr(rec, "key_id", None)})
                 else:
                     self._thesis(routed_q, top_k, d.complexity, out, trace, history)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -712,15 +721,21 @@ class UnifiedService:
                             "answer_s": round(time.perf_counter() - t0, 4)}
 
     # ---------------------------------------------------------------- 助手自身（不检索、不调用模型）
-    def _meta(self, out: dict, trace: dict, question: str = "") -> None:
+    def _meta(self, out: dict, trace: dict, question: str = "", owner: dict | None = None) -> None:
         """「你能做什么 / 知识库有哪些内容」：按实际加载的库拼能力清单。
 
         不检索、不调用任何模型：这类问题问的是系统本身，检索出来的教材片段只会答偏。
         某个库没加载（数据缺失 / key 未配置）时如实不列，避免承诺做不到的能力。
         纯打招呼（「你好」）只回一句欢迎语：学生只是打个招呼，不该甩一整篇清单。
+        问自己之前问过什么（「我之前都问过你哪些内容」）按问答记录直接列，见 _recall；
+        owner 是本次请求的调用方身份（user_id / session_id / key_id），按参数传，不放实例上——
+        服务实例是所有请求共用的，放实例上会让并发的两个人读到对方的身份。
         """
         names = {"thesis": "论文", "course": "课程", "exam": "试卷", "policy": "政策", "case": "判例", "quote": "名言"}
         ready = [r for r, *_ in META_SCOPES if self._route_ready(r)]
+        if looks_recall(question or ""):
+            self._recall(out, trace, owner)
+            return
         if _GREETING_RE.match((question or "").strip()):
             if not ready:
                 out.update(status="unavailable", answer="知识库尚未加载，暂时无法作答。", sources=[])
@@ -744,6 +759,35 @@ class UnifiedService:
         tail = META_TAIL + "\n\n您想了解哪方面？可以直接提问，例如「什么是数据确权」「数据安全法第二十一条规定了什么」。"
         out.update(answer=body + "\n\n" + tail, sources=[])
         trace["meta"] = {"scopes": shown, "llm_calls": 0}
+
+    def _recall(self, out: dict, trace: dict, owner: dict | None = None) -> None:
+        """「我之前都问过你哪些内容」：按问答记录（rag.qa_store）列出这个人的提问，零检索、零模型调用。
+
+        user_id 来自请求（uuid / X-User-Uuid / user / X-User-Id），取不到就按本次请求的 key 指纹退回
+        anon-<key>——与写入时的口径一致，没有标识的旧记录也归在 anon 里。
+        session_id 有值时只列当前会话（「我们刚才聊了什么」），没有值时列这个人的全部提问。
+        """
+        from . import qa_store
+
+        meta = owner or {}
+        user_id = qa_store.resolve_user_id(meta.get("user_id"), meta.get("key_id"))
+        session_id = qa_store.clean_id(meta.get("session_id"))
+        got = qa_store.recent_questions(user_id, session_id=session_id, limit=RECALL_MAX)
+        scope = "本次对话" if session_id else "此前"
+        if not got["items"]:
+            out.update(answer=f"{scope}还没有提问记录。直接问我就行，例如「什么是数据确权」。", sources=[])
+            trace["meta"] = {"recall": {"user_id": user_id, "session_id": session_id, "count": 0, "llm_calls": 0}}
+            return
+        total = got["total"]
+        lines = [f"{scope}一共问过 {total} 个问题" + (
+            f"，列出最近 {len(got['items'])} 个：" if total > len(got["items"]) else "：")]
+        for i, it in enumerate(got["items"], 1):
+            q = " ".join(str(it["question"]).split())                  # 题干里可能有换行
+            lines.append(f"{i}. {q if len(q) <= 40 else q[:40] + '…'}（{it['created_at'][:10]}）")
+        lines.append("想接着某个问题继续问，把问题再发一遍就行。")
+        out.update(answer="\n".join(lines), sources=[], followups=[])
+        trace["meta"] = {"recall": {"user_id": user_id, "session_id": session_id,
+                                    "count": len(got["items"]), "total": total, "llm_calls": 0}}
 
     def _route_ready(self, route: str) -> bool:
         """该库现在能不能真的作答（没加载 / 没配 key 都算不能）。"""

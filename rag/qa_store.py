@@ -240,6 +240,50 @@ def log_simple(record: dict, meta: dict | None) -> None:
         log.warning("qa_store 挂钩失败（%s）", type(e).__name__)
 
 
+# ---------------------------------------------------------------- 读取（「我之前问过什么」）
+
+def recent_questions(user_id: str, *, session_id: str | None = None, limit: int = 20) -> dict:
+    """这个人问过的最近 limit 个问题（新的在前），以及总条数。只读，不写库。
+
+    session_id 有值时只算这个会话；没有值时算这个人的全部提问。
+    按 user_id + 问题去重（同一句连问几次只列一次，位置取最近那次），避免把重试刷屏。
+    库不存在 / 读失败返回空结果（调用方按「还没有提问记录」作答），不影响主流程。
+    """
+    empty = {"items": [], "total": 0}
+    uid = clean_id(user_id)
+    if not uid:
+        return empty
+    limit = max(1, min(int(limit or 20), 100))
+    where = " FROM qa_log WHERE user_id = ?"
+    args: list[Any] = [uid]
+    if session_id:
+        where += " AND session_id = ?"
+        args.append(clean_id(session_id))
+    try:
+        con = _connect(db_path())
+    except Exception as e:  # noqa: BLE001 - 读不到就当作没有记录
+        log.warning("qa_store 读取失败（%s）", type(e).__name__)
+        return empty
+    try:
+        rows = con.execute("SELECT input_prompt, created_at" + where + " ORDER BY id DESC LIMIT ?",
+                           [*args, limit]).fetchall()
+        total = con.execute("SELECT COUNT(*)" + where, args).fetchone()[0] or 0
+    except Exception as e:  # noqa: BLE001 - 老库缺列等情况
+        log.warning("qa_store 查询失败（%s）", type(e).__name__)
+        return empty
+    finally:
+        con.close()
+    seen: set[str] = set()
+    items: list[dict] = []
+    for prompt, created_at in rows:
+        q = " ".join(str(prompt or "").split())          # 题干里可能有换行
+        if not q or q in seen:                           # 同一句连问几次只列一次（位置取最近那次）
+            continue
+        seen.add(q)
+        items.append({"question": q, "created_at": str(created_at or "")})
+    return {"items": items, "total": total}
+
+
 def request_meta(headers, *, body_user: Any = None, body_uuid: Any = None, body_name: Any = None,
                  history: Any = None) -> dict:
     """从请求头 / 请求体取调用方身份与历史。
@@ -257,4 +301,4 @@ def request_meta(headers, *, body_user: Any = None, body_uuid: Any = None, body_
 
 
 __all__ = ["db_path", "write", "log_request", "log_simple", "request_meta", "resolve_user_id", "clean_id", "clean_name",
-           "normalize_history", "prompt_hash", "system_text", "SCHEMA", "MIGRATIONS", "NAME_MAX"]
+           "normalize_history", "prompt_hash", "system_text", "recent_questions", "SCHEMA", "MIGRATIONS", "NAME_MAX"]
