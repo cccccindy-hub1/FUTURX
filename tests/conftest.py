@@ -56,6 +56,11 @@ def isolated_dirs(tmp_path, monkeypatch):
             monkeypatch.setattr(mod, "STORE_DIR", store_dir)
         if hasattr(mod, "CACHE_DIR"):
             monkeypatch.setattr(mod, "CACHE_DIR", cache_dir)
+    # 超出知识库的问题现在会用大模型自主作答（rag.unified._general，复用 ROUTER_* 配置）。
+    # 测试默认把路由/通用作答的凭据清空：一律走「未配置 -> 拒答」分支，既保持原有的离线断言，
+    # 也避免单测真的把问题发到外部模型。需要测通用作答的用例自己注入替身客户端。
+    monkeypatch.setattr(cfg, "ROUTER_API_BASE", "")
+    monkeypatch.setattr(cfg, "ROUTER_API_KEY", "")
     # 部署机的 .env 往往配置了 API_KEYS；测试默认在“无鉴权”前提下跑，需要鉴权的用例自己再设
     monkeypatch.setattr(cfg, "API_KEYS", [])
     try:

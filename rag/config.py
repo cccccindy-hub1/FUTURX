@@ -250,9 +250,22 @@ ROUTER_API_BASE = (os.environ.get("ROUTER_API_BASE") or os.environ.get("COURSE_L
 ROUTER_API_KEY = (os.environ.get("ROUTER_API_KEY") or os.environ.get("COURSE_LLM_API_KEY", "")).strip()
 ROUTER_REASONING = os.environ.get("ROUTER_REASONING", "disabled").strip()  # disabled / low / medium / high
 ROUTER_TIMEOUT = float(os.environ.get("ROUTER_TIMEOUT", "15"))             # 秒；超时走规则兜底
+# 与知识库无关的问题（off_topic）不再拒答：直接用大模型自身的能力回答，不检索、不引用资料。
+# 这两个值只是该路径的系统提示词与说明文案；拒答文案保留给不配置模型时的兜底。
 ROUTER_REFUSAL_TEXT = os.environ.get("ROUTER_REFUSAL_TEXT") or (
     "抱歉，我只能回答以下范围的问题：①学位论文写作与指导；②《数据要素》课程知识点；③课程试题；"
     "④数据政策法规；⑤数据法律判例；⑥总书记关于数字领域的讲话名言。您的问题不在这些范围内，请换一个相关问题试试。"
+)
+GENERAL_MODEL = os.environ.get("GENERAL_MODEL", "") or ROUTER_MODEL      # 通用作答：超出知识库时用这个模型
+GENERAL_REASONING = os.environ.get("GENERAL_REASONING", "disabled").strip()
+GENERAL_TIMEOUT = float(os.environ.get("GENERAL_TIMEOUT", "60"))
+GENERAL_SYSTEM = os.environ.get("GENERAL_SYSTEM") or (
+    "你是「AI 李老师」，一个面向研究生的学术助手。本次问题不在团队知识库的范围内，"
+    "请用你自己的知识直接、准确地回答。\n"
+    "- 不声称内容来自本知识库，也不编造书名、页码、条文号、案号等具体出处；确实需要引用时说明是通用常识。\n"
+    "- 不确定的地方直接说不确定，不要为了显得权威而硬凑。\n"
+    "- 涉及事实、数字、法条、时效性信息时，提醒用户以权威来源为准。\n"
+    "- 用中文简答，分点不超过 4 条；不要写开场白与结语。"
 )
 
 # ---- 原 RAG 自适应（rag.adaptive）：simple 一次检索；低置信度改写重查一次；complex 拆子问题 ----

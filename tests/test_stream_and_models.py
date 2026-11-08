@@ -313,11 +313,47 @@ def test_sse_course_route_event_sequence(ctx):
 
 
 def test_sse_non_course_routes_are_not_streamed_but_complete_in_done():
-    for route, status in (("off_topic", "refused"), ("policy", "unavailable")):
+    """policy 这类单库路由不流式，结果整段放进 done。
+
+    off_topic 已经改成「用大模型自主回答」并且是逐字流式的，不再属于这一类，
+    单独由 test_sse_off_topic_streams_the_model_answer_delta_by_delta 覆盖。
+    """
+    for route, status in (("policy", "unavailable"),):
         r = _app(UnifiedService(router_client=route_llm(route))).post("/auto/ask/stream", json={"question": "q"})
         ev = _events(r)
         assert [e["type"] for e in ev] == ["route", "done"] and ev[0]["route"] == route
         assert ev[-1]["status"] == status and ev[-1]["answer"]
+
+
+def test_sse_off_topic_streams_the_model_answer_delta_by_delta():
+    """超出知识库：逐字推 delta（通用问答也要几十秒，不能等整段写完再给），done 带完整正文。"""
+    class Gen:
+        reports_usage = True
+        def chat_stream(self, step, messages, *, model, on_delta):
+            assert step == "general"
+            for t in ["这是", "通用", "回答。"]:
+                on_delta(t)
+            return LLMResult(content="这是通用回答。")
+        def chat(self, step, messages, *, model, tools=None, json_mode=False):
+            return LLMResult(content="这是通用回答。")
+    svc = UnifiedService(router_client=route_llm("off_topic"))
+    svc._general_llm = Gen()
+    ev = _events(_app(svc).post("/auto/ask/stream", json={"question": "今天天气怎么样"}))
+    kinds = [e["type"] for e in ev]
+    assert kinds[0] == "route" and kinds.count("done") == 1 and kinds.count("delta") == 3
+    assert "".join(e["text"] for e in ev if e["type"] == "delta") == "这是通用回答。"
+    done = [e for e in ev if e["type"] == "done"][0]
+    assert done["status"] == "ok" and done["answer"] == "这是通用回答。" and done["sources"] == []
+
+
+def test_sse_off_topic_without_a_general_model_falls_back_to_refusal():
+    """模型未配置时退回拒答：行为与改动前一致，不能 500。"""
+    ev = _events(_app(UnifiedService(router_client=route_llm("off_topic"))).post(
+        "/auto/ask/stream", json={"question": "今天天气怎么样"}))
+    assert [e["type"] for e in ev] == ["route", "done"]
+    from rag import config as root_config
+
+    assert ev[-1]["status"] == "refused" and ev[-1]["answer"] == root_config.ROUTER_REFUSAL_TEXT
 
 
 def test_sse_thesis_route_runs_adaptive_and_puts_result_in_done():

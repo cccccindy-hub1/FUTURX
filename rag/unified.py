@@ -1,7 +1,8 @@
 """统一入口：POST /auto/ask —— 先路由，再分发到对应知识库。现有 /ask、/v1/*、/course/ask 不变。
 
 - meta：问助手自身（能做什么 / 知识库有哪些内容）-> 按实际加载的库拼说明，不检索、不调用模型；
-- off_topic：固定拒答文案，不检索、不调用任何作答模型；
+- off_topic：超出知识库范围 -> 不检索，直接用大模型自身知识作答（rag.unified._general）；
+  模型未配置时退回固定拒答文案；
 - policy：政策库（agentic：点名直达文件 / 条 → BM25 ≤15 块 → 模型选块 1 次 → 作答 1 次）；
 - course：走 rag.course.pipeline.ask（需要课程上下文与课程 LLM，未加载时返回 unavailable）；
   试卷库已加载时，另附 practice：本题选中概念对应的 1–3 道【基础】题（只给题目 ID 与题干，不额外调用 LLM），
@@ -33,6 +34,8 @@ from .api import require_api_key
 from .router import RouteDecision, classify
 
 router = APIRouter()
+
+_UNSET = object()          # 区分「还没建过通用作答客户端」与「建过但未配置（None）」
 
 
 class AutoAskRequest(BaseModel):
@@ -265,6 +268,8 @@ _GREETING_RE = __import__("re").compile(
     r"(?:你好|您好|哈喽|嗨|hi|hello|hey|早上好|上午好|中午好|下午好|晚上好|早安|晚安|在吗|在不在)"
     r"[\s，。！？!?,.]*(?:呀|啊|哈|呢|嘛|哦|呦|哟)*)*[\s。！？!?,.]*$", __import__("re").I)
 
+GENERAL_UNAVAILABLE = "这个问题超出知识库范围，而通用作答模型未配置（需要 ROUTER_API_BASE / ROUTER_API_KEY）。"
+
 CASE_UNAVAILABLE = "判例库未加载（服务器上缺少判例原始 docx，见 CASE_DOC）。"
 PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
 POLICY_UNAVAILABLE = "政策库未加载（服务器上缺少数据政策汇编 docx，见 POLICY_DOC）。"
@@ -358,7 +363,7 @@ class UnifiedService:
         if d.combined:
             self._combined(q, d, out, trace, history)
         elif d.route == "off_topic":
-            out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
+            self._general(q, out, trace, history)          # 超出知识库：用大模型自身能力答，不检索
         elif d.route == "policy":
             self._policy(q, out, trace, history)
         elif d.route == "course":
@@ -497,6 +502,11 @@ class UnifiedService:
         if explain is None and d.combined and not self._available(d.routes):
             yield from self._stream_combined(question, d, t0, rec, history)
             return
+        if explain is None and d.route == "off_topic":
+            # 超出知识库：不检索，直接用大模型自身知识作答。生成是流式的，逐字推给客户端，
+            # 不能等整段写完再放进 done——通用问答也要几十秒，用户会以为卡住。
+            yield from self._stream_general(routed_q, d, t0, rec, history)
+            return
         if explain is None and (d.route != "course" or d.combined or self.course_ctx is None or self.course_llm is None):
             out: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
                                    "answer": None, "sources": [], "status": "ok", "routes": list(d.routes)}
@@ -504,8 +514,6 @@ class UnifiedService:
             try:
                 if d.combined:
                     self._combined(routed_q, d, out, trace, history)        # 其中某个库未加载：返回 unavailable
-                elif d.route == "off_topic":
-                    out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT)
                 elif d.route == "policy":
                     self._policy(routed_q, out, trace, history)    # 单库政策：不流式，结果放进 done
                 elif d.route == "course":
@@ -647,6 +655,62 @@ class UnifiedService:
                    sources=[{"n": k, "kind": "quote", "chunk_id": p.speech.speech_id, "path": source_line(p.speech),
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
 
+    # ---------------------------------------------------------------- 通用作答（超出知识库，不检索）
+    def _general_client(self):
+        """通用作答用的客户端：复用路由的胜算云配置（绝不用论文库的 key）；未配置返回 None。
+
+        懒加载 + 缓存：只有真的问到知识库以外的问题才建连接，正常问答不受影响。
+        """
+        if getattr(self, "_general_llm", _UNSET) is not _UNSET:
+            return self._general_llm
+        self._general_llm = None
+        try:
+            from .course.llm import OpenAICompatClient
+            self._general_llm = OpenAICompatClient(
+                config.ROUTER_API_BASE, config.ROUTER_API_KEY,
+                timeout=config.GENERAL_TIMEOUT, reasoning={"general": config.GENERAL_REASONING})
+        except Exception as e:  # noqa: BLE001 - 未配置 / 依赖缺失：退回拒答文案
+            import logging
+            logging.getLogger(__name__).info("通用作答模型未配置（%s），超出知识库时仍按拒答处理", type(e).__name__)
+        return self._general_llm
+
+    def _general(self, question: str, out: dict, trace: dict, history: list[dict] | None = None,
+                 on_delta=None) -> None:
+        """超出知识库范围：不检索，直接用大模型自身知识答，并明确标注「非知识库内容」。
+
+        提示词禁止编造页码 / 条文号 / 案号，避免把通用回答伪装成有据可查的库内答案。
+        模型未配置时退回原来的拒答文案，行为与改动前一致。
+        """
+        client = self._general_client()
+        if client is None:
+            out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT, sources=[])
+            trace["general"] = {"configured": False}
+            return
+        msgs = [{"role": "system", "content": config.GENERAL_SYSTEM}]
+        for m in (history or [])[-6:]:
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content"):
+                msgs.append({"role": m["role"], "content": str(m["content"])[:500]})
+        msgs.append({"role": "user", "content": question})
+        t0 = time.perf_counter()
+        try:
+            if on_delta is not None and hasattr(client, "chat_stream"):
+                res = client.chat_stream("general", msgs, model=config.GENERAL_MODEL, on_delta=on_delta)
+                text = res.content
+            else:
+                text = client.chat("general", msgs, model=config.GENERAL_MODEL).content
+        except Exception as e:  # noqa: BLE001 - 通用作答失败不该 500，退回拒答并记类型名
+            out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT, sources=[])
+            trace["general"] = {"configured": True, "error": type(e).__name__}
+            return
+        text = (text or "").strip()
+        if not text:
+            out.update(status="refused", answer=config.ROUTER_REFUSAL_TEXT, sources=[])
+            trace["general"] = {"configured": True, "error": "EmptyAnswer"}
+            return
+        out.update(answer=text, sources=[], status="ok", general=True)
+        trace["general"] = {"configured": True, "model": config.GENERAL_MODEL, "llm_calls": 1,
+                            "answer_s": round(time.perf_counter() - t0, 4)}
+
     # ---------------------------------------------------------------- 助手自身（不检索、不调用模型）
     def _meta(self, out: dict, trace: dict, question: str = "") -> None:
         """「你能做什么 / 知识库有哪些内容」：按实际加载的库拼能力清单。
@@ -736,6 +800,69 @@ class UnifiedService:
         trace["combined"].update(answer_s=round(time.perf_counter() - t1, 4), removed_quotes=ans.removed_quotes,
                                  missing=m.empty, sections=m.sections)
         out.update(answer=ans.text, sources=ans.sources)
+
+    def _stream_general(self, question, d, t0, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
+        """超出知识库的流式作答：逐字推 delta，最后 done 带完整正文。
+
+        与课程路径同样用后台线程 + 队列：LLM 客户端是同步的，直接在生成器里等会占住线程池。
+        模型未配置或调用失败时不 500，退回拒答文案（done 里 status=refused）。
+        """
+        q: queue.Queue = queue.Queue()
+        cancelled = threading.Event()
+        _END = object()
+        parts: list[str] = []
+
+        def emit(ev: dict) -> None:
+            if cancelled.is_set():
+                raise _Cancelled()
+            q.put(ev)
+
+        def on_delta(text: str) -> None:
+            parts.append(text)
+            emit({"type": "delta", "text": text})
+
+        def run() -> None:
+            try:
+                with usage_log.activate(rec):
+                    self._general(question, pending, trace_holder, history, on_delta=on_delta)
+            except _Cancelled:
+                pass
+            except Exception as e:  # noqa: BLE001 - 只带类型名
+                q.put(("error", type(e).__name__))
+            finally:
+                q.put(_END)
+
+        pending: dict[str, Any] = {"route": d.route, "complexity": d.complexity, "reason": d.reason,
+                                   "answer": None, "sources": [], "status": "ok", "routes": list(d.routes)}
+        trace_holder: dict[str, Any] = {}
+        threading.Thread(target=usage_log.bind(run), name="auto-ask-general", daemon=True).start()
+        try:
+            while True:
+                item = q.get()
+                if item is _END:
+                    break
+                if isinstance(item, tuple):
+                    if item[0] == "error":
+                        rec.finish(error=str(item[1]))
+                        yield {"type": "error", "error": item[1]}
+                        continue
+                if item.get("type") == "delta":
+                    rec.first_delta()
+                yield item
+        finally:
+            cancelled.set()
+        trace = {"router": d.to_dict(), "general": trace_holder.get("general") or {},
+                 "total_s": round(time.perf_counter() - t0, 4)}
+        answer = pending.get("answer") or "".join(parts)
+        status = pending.get("status") or "ok"
+        yield {"type": "done", "route": d.route, "routes": list(d.routes), "complexity": d.complexity,
+               "status": status, "answer": answer, "sources": [], "general": status == "ok", "trace": trace}
+        if status == "ok":
+            got = self._followups(question, {"route": d.route, "status": "ok", "answer": answer, "exam": None})
+            if got:
+                yield {"type": "followups", "items": got}
+                pending["followups"] = got
+        rec.pending_out = {**pending, "answer": answer, "status": status, "sources": [], "trace": trace}
 
     def _stream_combined(self, question, d, t0, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
         """组合问答的流式：只有一次作答，照常流式。事件：stage（各库取材进度）→ materials（带库别 kind）/ delta → done。

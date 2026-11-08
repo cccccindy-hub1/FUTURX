@@ -132,12 +132,34 @@ class Boom:
         raise AssertionError("拒答/占位不应触碰检索或作答")
 
 
-def test_off_topic_refuses_without_retrieval_or_generation():
+def test_off_topic_answers_with_the_model_when_configured_without_retrieval():
+    """超出知识库：不检索，直接用大模型自身知识回答（不再拒答）。"""
+    class Gen:
+        reports_usage = True
+        def chat(self, step, messages, *, model, tools=None, json_mode=False):
+            assert step == "general" and messages[0]["role"] == "system" and messages[-1]["content"] == "今天天气怎么样"
+            return LLMResult(content="今天多云，气温 12–20 度。")
     svc = UnifiedService(rag=Boom(), router_client=route_llm("off_topic"))
+    svc._general_llm = Gen()
+    out = svc.ask("今天天气怎么样")
+    assert out["route"] == "off_topic" and out["status"] == "ok" and out["general"] is True
+    assert out["answer"] == "今天多云，气温 12–20 度。" and out["sources"] == []     # 不编造出处
+    assert out["trace"]["general"]["llm_calls"] == 1
+
+
+def test_off_topic_without_a_general_model_still_refuses():
+    """模型未配置：退回原拒答文案，行为与改动前一致。"""
+    svc = UnifiedService(rag=Boom(), router_client=route_llm("off_topic"))
+    svc._general_llm = None
     out = svc.ask("今天天气怎么样")
     assert out["route"] == "off_topic" and out["status"] == "refused"
     assert out["answer"] == config.ROUTER_REFUSAL_TEXT and out["sources"] == []
-    assert svc.adaptive is not None and out["trace"]["router"]["source"] == "llm"
+
+
+def test_general_answer_prompt_forbids_fake_citations():
+    """通用作答的系统提示词必须禁止编造出处，否则库外回答会被误当成有据可查。"""
+    assert "不编造" in config.GENERAL_SYSTEM or "不声称内容来自本知识库" in config.GENERAL_SYSTEM
+    assert "页码" in config.GENERAL_SYSTEM and "条文号" in config.GENERAL_SYSTEM
 
 
 def test_router_failure_on_irrelevant_question_still_refuses():

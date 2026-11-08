@@ -163,7 +163,7 @@ Authorization: Bearer <API_KEY>
 | `quote` | 讲话/名言库（原文照录，不生成） |
 | `exam` | 试卷库（默认只给题目） |
 | `meta` | 问助手自身（能做什么 / 知识库有哪些内容）→ 按实际加载的库返回能力说明，不检索不调模型 |
-| `off_topic` | 超出范围，固定拒答，不检索不调模型 |
+| `off_topic` | 超出知识库范围 → 不检索，直接用大模型自身知识作答（`GENERAL_*`） |
 
 组合（`routes` 有两个）仅在 `course` / `case` / `quote` / `policy` 之间发生，只调一次作答模型。
 `meta` 与 `exam`、`off_topic`、`thesis` 一样只能单独出现。
@@ -180,13 +180,41 @@ Authorization: Bearer <API_KEY>
 `meta` 零检索、零模型调用（`trace.meta.llm_calls == 0`），不消耗额度也不会答偏。
 「你好，我想问数据确权」这类带真问题的，按真问题走，不会整句当成打招呼。
 
+### 超出知识库的问题不再拒答
+
+路由判成 `off_topic`（与六个知识库都无关）时，**不再返回拒答文案**，而是不检索、直接用大模型自身知识作答：
+
+```json
+{"route": "off_topic", "status": "ok", "general": true,
+ "answer": "……", "sources": [],
+ "trace": {"general": {"configured": true, "model": "...", "llm_calls": 1}}}
+```
+
+| 情况 | 行为 |
+|---|---|
+| 配了 `ROUTER_API_BASE` / `ROUTER_API_KEY`（默认复用） | 用 `GENERAL_MODEL` 作答，`status=ok`、`general=true`、`sources=[]` |
+| 未配置，或调用失败 | 退回原拒答文案，`status=refused`，`trace.general` 里给出原因 |
+| 流式（`/auto/ask/stream`） | 逐字推 `delta`，`done` 带完整正文（通用问答也要几十秒，不能等整段写完） |
+
+`sources` 恒为空、且系统提示词禁止编造页码 / 条文号 / 案号：库外回答**不能伪装成有据可查**。
+客户端可用 `general: true` 把它和知识库答案区分展示（例如加一句「以下内容不来自课程知识库」）。
+
+配置项（都可不填，默认沿用路由那套）：
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `GENERAL_MODEL` | 同 `ROUTER_MODEL` | 通用作答模型 |
+| `GENERAL_REASONING` | `disabled` | 思考模式 |
+| `GENERAL_TIMEOUT` | `60` | 超时秒数 |
+| `GENERAL_SYSTEM` | 内置提示词 | 通用作答的系统提示词 |
+
 ### 2.3 `status`
 
 | status | 含义 | 客户端建议 |
 |---|---|---|
 | `ok` | 正常作答 | 展示 |
 | `insufficient` | 资料不足 | 展示提示文案，可建议换个问法 |
-| `refused` | 超出范围（`off_topic`） | 展示拒答文案 |
+| `refused` | 未配置通用作答模型时的兜底拒答（`off_topic`） | 展示拒答文案 |
 | `unavailable` | 某个库未加载 | 提示能力未部署 |
 | `error` | 下游失败 | 可重试 |
 
@@ -743,5 +771,7 @@ FROM qa_log WHERE user_id = 'stu-0001' ORDER BY id DESC LIMIT 20;
   `uuid` 记进 `user_id` 列，姓名单独一列 `user_name`；老库自动补列，旧调用方与旧数据都不受影响。
 - 会话归属改为 (key_id, user_id)：共用一把 key 时学生之间互不可见（列表、详情、消息、追问、删除全部校验）；
   `conversations.user_id` 由迁移就地补列，老会话作为「无人员标识」仍可见；网页同时带 `X-User-Uuid`。
-- 新增 `meta` 路由：问助手自身（能做什么 / 知识库有哪些内容）不再拒答，按实际加载的库返回能力说明，
-  零检索、零模型调用；单纯打招呼仍按 `off_topic` 拒答。
+- 新增 `meta` 路由：问助手自身（能做什么 / 知识库有哪些内容）与打招呼都不再拒答，
+  按实际加载的库返回能力说明，零检索、零模型调用。
+- `off_topic`（超出知识库）改为用大模型自身知识作答（`GENERAL_*`、`general=true`、流式逐字推）；
+  未配置模型时退回原拒答文案。
