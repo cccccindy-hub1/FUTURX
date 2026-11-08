@@ -871,11 +871,25 @@ def test_ability_question_with_self_reference_is_meta():
     assert rule_route("你帮我把这段论文的能力要求改一下").route == "thesis"
 
 
-@pytest.mark.parametrize("q", ["你好", "在吗？", "今天天气怎么样", "数据能做什么", "帮我写一首关于数据的诗",
+@pytest.mark.parametrize("q", ["今天天气怎么样", "数据能做什么", "帮我写一首关于数据的诗",
                                "你帮我把这段论文的能力要求改一下", "你能帮我把这篇论文的摘要润色一下吗"])
-def test_greetings_and_unrelated_questions_are_still_refused(q):
-    """只打招呼、或与助手无关的，不能被判成 meta：放宽边界时不能把正文问题也算进来。"""
-    assert rule_route(q).route in ("off_topic", "thesis")
+def test_unrelated_or_content_questions_are_not_meta(q):
+    """与助手无关的实质问题不能被判成 meta：放宽边界时不能把正文问题也算进来。"""
+    assert rule_route(q).route != "meta"
+
+
+@pytest.mark.parametrize("q", ["你好", "您好", "在吗？", "你好呀，在吗？", "hello", "早上好呀", "嗨"])
+def test_greetings_are_meta_not_refusal(q):
+    """打招呼必须回欢迎语：拒答一句「你好」像是系统坏了（线上实际踩到的）。"""
+    d = rule_route(q)
+    assert d.route == "meta" and d.source == "rules"
+
+
+@pytest.mark.parametrize("q,route", [("你好，我想问数据确权", "course"), ("你好，你的知识库有哪些内容", "meta"),
+                                     ("你好我想了解一下数据资产", "course")])
+def test_greeting_prefix_does_not_swallow_the_real_question(q, route):
+    """「你好」后面跟着真问题时，按真问题走，不能整句当成打招呼。"""
+    assert rule_route(q).route == route
 
 
 @pytest.mark.parametrize("q,routes", [
@@ -919,10 +933,17 @@ def test_rule_fallback_count_and_chapter_for_case():
 
 
 def test_old_forty_question_set_routes_unchanged_by_new_categories():
-    """新增 case / quote 不能改变既有 40 题的规则兜底结果（原本就判错的 r27、r36 保持不变，不新增判错）。"""
+    """新增 case / quote 不能改变既有 40 题的规则兜底结果。
+
+    原本就判错的 r27、r36 保持不变。r31（「你好呀，在吗？」）从此也多出一条差异：
+    它的标注还是改版前的 off_topic，而现在归 meta（有意的行为修正）。
+    这里**不改标注**——改了标注等于让评测迁就现状，看不出真实偏差。
+    """
     rows = json.load(open("rag/eval_data/router_eval.json", encoding="utf-8"))
     bad = sorted(r["id"] for r in rows if rule_route(r["question"]).route != r["expected_route"])
-    assert bad == ["r27", "r36"]
+    assert bad == ["r27", "r31", "r36"]
+    r31 = next(r for r in rows if r["id"] == "r31")
+    assert r31["expected_route"] == "off_topic" and rule_route(r31["question"]).route == "meta"
 
 
 def test_new_router_eval_set_shape_and_rule_fallback_accuracy():
@@ -992,6 +1013,9 @@ def test_llm_policy_combinations_are_accepted():
 
 # ---------------------------------------------------------------- meta 路由：零检索、零模型调用
 
+from rag.unified import META_GREETING  # noqa: E402
+
+
 def _meta_app(svc=None):
     from rag.unified import UnifiedService, router as unified_router
     app = FastAPI()
@@ -1030,6 +1054,20 @@ def test_meta_lists_only_loaded_libraries():
 def test_meta_with_nothing_loaded_says_unavailable():
     out = UnifiedService(router_client=route_llm("meta")).ask("你能做什么")
     assert out["status"] == "unavailable" and out["answer"] == "知识库尚未加载，暂时无法作答。"
+
+
+def test_greeting_gets_a_short_welcome_not_the_full_list():
+    """打招呼只回一句欢迎语（附几个例子），不该甩一整篇能力清单。"""
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), object()
+    svc.exam, svc.adaptive = object(), object()
+    svc.case_retriever = svc.quote_retriever = svc.policy_retriever = object()
+    out = svc.ask("你好")
+    assert out["route"] == "meta" and out["status"] == "ok"
+    assert out["trace"]["meta"]["greeting"] is True and out["trace"]["meta"]["llm_calls"] == 0
+    assert out["answer"] == META_GREETING and "我能回答以下范围内的内容" not in out["answer"]
+    full = svc.ask("你能做什么")["answer"]
+    assert "我能回答以下范围内的内容" in full and len(full) > len(out["answer"])
 
 
 def test_meta_stream_puts_the_answer_in_done_event():

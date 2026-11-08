@@ -255,6 +255,15 @@ META_SCOPES = [
 ]
 META_TAIL = ("回答都会标注依据来源：课程与论文类给页码 / 章节，政策与判例给文件名与条款，讲话给年份与场合。"
              "直接输入问题就行；追问时可以接着上一轮问。")
+META_GREETING = "您好！我是 AI 李老师，数字治理科研团队的学术数字人。可以直接问我问题，例如" \
+                "「什么是数据确权」「文献综述怎么写」「数据安全法第二十一条规定了什么」。"
+
+# 纯打招呼用短欢迎语（用户只是打个招呼，不该甩一整篇清单）；问了能力才给完整清单。
+_GREETING_RE = __import__("re").compile(
+    r"^[\s，。！？!?,.]*(?:你好|您好|哈喽|嗨|hi|hello|hey|早上好|上午好|中午好|下午好|晚上好|早安|晚安|在吗|在不在)"
+    r"[\s，。！？!?,.]*(?:呀|啊|哈|呢|嘛|哦|呦|哟)*(?:[\s，。！？!?,.]{0,3}"
+    r"(?:你好|您好|哈喽|嗨|hi|hello|hey|早上好|上午好|中午好|下午好|晚上好|早安|晚安|在吗|在不在)"
+    r"[\s，。！？!?,.]*(?:呀|啊|哈|呢|嘛|哦|呦|哟)*)*[\s。！？!?,.]*$", __import__("re").I)
 
 CASE_UNAVAILABLE = "判例库未加载（服务器上缺少判例原始 docx，见 CASE_DOC）。"
 PRACTICE_QTYPES = ("judge", "term")                       # 巩固练习允许的题型：判断题、名词解释
@@ -361,7 +370,7 @@ class UnifiedService:
         elif d.route == "quote":
             self._quote(q, d, out, trace)
         elif d.route == "meta":
-            self._meta(out, trace)
+            self._meta(out, trace, q)
         else:
             self._thesis(q, top_k, d.complexity, out, trace, history)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
@@ -508,7 +517,7 @@ class UnifiedService:
                 elif d.route == "quote":
                     self._quote(routed_q, d, out, trace)      # 单库名言：不流式，结果放进 done
                 elif d.route == "meta":
-                    self._meta(out, trace)                    # 问助手自身：零调用，说明直接放进 done
+                    self._meta(out, trace, routed_q)          # 问助手自身：零调用，说明直接放进 done
                 else:
                     self._thesis(routed_q, top_k, d.complexity, out, trace, history)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -639,13 +648,23 @@ class UnifiedService:
                              "title": p.speech.title, "year": p.speech.year} for k, p in enumerate(picks, 1)])
 
     # ---------------------------------------------------------------- 助手自身（不检索、不调用模型）
-    def _meta(self, out: dict, trace: dict) -> None:
+    def _meta(self, out: dict, trace: dict, question: str = "") -> None:
         """「你能做什么 / 知识库有哪些内容」：按实际加载的库拼能力清单。
 
         不检索、不调用任何模型：这类问题问的是系统本身，检索出来的教材片段只会答偏。
         某个库没加载（数据缺失 / key 未配置）时如实不列，避免承诺做不到的能力。
+        纯打招呼（「你好」）只回一句欢迎语：学生只是打个招呼，不该甩一整篇清单。
         """
         names = {"thesis": "论文", "course": "课程", "exam": "试卷", "policy": "政策", "case": "判例", "quote": "名言"}
+        ready = [r for r, *_ in META_SCOPES if self._route_ready(r)]
+        if _GREETING_RE.match((question or "").strip()):
+            if not ready:
+                out.update(status="unavailable", answer="知识库尚未加载，暂时无法作答。", sources=[])
+                trace["meta"] = {"scopes": [], "greeting": True}
+                return
+            out.update(answer=META_GREETING, sources=[])
+            trace["meta"] = {"scopes": ready, "greeting": True, "llm_calls": 0}
+            return
         lines = [META_INTRO, "我能回答以下范围内的内容："]
         shown: list[str] = []
         for i, (route, title, detail) in enumerate(META_SCOPES, 1):
