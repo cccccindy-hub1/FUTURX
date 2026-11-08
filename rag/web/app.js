@@ -115,7 +115,7 @@ function sourceCard(i, s, ctx) {
 
   const num = document.createElement('span');
   num.className = 'src-num';
-  num.textContent = '来源' + (i + 1);
+  num.textContent = `[${i + 1}]`;
 
   const path = document.createElement('span');
   path.className = 'src-path';
@@ -431,7 +431,10 @@ async function send() {
       start();
       if (frame) { cancelAnimationFrame(frame); frame = null; }
       const sources = ev.sources || [];
-      sources.forEach((s) => { if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || ''); });
+      sources.forEach((s, i) => {
+        if (s.n !== undefined) cites.set(Number(s.n), s.path || s.title || '');
+        else cites.set(i + 1, s.section ? `${s.source} · ${s.section}` : (s.source || ''));   // 论文库来源没有 n：按顺序编号，与正文 [n] 对应
+      });
       const examQs = ev.exam && ev.exam.questions ? ev.exam.questions : [];
       // 试卷库结果：题目、选项和默认折叠的答案由下面的结构化列表渲染，气泡里只留一句提示，避免题干重复显示
       text = examQs.length ? (ev.exam.solve ? '题库里有这道题，答案如下：' : `为你找到 ${examQs.length} 道题：`) : (ev.answer || '（没有返回内容）');
