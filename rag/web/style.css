@@ -356,62 +356,6 @@ body {
 .kg-link:hover { color: var(--accent); }
 @media (max-width: 520px) { .kg-link { display: block; margin: 2px 0 0; } }
 
-/* ---- 首页词云：蓝紫渐变 + 轻微发光 + 缓慢浮动；只在欢迎区里，开始对话后随欢迎区一起隐藏 ---- */
-.wordcloud {
-  --wc-a: #4f46e5; --wc-b: #06b6d4; --wc-glow: rgba(79, 70, 229, .28); --wc-dim: .38;
-  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px;
-  margin: 18px auto 16px; padding: 22px 28px; max-width: 760px; overflow: visible;       /* 不再裁剪：容器随内容长高，词完整显示且不压住下面的说明文字 */
-  border-radius: var(--radius); position: relative; isolation: isolate;
-  border: 1px solid rgba(99, 102, 241, .16);
-  background:
-    radial-gradient(70% 60% at 50% 0%, rgba(99, 102, 241, .16), transparent 72%),
-    radial-gradient(50% 60% at 100% 100%, rgba(6, 182, 212, .12), transparent 70%),
-    linear-gradient(rgba(99, 102, 241, .07) 1px, transparent 1px) 0 0 / 26px 26px,
-    linear-gradient(90deg, rgba(99, 102, 241, .07) 1px, transparent 1px) 0 0 / 26px 26px,
-    rgba(255, 255, 255, .55);
-  box-shadow: 0 0 28px rgba(99, 102, 241, .10) inset;
-}
-.wordcloud[hidden] { display: none; }
-.wc {
-  --d: 0s; --t: 8s;
-  appearance: none; border: 0; background: none; margin: 0; padding: 2px 6px; cursor: pointer; line-height: 1.25;
-  font-family: var(--font); font-weight: 600; letter-spacing: .02em;
-  background-image: linear-gradient(120deg, var(--wc-a), #8b5cf6 55%, var(--wc-b));
-  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
-  filter: drop-shadow(0 0 6px var(--wc-glow));
-  animation: wc-float var(--t) ease-in-out var(--d) infinite;
-  transition: transform .18s ease, opacity .18s ease, filter .18s ease;
-}
-.wc-1 { font-size: 12px; opacity: .78; --wc-a: #6366f1; --wc-b: #0ea5e9; }
-.wc-2 { font-size: 13px; opacity: .85; --wc-a: #4f46e5; --wc-b: #06b6d4; }
-.wc-3 { font-size: 15px; opacity: .92; --wc-a: #4338ca; --wc-b: #8b5cf6; }
-.wc-4 { font-size: 17px; --wc-a: #5b21b6; --wc-b: #3b82f6; }
-.wc-5 { font-size: 19px; font-weight: 700; --wc-a: #4c1d95; --wc-b: #2563eb; }       /* 颜色按层级加深：越重要越浓 */   /* 最大档仍小于欢迎标题（h2 20px 加粗）的视觉重量，不压过标题 */
-.wordcloud:hover .wc { opacity: var(--wc-dim); }
-.wordcloud .wc:hover, .wordcloud .wc:focus-visible {
-  opacity: 1; transform: scale(1.22); filter: drop-shadow(0 0 10px var(--wc-glow)) saturate(1.4); animation-play-state: paused; outline: none; z-index: 1;
-}
-@keyframes wc-float {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  50% { transform: translate3d(2px, -5px, 0); }
-}
-@media (prefers-reduced-motion: reduce) { .wc { animation: none; transition: none; } }
-@media (max-width: 520px) {
-  .wordcloud { gap: 4px 8px; padding: 16px 12px; }
-  .wc-5 { font-size: 16px; } .wc-4 { font-size: 15px; } .wc-3 { font-size: 13.5px; } .wc-2 { font-size: 12.5px; } .wc-1 { font-size: 11.5px; }
-}
-/* 深色模式：整站只有浅色主题，所以词云自带深色面板（荧光渐变配深底才好看），浅色模式下保持透明浅底 */
-@media (prefers-color-scheme: dark) {
-  .wordcloud { --wc-glow: rgba(129, 140, 248, .6); --wc-dim: .3;
-    background:
-      radial-gradient(120% 90% at 50% 0%, rgba(99, 102, 241, .35), rgba(15, 23, 42, .92) 72%),
-      linear-gradient(rgba(129, 140, 248, .08) 1px, transparent 1px) 0 0 / 26px 26px,
-      linear-gradient(90deg, rgba(129, 140, 248, .08) 1px, transparent 1px) 0 0 / 26px 26px;
-    border: 1px solid rgba(129, 140, 248, .3); box-shadow: 0 0 24px rgba(79, 70, 229, .25) inset; }
-  .wc-1 { --wc-a: #a5b4fc; --wc-b: #67e8f9; } .wc-2 { --wc-a: #a5b4fc; --wc-b: #22d3ee; } .wc-3 { --wc-a: #c4b5fd; --wc-b: #67e8f9; }
-  .wc-4 { --wc-a: #ddd6fe; --wc-b: #7dd3fc; } .wc-5 { --wc-a: #ede9fe; --wc-b: #93c5fd; }
-}
-
 /* ---- 新对话按钮 ---- */
 .new-chat { margin-right: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--accent-ink); border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
 .new-chat:hover { background: var(--accent-soft); border-color: var(--accent); }

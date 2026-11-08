@@ -25,36 +25,6 @@ if (keyInput) {
   keyInput.addEventListener('change', () => saveKey(keyInput.value.trim()));
 }
 
-/* ---- 首页词云：知识关键词（离线生成的静态 JSON，只含关键词与权重）。点击只填入输入框，不自动发送 ---- */
-async function loadWordcloud() {
-  const box = document.getElementById('wordcloud');
-  if (!box) return;
-  try {
-    const r = await fetch('/static/data/wordcloud.json');
-    if (!r.ok) return;
-    const words = ((await r.json()).words || []).filter((w) => w && typeof w.w === 'string');
-    if (!words.length) return;
-    // 打散顺序但保持可复现（按下标做确定性洗牌），避免大词全挤在开头
-    const order = words.map((w, i) => ({ w, k: (i * 7919 + 13) % words.length })).sort((a, b) => a.k - b.k);
-    order.forEach(({ w }, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `wc wc-${Math.min(5, Math.max(1, w.s | 0))}`;
-      b.textContent = w.w;
-      b.title = `问问：什么是${w.w}？`;
-      b.style.setProperty('--d', `${(i % 9) * -1.3}s`);
-      b.style.setProperty('--t', `${7 + (i % 5) * 1.4}s`);
-      b.addEventListener('click', () => {
-        input.value = `什么是${w.w}？`;
-        autoGrow();
-        input.focus();
-      });
-      box.appendChild(b);
-    });
-    box.hidden = false;
-  } catch { /* 词云只是装饰，加载失败就不显示 */ }
-}
-
 /* ---- 对话记忆与身份：user_id 存在本浏览器（随机、长期）；session_id 每次“新对话”重新生成；历史只在同一对话里带 ---- */
 const UID_STORE = 'futurx_user_id';
 const HISTORY_TURNS = 3;            // 最近 3 轮（最多 6 条）；服务端另有同样的上限
@@ -562,5 +532,4 @@ const newChatBtn = document.getElementById('new-chat');
 if (newChatBtn) newChatBtn.addEventListener('click', () => { if (!sendBtn.disabled) newConversation(); });
 
 checkHealth();
-loadWordcloud();
 setInterval(checkHealth, 30000);

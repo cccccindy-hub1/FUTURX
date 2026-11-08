@@ -1,5 +1,5 @@
-"""词云 / 知识图谱离线数据与网页：打码在生成阶段完成（被隐藏的名称根本不在发给浏览器的文件里）、可复现、无定义原文；
-页面由服务提供；前端不依赖外网 CDN；入口链接与词云交互的结构。全部离线，不读真实 xlsx（用现造的小表）。"""
+"""知识图谱离线数据与网页：打码在生成阶段完成（被隐藏的名称根本不在发给浏览器的文件里）、可复现、无定义原文；
+页面由服务提供；前端不依赖外网 CDN；入口链接；首页不再有词云。全部离线，不读真实 xlsx（用现造的小表）。"""
 from __future__ import annotations
 
 import json
@@ -48,11 +48,11 @@ def _prep(rs):
 
 @pytest.fixture(scope="module")
 def built():
-    return g.build(rows(), n_words=8, reveal=0.3)
+    return g.build(rows(), reveal=0.3)
 
 
 def test_each_chapter_reveals_about_thirty_percent_of_names_the_most_connected_ones(built):
-    _, graph, rep = built
+    graph, rep = built
     by = {}
     for n in graph["nodes"]:
         by.setdefault(n["c"], []).append(n)
@@ -66,7 +66,7 @@ def test_each_chapter_reveals_about_thirty_percent_of_names_the_most_connected_o
 
 
 def test_hidden_nodes_have_no_name_field_at_all_and_hidden_names_are_not_in_the_serialised_file(built):
-    _, graph, _ = built
+    graph, _ = built
     raw = json.dumps(graph, ensure_ascii=False)
     hidden = [f"概念甲{n}" for n in "一二三四五六七八九十"] + [f"概念乙{n}" for n in "一二三四"]
     named = {n["n"] for n in graph["nodes"] if "n" in n}
@@ -78,15 +78,15 @@ def test_hidden_nodes_have_no_name_field_at_all_and_hidden_names_are_not_in_the_
 
 
 def test_no_definition_or_source_text_and_edges_carry_only_a_relation_type(built):
-    cloud, graph, _ = built
-    for blob in (json.dumps(graph, ensure_ascii=False), json.dumps(cloud, ensure_ascii=False)):
+    graph, _ = built
+    for blob in (json.dumps(graph, ensure_ascii=False),):
         assert "定义原文" not in blob and "P0001" not in blob and "数据要素是指" not in blob
     assert all(len(e) == 3 and isinstance(e[0], int) and isinstance(e[1], int) and e[2].isascii() for e in graph["edges"])
     assert {e[2] for e in graph["edges"]} <= {"hasPart", "relatedTo", "hasFeature"}          # 结构性关系（定义 / 出处）不输出
 
 
 def test_structural_relations_and_chapter_headings_do_not_count_as_connections_or_concepts(built):
-    _, graph, _ = built
+    graph, _ = built
     names = [n.get("n", "") for n in graph["nodes"]]
     assert "第二章小标题" not in names and len(graph["nodes"]) == 15           # 10 + 4 + 孤立概念；“第二章 小标题”不是概念
     iso = [n for n in graph["nodes"] if n["c"] == 3]
@@ -95,15 +95,8 @@ def test_structural_relations_and_chapter_headings_do_not_count_as_connections_o
     assert hub["d"] == 9 + 0 and all(n["d"] <= hub["d"] for n in graph["nodes"])    # 9 条 hasPart；hasDefinition / hasSourceSpan 不计
 
 
-def test_wordcloud_has_only_word_and_tier_in_one_to_five_and_is_sorted_by_importance(built):
-    cloud, _, _ = built
-    assert 1 <= len(cloud["words"]) <= 8 and all(set(w) == {"w", "s"} and 1 <= w["s"] <= 5 for w in cloud["words"])
-    tiers = [w["s"] for w in cloud["words"]]
-    assert tiers == sorted(tiers, reverse=True) and cloud["words"][0]["w"] == "概念甲一"
-
-
 def test_generation_is_reproducible():
-    a, b = g.build(rows(), 8, 0.3), g.build(rows(), 8, 0.3)
+    a, b = g.build(rows(), 0.3), g.build(rows(), 0.3)
     assert json.dumps(a[:2], ensure_ascii=False) == json.dumps(b[:2], ensure_ascii=False)
 
 
@@ -116,9 +109,8 @@ def test_non_concept_names_are_filtered():
 # ---------------------------------------------------------------- 已提交的真实产物
 
 def test_committed_assets_are_masked_and_in_range():
-    cloud = json.loads((WEB / "data" / "wordcloud.json").read_text(encoding="utf-8"))
     graph = json.loads((WEB / "data" / "graph.json").read_text(encoding="utf-8"))
-    assert 60 <= len(cloud["words"]) <= 80 and all(set(w) == {"w", "s"} for w in cloud["words"]) and {w["s"] for w in cloud["words"]} == {1, 2, 3, 4, 5}
+    assert not (WEB / "data" / "wordcloud.json").exists()                          # 词云已下线
     t = graph["totals"]
     assert t["chapters"] == 11 and t["concepts_total"] >= 600 and t["concepts"] == len(graph["nodes"]) and t["relations"] == len(graph["edges"])
     assert t["per_chapter_cap"] == g.GRAPH_PER_CHAPTER == 70
@@ -149,7 +141,7 @@ def test_pages_and_data_are_served_by_the_app(monkeypatch):
     app.mount("/static", StaticFiles(directory=str(WEB)), name="static")
     c = TestClient(app)
     for path, ctype in (("graph.html", "text/html"), ("graph.js", "javascript"), ("vendor/echarts.min.js", "javascript"),
-                        ("data/graph.json", "json"), ("data/wordcloud.json", "json"), ("vendor/LICENSE-echarts.txt", "text")):
+                        ("data/graph.json", "json"), ("vendor/LICENSE-echarts.txt", "text")):
         r = c.get("/static/" + path)
         assert r.status_code == 200 and ctype in r.headers["content-type"], path
 
@@ -167,37 +159,14 @@ def test_vendor_library_is_apache_licensed_and_ships_its_license():
     assert (WEB / "vendor" / "echarts.min.js").stat().st_size > 500_000
 
 
-def test_home_has_the_graph_link_in_the_header_and_the_wordcloud_inside_the_welcome_area():
+def test_home_has_the_graph_link_in_the_header_and_no_wordcloud():
     html = (WEB / "index.html").read_text(encoding="utf-8")
     sub = html[html.index('class="subtitle"'):html.index("</p>", html.index('class="subtitle"'))]
     assert "数字治理科研团队 · 学术数字人" in sub and 'href="/static/graph.html"' in sub and 'target="_blank"' in sub and "查看知识图谱（部分）" in sub
     assert sub.index("学术数字人") < sub.index("查看知识图谱")                                  # 链接在副标题“后面”
-    w = html[html.index('id="welcome"'):html.index("</main>")]
-    assert w.index('class="suggestions"') < w.index('id="wordcloud"') < w.index('class="hint"')   # 在介绍文字和示例按钮下面
-    assert 'id="wordcloud"' not in html[:html.index('id="welcome"')]
-
-
-def test_wordcloud_script_fills_the_input_but_never_sends_and_hides_with_the_welcome_area():
     js = (WEB / "app.js").read_text(encoding="utf-8")
-    seg = js[js.index("async function loadWordcloud"):js.index("/* ---- 探活")]
-    assert "input.value = `什么是${w.w}？`" in seg and "input.focus()" in seg and "send(" not in seg and "sendBtn" not in seg
-    assert "/static/data/wordcloud.json" in seg and "catch" in seg
-    assert "loadWordcloud();" in js and "w.style.display = 'none'" in js                     # hideWelcome 隐藏整个欢迎区，词云在其内
-
-
-def test_wordcloud_style_is_tech_styled_floats_slowly_supports_dark_and_reduced_motion_and_no_horizontal_scroll():
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    seg = css[css.index("/* ---- 首页词云"):]
-    assert "linear-gradient(120deg" in seg and "drop-shadow" in seg and "@keyframes wc-float" in seg and "animation: wc-float var(--t)" in seg
-    assert "@media (prefers-reduced-motion: reduce) { .wc { animation: none" in seg
-    assert "prefers-color-scheme: dark" in seg and ".wordcloud:hover .wc" in seg and "scale(1.22)" in seg
-    assert "overflow: visible" in seg and "overflow: hidden" not in seg[:seg.index("@keyframes")] and "max-height" not in seg[:seg.index("@keyframes")]   # 容器随内容长高：词不被裁切，也不压住下面的说明文字
-    assert "@media (max-width: 520px)" in seg and "linear-gradient(rgba(99, 102, 241" in seg and "26px 26px" in seg                          # 网格背景（无外部资源）
-    for t in range(1, 6):
-        assert f".wc-{t} {{" in seg
-    import re
-    sizes = [float(x) for x in re.findall(r"\.wc-[1-5] \{ font-size: ([\d.]+)px", seg[:seg.index("@keyframes")])]
-    assert len(sizes) == 5 and sizes == sorted(sizes) and max(sizes) <= 20                  # 最大档不压过 20px 的标题
+    assert "wordcloud" not in html and "wordcloud" not in js.lower() and ".wordcloud" not in css and ".wc-" not in css
 
 
 def test_graph_page_has_the_required_markers_stats_filters_and_interactions():
@@ -219,7 +188,7 @@ def test_structural_relation_between_two_concepts_is_not_drawn_and_not_counted()
         {"集合ID": "4", "章节": "Ch01", "主体": "概念丙三", "关系": "hasFeature", "客体": "概念丙二", "公理": ""},
         {"集合ID": "5", "章节": "Ch01", "主体": "概念丙二", "关系": "hasFeature", "客体": "概念丙二", "公理": ""},      # 自环
     ])
-    _, graph, _ = g.build(rs, n_words=3, reveal=1.0)
+    graph, _ = g.build(rs, reveal=1.0)
     by = {n["n"]: n for n in graph["nodes"]}
     assert {e[2] for e in graph["edges"]} == {"hasPart", "hasFeature"} and len(graph["edges"]) == 2
     assert by["概念丙一"]["d"] == 1 and by["概念丙二"]["d"] == 2 and by["概念丙三"]["d"] == 1          # 结构性关系与自环都不计
@@ -239,7 +208,7 @@ def _big_rows():
 
 
 def test_per_chapter_cap_keeps_the_most_connected_and_every_chapter_stays_visible():
-    _, graph, rep = g.build(_big_rows(), n_words=10, reveal=0.3, per_chapter=40)
+    graph, rep = g.build(_big_rows(), reveal=0.3, per_chapter=40)
     from collections import Counter
     per = Counter(n["c"] for n in graph["nodes"])
     assert per[1] == 40 and per[2] <= 40 and per[3] <= 40 and set(per) == {1, 2, 3}
@@ -250,7 +219,7 @@ def test_per_chapter_cap_keeps_the_most_connected_and_every_chapter_stays_visibl
 
 
 def test_capped_graph_keeps_about_thirty_percent_names_per_chapter_and_edges_stay_inside_the_kept_nodes():
-    _, graph, _ = g.build(_big_rows(), n_words=10, reveal=0.3, per_chapter=40)
+    graph, _ = g.build(_big_rows(), reveal=0.3, per_chapter=40)
     from collections import Counter
     per, named = Counter(n["c"] for n in graph["nodes"]), Counter(n["c"] for n in graph["nodes"] if "n" in n)
     assert named[1] == 12 and all(abs(named[c] - round(per[c] * 0.3)) <= 1 for c in per)
@@ -260,21 +229,21 @@ def test_capped_graph_keeps_about_thirty_percent_names_per_chapter_and_edges_sta
 
 
 def test_node_degree_shown_to_users_is_the_real_relevance_count_not_the_count_inside_the_capped_graph():
-    _, graph, _ = g.build(_big_rows(), n_words=10, reveal=1.0, per_chapter=40)
+    graph, _ = g.build(_big_rows(), reveal=1.0, per_chapter=40)
     hub = next(n for n in graph["nodes"] if n.get("n") == "枢纽1章概念")
     drawn = sum(1 for e in graph["edges"] if hub["i"] in (e[0], e[1]))
     assert hub["d"] == 300 and drawn == 39 and drawn < hub["d"]          # 点击卡片里的“关联数”是全图真实数；图里只画保留下来的连线
 
 
 def test_cap_is_reproducible_and_the_committed_json_is_exactly_what_the_script_generates_from_the_same_rows():
-    a, b = g.build(_big_rows(), 10, 0.3, 40), g.build(_big_rows(), 10, 0.3, 40)
-    assert json.dumps(a[1], ensure_ascii=False) == json.dumps(b[1], ensure_ascii=False)
+    a, b = g.build(_big_rows(), 0.3, 40), g.build(_big_rows(), 0.3, 40)
+    assert json.dumps(a[0], ensure_ascii=False) == json.dumps(b[0], ensure_ascii=False)
     src = Path("/Users/yizhimianyang/Desktop/NJU_ra/11.2update/三层集合/纯粹知识集合.xlsx")
     if not src.is_file():
         pytest.skip("源 xlsx 不在本机（只在开发机上校验提交的 JSON 与脚本输出一致）")
-    cloud, graph, _ = g.build(g.load(src), 72, 0.3)
+    graph, _ = g.build(g.load(src), 0.3)
     committed = json.loads((WEB / "data" / "graph.json").read_text(encoding="utf-8"))
-    assert graph == committed and cloud == json.loads((WEB / "data" / "wordcloud.json").read_text(encoding="utf-8"))
+    assert graph == committed
 
 
 def test_committed_graph_has_a_visible_share_for_every_chapter():
@@ -285,22 +254,7 @@ def test_committed_graph_has_a_visible_share_for_every_chapter():
     assert graph["totals"]["concepts_total"] > graph["totals"]["concepts"]
 
 
-# ---------------------------------------------------------------- 网页打磨：词云不压字 / 图谱适配视口 / 窄屏顶栏
-
-def test_wordcloud_container_grows_with_its_content_and_has_clear_padding_and_spacing_below():
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    block = css[css.index(".wordcloud {"):css.index(".wordcloud[hidden]")]
-    assert "overflow: visible" in block and "max-height" not in block and "padding: 22px 28px" in block and "margin: 18px auto 16px" in block
-    assert "isolation: isolate" in block and "radial-gradient" in block and "linear-gradient(rgba(99, 102, 241" in block      # 光晕 + 网格背景
-
-
-def test_wordcloud_colour_layers_by_tier_in_light_and_dark():
-    css = (WEB / "style.css").read_text(encoding="utf-8")
-    for t in range(1, 6):
-        assert css.count(f".wc-{t} {{") >= 2                                              # 浅色一套、深色一套
-    light = css[css.index(".wc-1 { font-size"):css.index("/* 颜色按层级加深")]
-    assert "--wc-a: #4c1d95" in light and "--wc-a: #6366f1" in light                      # 重要的词颜色更深
-
+# ---------------------------------------------------------------- 网页打磨：图谱适配视口 / 窄屏顶栏
 
 def test_graph_fits_the_whole_graph_into_the_viewport_after_layout():
     js = (WEB / "graph.js").read_text(encoding="utf-8")
