@@ -21,6 +21,8 @@ RAG_DIR = Path(os.environ.get("RAG_DIR", ROOT / "rag"))
 load_dotenv(ROOT / ".env")
 load_dotenv(RAG_DIR / ".env")
 
+from .persona import PERSONA_CORE  # noqa: E402 - 角色卡不依赖配置，放在 load_dotenv 之后不改变加载顺序
+
 # ---- 路径（均可用环境变量覆盖，默认值保持不变）----
 DATA_DIR = Path(os.environ.get("RAG_DATA_DIR", ROOT / "nlp_"))   # 原始资料目录
 STORE_DIR = Path(os.environ.get("STORE_DIR", RAG_DIR / "chroma_db"))  # 向量库持久化目录
@@ -260,8 +262,7 @@ GENERAL_MODEL = os.environ.get("GENERAL_MODEL", "") or ROUTER_MODEL      # 通�
 GENERAL_REASONING = os.environ.get("GENERAL_REASONING", "disabled").strip()
 GENERAL_TIMEOUT = float(os.environ.get("GENERAL_TIMEOUT", "60"))
 GENERAL_SYSTEM = os.environ.get("GENERAL_SYSTEM") or (
-    "你是「AI 李老师」，一个面向研究生的学术助手。本次问题不在团队知识库的范围内，"
-    "请用你自己的知识直接、准确地回答。\n"
+    PERSONA_CORE + "\n本次问题不在团队知识库的范围内，请用你自己的知识直接、准确地回答。\n"
     "- 不声称内容来自本知识库，也不编造书名、页码、条文号、案号等具体出处；确实需要引用时说明是通用常识。\n"
     "- 不确定的地方直接说不确定，不要为了显得权威而硬凑。\n"
     "- 涉及事实、数字、法条、时效性信息时，提醒用户以权威来源为准。\n"

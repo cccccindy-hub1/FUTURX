@@ -17,9 +17,11 @@ import re
 from dataclasses import dataclass, field
 
 from ..course.llm import LLMClient
+from ..persona import PERSONA_BLOCK
 from .retrieval import CaseHit
 
-CASE_ANSWER_SYSTEM = """你是《数据要素》课程的判例讲解助教。只依据下面给出的判例材料写，不使用材料之外的知识，不要编造案号、法院、日期、金额。
+CASE_ANSWER_SYSTEM = PERSONA_BLOCK + """
+现在是判例讲解：只依据下面给出的判例材料写，不使用材料之外的知识，不要编造案号、法院、日期、金额。
 材料按 [C1]、[C2]… 编号，每个编号是一个判例。整个回答采用“总—分—总”结构：
 - lead：开头一句总起，直接回答学生问题，可用一句话概括这些判例的共同裁判立场；不超过 60 字；
 - 每个判例写下面三项，每项一两句话到两三句话，精炼、不复述原文：
@@ -77,15 +79,16 @@ def build_messages(question: str, hits: list[CaseHit], first_n: int = 1) -> list
 
 
 def answer_cases(question: str, hits: list[CaseHit], llm: LLMClient, *, model: str,
-                 history: list[dict] | None = None) -> CaseAnswer:
-    """一次作答调用。模型只填 facts / holding / relation；头两行由程序拼。解析失败时只返回程序填写的头部和原文要点，不重试。"""
+                 history: list[dict] | None = None, profile: str = "") -> CaseAnswer:
+    """一次作答调用。模型只填 facts / holding / relation；头两行由程序拼。解析失败时只返回程序填写的头部和原文要点，不重试。
+    profile：这个学生的画像，非空时追加到 system 末尾；为空时提示词逐字不变。"""
     from ..course.answer import CitationRewriter
     from ..course.llm import parse_json_object
     msgs = build_messages(question, hits)
-    if history:
+    if history or profile:
         from ..prompt_rules import with_history
 
-        msgs = with_history(msgs, history)
+        msgs = with_history(msgs, history, profile=profile)
     res = llm.chat("case_answer", msgs, model=model, json_mode=True)
     refs = {f"C{k}": h.ref.case_id for k, h in enumerate(hits, 1)}
     rw = CitationRewriter(refs)

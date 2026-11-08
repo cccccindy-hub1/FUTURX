@@ -61,13 +61,18 @@ FOLLOWUP_MAX = 4
 FOLLOWUP_MAX_CHARS = 25
 
 # ---- 多轮对话：把历史插进已有消息列表 ----
-def with_history(messages: list[dict], history: list[dict] | None) -> list[dict]:
+def with_history(messages: list[dict], history: list[dict] | None, profile: str = "") -> list[dict]:
     """在最后一条 user 消息之前插入历史轮次（system 保持在最前）。
 
     各作答路径（课程 / 政策 / 判例 / 组合）都按 [system, user(资料+问题)] 组装，历史统一插在
     这两者之间，模型看到的就是真实的 user / assistant 交替，而不是被压成一段文字。
     history 元素为 {"role": "user"|"assistant", "content": str}；空内容与非法角色直接跳过。
+
+    profile：这个学生的画像（rag.profile.summary 的结果），非空时追加到 system 提示末尾。
+    为空时 messages 原样返回（逐字不变），没有画像的学生不受影响。
     """
+    if profile:
+        messages = _with_profile(messages, profile)
     if not history:
         return messages
     pairs = []
@@ -81,6 +86,15 @@ def with_history(messages: list[dict], history: list[dict] | None) -> list[dict]
     if not pairs:
         return messages
     return messages[:-1] + pairs + messages[-1:]
+
+
+def _with_profile(messages: list[dict], profile: str) -> list[dict]:
+    """把画像追加到第一条 system 之后；没有 system 时不加（避免把画像塞进 user 里当用户说的话）。"""
+    if not messages or messages[0].get("role") != "system":
+        return messages
+    first = dict(messages[0])
+    first["content"] = str(first.get("content") or "") + "\n\n" + profile.strip()
+    return [first] + list(messages[1:])
 
 
 __all__ = ["ANSWER_STRUCTURE", "COURSE_SAMPLES", "THESIS_SAMPLES",

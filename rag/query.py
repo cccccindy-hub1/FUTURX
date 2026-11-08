@@ -42,10 +42,12 @@ from .config import (
 )
 from .embedding import BatchedEmbedder
 from .enhance import build_retrieval_query
+from .persona import PERSONA_BLOCK
 from .prompt_rules import ANSWER_STRUCTURE, THESIS_SAMPLES
 from .retrieval import HybridRetriever, Reranker, load_parents
 
-_SYSTEM_PROMPT = """你是数字治理科研团队的学术论文指导助手。使用中文，直接、清晰地回答。
+_SYSTEM_PROMPT = PERSONA_BLOCK + """
+现在是学位论文写作与研究方法指导：使用中文，直接、清晰地回答。
 多轮对话：messages 里本轮之前的 user / assistant 消息是真实对话历史，追问（「第二种」「那它呢」）
 要接着上文回答；资料只覆盖本轮问题，历史里出现过的事实可以沿用，但不要发明历史中没有的内容。
 """ + ANSWER_STRUCTURE + """
@@ -90,9 +92,11 @@ def is_lit_review_question(query: str) -> bool:
     return any(k in q for k in LIT_REVIEW_KEYWORDS)
 
 
-def system_prompt_for(query: str) -> str:
-    """论文库作答的 system prompt：文献综述类问题追加回答逻辑，其余与 _SYSTEM_PROMPT 逐字相同。"""
-    return _SYSTEM_PROMPT + LIT_REVIEW_LOGIC if is_lit_review_question(query) else _SYSTEM_PROMPT
+def system_prompt_for(query: str, profile: str = "") -> str:
+    """论文库作答的 system prompt：文献综述类问题追加回答逻辑，其余与 _SYSTEM_PROMPT 逐字相同。
+    profile：这个学生的画像，非空时追加在最后；为空时提示词逐字不变。"""
+    base = _SYSTEM_PROMPT + LIT_REVIEW_LOGIC if is_lit_review_question(query) else _SYSTEM_PROMPT
+    return base + "\n\n" + profile.strip() if profile.strip() else base
 
 
 def _tune_torch(model) -> int | None:
@@ -291,17 +295,20 @@ class RAGService:
         """保持 Chroma query() 的嵌套列表返回形状（兼容既有调用方）。"""
         return self.retrieve_result(query, top_k).as_chroma()
 
-    def prepare(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None):
+    def prepare(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None,
+                profile: str = ""):
         """检索 + 组装上下文，返回 (contexts, sources, messages)。
 
         供 answer / 流式生成 / OpenAI 兼容接口共用，避免提示词与过滤逻辑分叉。
         history：之前的对话轮次 [(role, content)]，原样插在系统提示之后；
         search_query：只用完整的独立问题去检索（追问先由调用方改写），缺省用 query。
         """
-        return self.prepare_from(query, self.retrieve_result(search_query or query, top_k), history=history)
+        return self.prepare_from(query, self.retrieve_result(search_query or query, top_k), history=history,
+                                 profile=profile)
 
-    def prepare_from(self, query: str, result, *, history=None):
-        """由已有的检索结果组装 (contexts, sources, messages)；自适应流程复用，避免提示词分叉。"""
+    def prepare_from(self, query: str, result, *, history=None, profile: str = ""):
+        """由已有的检索结果组装 (contexts, sources, messages)；自适应流程复用，避免提示词分叉。
+        profile：这个学生的画像，非空时追加到 system 末尾；为空时提示词逐字不变。"""
         docs = result.documents
         metas = result.metadatas
         dists = result.distances
@@ -324,13 +331,14 @@ class RAGService:
         )
         # 检索资料放在本轮问题前面（同一轮），之前的对话轮次原样插在系统提示之后：
         # 这样模型看到的是真实的 user/assistant 交替历史，而不是被压成一段文字。
-        messages = [{"role": "system", "content": system_prompt_for(query)}]
+        messages = [{"role": "system", "content": system_prompt_for(query, profile)}]
         messages += [{"role": role, "content": text} for role, text in (history or [])
                      if text and text.strip()]
         messages.append({"role": "user", "content": f"资料：\n{ctx}\n\n问题：{query}"})
         return docs, sources, messages
 
-    def answer(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None):
+    def answer(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None,
+               profile: str = ""):
         self.timing: dict = {
             "retrieval": 0.0,
             "llm_ttft": 0.0,
@@ -339,7 +347,8 @@ class RAGService:
         }
 
         t0 = time.perf_counter()
-        docs, sources, messages = self.prepare(query, top_k, history=history, search_query=search_query)
+        docs, sources, messages = self.prepare(query, top_k, history=history, search_query=search_query,
+                                               profile=profile)
         self.timing["retrieval"] = time.perf_counter() - t0
         if not self.llm:
             return None, sources, docs
@@ -369,13 +378,15 @@ class RAGService:
         self.timing["llm_total"] = t_llm_end - t_llm0
         return "".join(parts), sources, docs
 
-    def open_stream(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None):
+    def open_stream(self, query: str, top_k: int = TOP_K, *, history=None, search_query: str | None = None,
+                    profile: str = ""):
         """流式生成，返回 (contexts, sources, delta_iter)。
 
         delta_iter 逐段产出增量文本；无 LLM 时抛 RuntimeError（由调用方转成 HTTP 错误）。
         history / search_query 含义同 prepare：历史原样交给模型，检索用改写后的独立问题。
         """
-        docs, sources, messages = self.prepare(query, top_k, history=history, search_query=search_query)
+        docs, sources, messages = self.prepare(query, top_k, history=history, search_query=search_query,
+                                               profile=profile)
         if not self.llm:
             raise RuntimeError("未配置 LLM_API_KEY，无法生成回答")
 

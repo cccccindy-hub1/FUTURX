@@ -213,9 +213,11 @@ def test_ordinary_course_question_has_no_hint_and_the_prompt_is_verbatim(course)
 
 def test_course_answer_prompt_without_solve_is_byte_identical_to_before():
     from rag.course import prompts
+    from rag import persona
     from rag import prompt_rules as rules
-    # 结构条款与样例改为引用常量后，结尾是样例二；改为断言常量被完整拼接（而非写死旧措辞）
-    assert prompts.ANSWER_SYSTEM.endswith(rules.COURSE_SAMPLES)
+    # 结构条款与样例改为引用常量后，结尾是多轮接话示例；断言常量被完整拼接（而非写死旧措辞）
+    assert rules.COURSE_SAMPLES in prompts.ANSWER_SYSTEM
+    assert prompts.ANSWER_SYSTEM.endswith(persona.EXAMPLE_DIALOGUE)   # 多轮示例放最后，教「接话」
     assert rules.ANSWER_STRUCTURE in prompts.ANSWER_SYSTEM
     assert "不要引用材料中没有的编号，不要原样写出占位符 “[S#]”。" in prompts.ANSWER_SYSTEM
     assert prompts.ANSWER_SOLVE_HINT.startswith("\n- 这是一道具体的题目")

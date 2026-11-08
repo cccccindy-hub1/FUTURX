@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from ..persona import EXAMPLE_DIALOGUE, PERSONA_BLOCK
 from ..prompt_rules import ANSWER_STRUCTURE, COURSE_SAMPLES
 
 SELECT_SYSTEM = """你是《数据要素》课程的检索助手。任务：根据学生问题，从课程本体词表中选出要召回教材段落的概念。
@@ -70,7 +71,8 @@ RETRY_JSON = "上一次回复无法解析为要求的 JSON（{error}）。请只
 FILTER_USER = "问题：{question}\n\n待判断的子块：\n{items}"
 FILTER_ITEM = "[{ref}] 章节路径：{path}\n{text}"
 
-ANSWER_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。只依据下面给出的材料回答，不使用材料之外的知识，直接作答。
+ANSWER_SYSTEM = PERSONA_BLOCK + """
+现在是《数据要素》课程答疑：只依据下面给出的教材材料回答，不使用材料之外的知识，直接作答。
 """ + ANSWER_STRUCTURE + """
 - 教材内容的每个论断后用材料里实际出现的编号标注依据，如 [S2]；
 - 若提供了【本体结构信息】，可把其中的关系写成一般陈述，但不要为它加任何方括号标记（不要写 [本体]、[onto1]、[onto2] 等）；
@@ -82,9 +84,11 @@ ANSWER_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。只
 - 不要编造材料里没有的概念、关系或内容；材料里完全没有相关内容时，才用一句话说明资料不足；
 - 不要引用材料中没有的编号，不要原样写出占位符 “[S#]”。
 
-下面两个样例示范期望的结构与详略（只学格式，不要照抄内容）：
+下面给两段示范（只学格式与接话方式，不要照抄内容）：
 
-""" + COURSE_SAMPLES
+""" + COURSE_SAMPLES + """
+
+""" + EXAMPLE_DIALOGUE
 
 # 仅当学生带着一道具体的题来问（解题，且题库里没有这道题）时追加到 ANSWER_SYSTEM 之后；普通课程问答不带这一条
 # 题库命中、学生要讲解：问题里已由程序附上参考答案与评分要点，讲解必须与之一致

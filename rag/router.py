@@ -299,14 +299,42 @@ def looks_recall(question: str) -> bool:
     return bool(_RECALL_RE.search(question or ""))
 
 
+# 确认 / 收尾语：「好的 了解了」「谢谢」「嗯嗯」「明白」——不该再甩一遍能力清单，
+# 也不该当成新问题去检索。带真问题的（「好的，那什么是数据确权」）不算。
+_ACK_WORD = (r"(?:好的?|好滴|好嘞|行|可以|嗯+|恩+|哦+|噢+|收到|明白|明白了|懂了|了解了?|知道了|清楚了|"
+             r"谢谢|多谢|感谢|辛苦了?|没事了?|没有|暂时没有|就这样|ok|okay)")
+_ACK_RE = re.compile(rf"^[\s，。！？!?,.]*(?:{_ACK_WORD}[\s，。、！？!?,.]*){{1,3}}$", re.I)
+
+# 问「你刚才怎么答的」：问过程与链路，不是问能力清单
+_PROGRESS_RE = re.compile(
+    r"(?:你|您)[^，。？?！!]{0,6}(?:刚才|刚刚|这次|这一轮)[^，。？?！!]{0,6}(?:怎么|如何|为什么)[^，。？?！!]{0,4}"
+    r"(?:答|回答|说|判断|找)"
+    r"|(?:回答|作答|检索|问答)(?:的)?(?:链路|流程|路径|过程|步骤|逻辑)(?:是|怎么|如何)"
+    r"|(?:你|您)(?:是)?(?:怎么|如何)(?:回答|作答|判断|检索)(?:的)?[？?]?$")
+
+
+def looks_ack(question: str) -> bool:
+    """只是确认 / 收尾（「好的 了解了」「谢谢」「嗯」）：回一句短的，不检索。"""
+    return bool(_ACK_RE.match((question or "").strip()))
+
+
+def looks_progress(question: str) -> bool:
+    """问「你刚才怎么答的 / 你的回答链路是怎样的」：讲清楚这一轮做了什么，不是复用能力清单。"""
+    return bool(_PROGRESS_RE.search(question or ""))
+
+
 def looks_meta(question: str) -> bool:
-    """跟助手自身有关：打招呼、问能力 / 知识库 / 用法，或问自己之前问过什么。"""
+    """跟助手自身有关：打招呼、问能力 / 知识库 / 用法、问之前问过什么、单纯确认，或问刚才怎么答的。"""
     q = (question or "").strip()
     if not q:
         return False
     if looks_recall(q):
         return True
+    if looks_ack(q):
+        return True
     if looks_greeting(q):
+        return True
+    if looks_progress(q) and bool(_SELF_REF.search(q) or "链路" in q or "流程" in q):
         return True
     return bool(_SELF_REF.search(q)) and (any(k in q for k in _META_TOPIC) or bool(_META_ABILITY.search(q)))
 
@@ -325,8 +353,10 @@ def rule_route(question: str) -> RouteDecision:
     if exam_hits:
         return RouteDecision("exam", "simple", f"规则命中 exam 关键词 {exam_hits} 个", source="rules")
     if looks_meta(question):
-        why = "打招呼" if looks_greeting(question) else (
-            "问自己之前问过什么" if looks_recall(question) else "问助手自身能力 / 知识库")
+        why = ("打招呼" if looks_greeting(question) else
+               "问自己之前问过什么" if looks_recall(question) else
+               "确认 / 收尾" if looks_ack(question) else
+               "问刚才怎么答的" if looks_progress(question) else "问助手自身能力 / 知识库")
         return RouteDecision("meta", "simple", f"规则命中：{why}", source="rules")
     case, quote = _looks_case(question), _looks_quote(question)
     if case or quote:

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -28,12 +29,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config
+from . import profile as learner
 from . import qa_store, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
-from .router import RouteDecision, classify, looks_recall
+from .persona import EXAMPLE_DIALOGUE, GREETING_SHORT
+from .router import RouteDecision, classify, looks_ack, looks_greeting, looks_progress, looks_recall
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _UNSET = object()          # 区分「还没建过通用作答客户端」与「建过但未配置（None）」
 
@@ -245,6 +249,7 @@ class _Cancelled(Exception):
 
 
 # meta 路由（问助手自身）的固定片段。能力清单按实际加载情况拼装，见 UnifiedService._meta。
+# 人设与开场白统一来自 rag.persona（角色卡），此处不再另写一份。
 META_INTRO = "我是 AI 李老师，数字治理科研团队的学术数字人。"
 META_SCOPES = [
     ("thesis", "学位论文写作与指导", "选题、开题报告、文献综述、研究设计、研究方法（扎根理论 / 问卷 / 访谈 / 统计）、"
@@ -258,8 +263,46 @@ META_SCOPES = [
 ]
 META_TAIL = ("回答都会标注依据来源：课程与论文类给页码 / 章节，政策与判例给文件名与条款，讲话给年份与场合。"
              "直接输入问题就行；追问时可以接着上一轮问。")
-META_GREETING = "您好！我是 AI 李老师，数字治理科研团队的学术数字人。可以直接问我问题，例如" \
-                "「什么是数据确权」「文献综述怎么写」「数据安全法第二十一条规定了什么」。"
+META_GREETING = GREETING_SHORT
+# meta 各路径的短回复：确认 / 收尾一句话，并按上文给一个下一步；没有上文就不给，不硬凑。
+ACK_REPLY = "好，需要接着问什么直接说。"
+ACK_REPLY_WITH_NEXT = "好。接着可以问「{next}」，或者直接把下一个问题发给我。"
+# 上一个问题问的是什么，决定「下一步」推荐什么方向（只影响文案，不检索）
+_ACK_NEXT = {
+    "course": "这个概念怎么考", "thesis": "这个方法在论文里怎么写",
+    "policy": "这条规定的适用范围", "case": "这个判例的裁判要点", "quote": "同一主题还有哪些讲话",
+    "exam": "这道题的参考答案", "meta": "你能做什么", "off_topic": "再问一个具体问题",
+}
+_ROUTE_CN = {"course": "课程知识", "thesis": "论文写作", "policy": "政策法规", "exam": "课程试题",
+             "case": "判例", "quote": "讲话名言", "meta": "助手自身", "off_topic": "库外通用问答"}
+
+
+def _last_route(history: list[dict] | None, depth: int = 6) -> str:
+    """上一轮问的是哪一类：取 history 里最后一条 user 问题，用关键词规则判一次（零调用、不联网）。
+
+    不看助手回答的措辞（各库句式不统一，认不准），只看学生上一句问的是什么；
+    规则判不出来（返回 off_topic 又没命中关键词）时也照样返回，调用方据此给通用建议。
+    """
+    last = ""
+    for m in reversed((history or [])[-depth * 2:]):
+        if isinstance(m, dict) and m.get("role") == "user" and (m.get("content") or "").strip():
+            last = str(m["content"]).strip()
+            break
+    if not last:
+        return ""
+    try:
+        from .router import rule_route
+        return rule_route(last).route
+    except Exception:  # noqa: BLE001 - 判不出来就不带上下文，不影响回答
+        return ""
+
+
+def _ack_reply(history: list[dict] | None) -> str:
+    """确认 / 收尾语的回法：没有上文就一句短的；有上文就带上一个顺着上文的下一步。"""
+    prev = _last_route(history)
+    if not prev:
+        return ACK_REPLY
+    return ACK_REPLY_WITH_NEXT.format(next=_ACK_NEXT.get(prev, "下一个问题"))
 # 问「我之前问过哪些」时最多列多少条：只是给个回顾，不把几十条翻出来。
 RECALL_MAX = 20
 
@@ -364,28 +407,64 @@ class UnifiedService:
         # 作答与检索用补全后的独立问题：各库的作答提示词都是「只依据材料回答」，
         # 只给历史不看指代时，模型会说「你问的它指代不明」（实测）。历史仍作为上下文一并传入。
         q = routed_q
+        who = user_id or key_id or (rec.key_id if rec is not None else None)     # 画像按人记，口径同问答记录
+        prof = learner.summary(who)                                              # 没有记录时是空串，提示词逐字不变
         if d.combined:
-            self._combined(q, d, out, trace, history)
+            self._combined(q, d, out, trace, history, profile=prof)
         elif d.route == "off_topic":
             self._general(q, out, trace, history)          # 超出知识库：用大模型自身能力答，不检索
         elif d.route == "policy":
-            self._policy(q, out, trace, history)
+            self._policy(q, out, trace, history, profile=prof)
         elif d.route == "course":
-            self._course(q, out, trace, solve=solve, history=history)
+            self._course(q, out, trace, solve=solve, history=history, profile=prof)
         elif d.route == "exam":
             self._exam(q, out, trace)
         elif d.route == "case":
-            self._case(q, d, out, trace, history)
+            self._case(q, d, out, trace, history, profile=prof)
         elif d.route == "quote":
             self._quote(q, d, out, trace)
         elif d.route == "meta":
-            self._meta(out, trace, q, {"user_id": user_id, "session_id": session_id, "key_id": key_id})
+            self._meta(out, trace, q, {"user_id": user_id, "session_id": session_id, "key_id": key_id},
+                       history=history)
         else:
-            self._thesis(q, top_k, d.complexity, out, trace, history)
+            self._thesis(q, top_k, d.complexity, out, trace, history, profile=prof)
+        self._note_learning(who, out, d)
         trace["total_s"] = round(time.perf_counter() - t0, 4)
         out["trace"] = trace
         out["followups"] = self._followups(question, out)
         return out
+
+    # ---------------------------------------------------------------- 学习者画像（P1）
+    def _note_learning(self, who: str | None, out: dict[str, Any], d: RouteDecision) -> None:
+        """把这一轮涉及的概念 / 章记进画像（rag.profile）。
+
+        只记事实：课程管线选中的概念名、判例 / 试题命中的章号；不记对错、不推断水平。
+        写失败只记 warning（profile 内部已兜底），绝不影响本次回答。
+        """
+        if not who:
+            return
+        concepts = [self._concept_name(c) for c in ((out.get("course") or {}).get("selected_concepts") or [])
+                    if isinstance(c, dict)]
+        concepts = [c for c in concepts if c]
+        chapter = d.chapter if ("case" in (d.routes or []) or d.route in ("case", "exam")) else None
+        if not concepts and chapter is None:
+            return
+        try:
+            learner.notice_question(who, concepts=concepts, chapter=chapter)
+        except Exception as e:  # noqa: BLE001 - 画像只是加分项
+            logger.warning("画像记录失败（%s）", type(e).__name__)
+
+    def _concept_name(self, item: dict) -> str:
+        """selected_concepts 的元素只有 concept_id（名称在课程词表里），换成名字；换不到就用 id。"""
+        cid = item.get("concept_id") or ""
+        if not cid:
+            return ""
+        if self.course_ctx is not None:
+            try:
+                return self.course_ctx.concepts.by_id[cid].name
+            except Exception:  # noqa: BLE001 - 词表里没有这个 id：退回 id
+                pass
+        return cid
 
     # ---------------------------------------------------------------- 追问（需求3）
     _SKIP_FOLLOWUP = ("off_topic", "quote")           # 拒答无追问；讲话原文照录，不附追问
@@ -507,8 +586,10 @@ class UnifiedService:
                 d = self._solve_route(d)
             yield {"type": "route", "route": d.route, "routes": list(d.routes), "complexity": d.complexity, "count": d.count,
                    "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
+        who = user_id or key_id or getattr(rec, "key_id", None) or None   # 画像按人记，口径同问答记录
+        prof = learner.summary(who) if explain is None else ""            # 没有记录时是空串，提示词逐字不变
         if explain is None and d.combined and not self._available(d.routes):
-            yield from self._stream_combined(question, d, t0, rec, history)
+            yield from self._stream_combined(question, d, t0, rec, history, profile=prof)
             return
         if explain is None and d.route == "off_topic":
             # 超出知识库：不检索，直接用大模型自身知识作答。生成是流式的，逐字推给客户端，
@@ -521,22 +602,25 @@ class UnifiedService:
             trace: dict[str, Any] = {"router": d.to_dict()}
             try:
                 if d.combined:
-                    self._combined(routed_q, d, out, trace, history)        # 其中某个库未加载：返回 unavailable
+                    self._combined(routed_q, d, out, trace, history, profile=prof)   # 其中某个库未加载：返回 unavailable
                 elif d.route == "policy":
-                    self._policy(routed_q, out, trace, history)    # 单库政策：不流式，结果放进 done
+                    self._policy(routed_q, out, trace, history, profile=prof)    # 单库政策：不流式，结果放进 done
                 elif d.route == "course":
-                    self._course(routed_q, out, trace, solve=solve, history=history)        # 课程库未加载：返回 unavailable
+                    self._course(routed_q, out, trace, solve=solve, history=history,
+                                 profile=prof)        # 课程库未加载：返回 unavailable
                 elif d.route == "exam":
                     self._exam(routed_q, out, trace)
                 elif d.route == "case":
-                    self._case(routed_q, d, out, trace, history)       # 单库判例：不流式，结果放进 done
+                    self._case(routed_q, d, out, trace, history, profile=prof)       # 单库判例：不流式，结果放进 done
                 elif d.route == "quote":
                     self._quote(routed_q, d, out, trace)      # 单库名言：不流式，结果放进 done
                 elif d.route == "meta":
                     self._meta(out, trace, routed_q, {"user_id": user_id, "session_id": session_id,
-                                                      "key_id": key_id or getattr(rec, "key_id", None)})
+                                                      "key_id": key_id or getattr(rec, "key_id", None)},
+                               history=history)
                 else:
-                    self._thesis(routed_q, top_k, d.complexity, out, trace, history)
+                    self._thesis(routed_q, top_k, d.complexity, out, trace, history, profile=prof)
+                self._note_learning(who, out, d)
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
                 rec.pending_out = {"route": d.route, "routes": list(d.routes), "complexity": d.complexity,
                                    "status": "error", "answer": "", "sources": []}
@@ -569,7 +653,8 @@ class UnifiedService:
                 with usage_log.activate(rec):                    # 后台线程里重新激活，pipeline 的 LLM 调用才记得到
                     # 检索与作答用补全后的独立问题（与非流式一致）；讲解时 question 已是程序拼好的“题干 + 参考答案”
                     q.put(("result", ask(question if explain is not None else routed_q, ctx=self.course_ctx,
-                                         llm=self.course_llm, on_event=on_event, solve=solve, history=history)))
+                                         llm=self.course_llm, on_event=on_event, solve=solve, history=history,
+                                         profile=prof)))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -623,7 +708,7 @@ class UnifiedService:
             cancelled.set()
 
     # ---------------------------------------------------------------- 判例（单库，不流式）
-    def _case(self, question, d, out, trace, history: list[dict] | None = None) -> None:
+    def _case(self, question, d, out, trace, history: list[dict] | None = None, profile: str = "") -> None:
         if self.case_retriever is None:
             out.update(status="unavailable", answer=CASE_UNAVAILABLE)
             return
@@ -644,7 +729,8 @@ class UnifiedService:
             trace["case"]["answer_calls"] = 0
             return
         t1 = time.perf_counter()
-        ans = answer_cases(question, got["hits"], self.lib_llm, model=self.answer_model, history=history)
+        ans = answer_cases(question, got["hits"], self.lib_llm, model=self.answer_model, history=history,
+                           profile=profile)
         trace["case"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, dropped=ans.dropped)
         out.update(answer=ans.text, sources=ans.sources)
 
@@ -721,22 +807,37 @@ class UnifiedService:
                             "answer_s": round(time.perf_counter() - t0, 4)}
 
     # ---------------------------------------------------------------- 助手自身（不检索、不调用模型）
-    def _meta(self, out: dict, trace: dict, question: str = "", owner: dict | None = None) -> None:
+    def _meta(self, out: dict, trace: dict, question: str = "", owner: dict | None = None,
+              history: list[dict] | None = None) -> None:
         """「你能做什么 / 知识库有哪些内容」：按实际加载的库拼能力清单。
 
         不检索、不调用任何模型：这类问题问的是系统本身，检索出来的教材片段只会答偏。
         某个库没加载（数据缺失 / key 未配置）时如实不列，避免承诺做不到的能力。
-        纯打招呼（「你好」）只回一句欢迎语：学生只是打个招呼，不该甩一整篇清单。
-        问自己之前问过什么（「我之前都问过你哪些内容」）按问答记录直接列，见 _recall；
+        按问法分五种回答（都不甩长清单，除非真的问能力）：
+        - 纯打招呼（「你好」）→ 一句欢迎语；
+        - 确认 / 收尾（「好的 了解了」「谢谢」）→ 一句短的，并按上文给一个下一步（没有上文就不给）；
+        - 问刚才怎么答的（「你的回答链路是怎样的」）→ 讲本轮实际路径，不背能力清单；
+        - 问之前问过什么 → 按问答记录列，见 _recall；
+        - 问能力 / 知识库 → 完整清单。
         owner 是本次请求的调用方身份（user_id / session_id / key_id），按参数传，不放实例上——
         服务实例是所有请求共用的，放实例上会让并发的两个人读到对方的身份。
+        history 是本轮之前的对话：用来判断「这句确认是在确认什么」，只影响文案，不影响检索。
         """
         names = {"thesis": "论文", "course": "课程", "exam": "试卷", "policy": "政策", "case": "判例", "quote": "名言"}
         ready = [r for r, *_ in META_SCOPES if self._route_ready(r)]
-        if looks_recall(question or ""):
+        q = (question or "").strip()
+        if looks_recall(q):
             self._recall(out, trace, owner)
             return
-        if _GREETING_RE.match((question or "").strip()):
+        if looks_ack(q):
+            out.update(answer=_ack_reply(history), sources=[])
+            trace["meta"] = {"ack": True, "llm_calls": 0}
+            return
+        if looks_progress(q):
+            out.update(answer=self._progress_reply(history), sources=[])
+            trace["meta"] = {"progress": True, "llm_calls": 0}
+            return
+        if _GREETING_RE.match(q):
             if not ready:
                 out.update(status="unavailable", answer="知识库尚未加载，暂时无法作答。", sources=[])
                 trace["meta"] = {"scopes": [], "greeting": True}
@@ -789,6 +890,22 @@ class UnifiedService:
         trace["meta"] = {"recall": {"user_id": user_id, "session_id": session_id,
                                     "count": len(got["items"]), "total": total, "llm_calls": 0}}
 
+    def _progress_reply(self, history: list[dict] | None = None) -> str:
+        """「你的回答链路是怎样的」：讲这一轮实际是怎么走的，不背能力清单。
+
+        用上一轮实际命中的 route 说具体路径；没有上文就说通用路径。零检索、零调用。
+        """
+        prev = _last_route(history)
+        head = "你这一轮的问题是这样处理的：" if prev else "一般来说，问题是这样处理的："
+        lines = [head,
+                 "1. 先看是不是题库里的原题（带题干或指代第几道题）：命中就直接给题目与答案，不检索；",
+                 "2. 否则用一次路由判断该由哪个库回答（论文 / 课程 / 政策 / 试题 / 判例 / 讲话 / 助手自身 / 库外）；",
+                 "3. 再从对应库里检索并挑出材料，只依据材料作答，正文标注来源；",
+                 "4. 材料不够就说资料不足，不硬编；库外问题用通用知识回答并标明不来自知识库。"]
+        if prev:
+            lines.append(f"刚才那一轮走的是「{_ROUTE_CN.get(prev, prev)}」这条路径。")
+        return "\n".join(lines)
+
     def _route_ready(self, route: str) -> bool:
         """该库现在能不能真的作答（没加载 / 没配 key 都算不能）。"""
         if route == "course":
@@ -806,7 +923,7 @@ class UnifiedService:
         return False
 
     # ---------------------------------------------------------------- 政策（单库，不流式）
-    def _policy(self, question, out, trace, history: list[dict] | None = None) -> None:
+    def _policy(self, question, out, trace, history: list[dict] | None = None, profile: str = "") -> None:
         if self.policy_retriever is None:
             out.update(status="unavailable", answer=POLICY_UNAVAILABLE)
             return
@@ -818,12 +935,13 @@ class UnifiedService:
             trace["policy"]["answer_calls"] = 0
             return
         t1 = time.perf_counter()
-        ans = answer_policy(question, got["hits"], self.lib_llm, model=self.answer_model, history=history)
+        ans = answer_policy(question, got["hits"], self.lib_llm, model=self.answer_model, history=history,
+                            profile=profile)
         trace["policy"].update(answer_s=round(time.perf_counter() - t1, 4), answer_calls=1, removed_quotes=ans.removed_quotes)
         out.update(answer=ans.text, sources=ans.sources)
 
     # ---------------------------------------------------------------- 组合（各库并行取材，一次作答）
-    def _combined(self, question, d, out, trace, history: list[dict] | None = None) -> None:
+    def _combined(self, question, d, out, trace, history: list[dict] | None = None, profile: str = "") -> None:
         bad = self._available(d.routes)
         if bad:
             names = {"course": "课程库", "case": "判例库", "quote": "名言库", "policy": "政策库"}
@@ -840,7 +958,7 @@ class UnifiedService:
         t1 = time.perf_counter()
         titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
         ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
-                              history=history)
+                              history=history, profile=profile)
         trace["combined"].update(answer_s=round(time.perf_counter() - t1, 4), removed_quotes=ans.removed_quotes,
                                  missing=m.empty, sections=m.sections)
         out.update(answer=ans.text, sources=ans.sources)
@@ -908,7 +1026,8 @@ class UnifiedService:
                 pending["followups"] = got
         rec.pending_out = {**pending, "answer": answer, "status": status, "sources": [], "trace": trace}
 
-    def _stream_combined(self, question, d, t0, rec, history: list[dict] | None = None) -> Iterator[dict[str, Any]]:
+    def _stream_combined(self, question, d, t0, rec, history: list[dict] | None = None,
+                         profile: str = "") -> Iterator[dict[str, Any]]:
         """组合问答的流式：只有一次作答，照常流式。事件：stage（各库取材进度）→ materials（带库别 kind）/ delta → done。
         讲话引号校验需要完整正文，所以只作用于 done 里的最终 answer（delta 先流出；前端在 done 时用最终正文覆盖）。"""
         from .combined import answer_combined, gather_materials
@@ -933,7 +1052,7 @@ class UnifiedService:
                         return
                     titles = self.course_ctx.chapter_titles if self.course_ctx is not None else None
                     ans = answer_combined(question, m, self.course_llm, model=COURSE_ANSWER_MODEL, titles=titles,
-                                          history=history,
+                                          history=history, profile=profile,
                                           on_delta=lambda t: emit({"type": "delta", "text": t}),
                                           on_source=lambda e: emit({"type": "materials", **e}))
                     q.put(("result", ans, m))
@@ -980,22 +1099,24 @@ class UnifiedService:
         finally:
             cancelled.set()
 
-    def _thesis(self, question, top_k, complexity, out, trace, history: list[dict] | None = None) -> None:
+    def _thesis(self, question, top_k, complexity, out, trace, history: list[dict] | None = None,
+                profile: str = "") -> None:
         if self.adaptive is None:
             out.update(status="unavailable", answer="论文指导服务未加载。")
             return
-        r = self.adaptive.run(question, top_k, complexity, history=history)
+        r = self.adaptive.run(question, top_k, complexity, history=history, profile=profile)
         trace["adaptive"] = r.pop("trace")
         out.update(status=r["status"], answer=r["answer"], sources=r["sources"])
         out["contexts"] = r["contexts"]
 
-    def _course(self, question, out, trace, solve: bool = False, history: list[dict] | None = None) -> None:
+    def _course(self, question, out, trace, solve: bool = False, history: list[dict] | None = None,
+                profile: str = "") -> None:
         if self.course_ctx is None or self.course_llm is None:
             out.update(status="unavailable", answer="课程问答服务未加载（需要教材/本体数据与 COURSE_LLM_* 配置）。")
             return
         from .course.pipeline import ask, result_to_json
         res = result_to_json(ask(question, ctx=self.course_ctx, llm=self.course_llm, solve=solve,
-                                 history=history))
+                                 history=history, profile=profile))
         trace["course"] = res.pop("trace", None)
         ans = res.get("answer")
         if ans:

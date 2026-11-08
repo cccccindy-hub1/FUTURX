@@ -216,11 +216,12 @@ def source_entry(n: int, chunk: Recalled, titles: dict[int, str] | None = None) 
 def answer_question(question: str, kept: list[Recalled], relations: list[dict], llm: LLMClient, *,
                     model: str | None = None, on_delta=None, on_source=None,
                     titles: dict[int, str] | None = None, solve: bool | str = False,
-                    history: list[dict] | None = None) -> AnswerResult:
+                    history: list[dict] | None = None, profile: str = "") -> AnswerResult:
     """solve=True：学生带着具体题目来问，系统提示词追加“判断 / 选择题先给结论”一条；solve="explain"：题库命中后讲解，
     追加“与参考答案一致”一条；默认 False，提示词与原来逐字相同。
     on_delta(text)：流式时逐段回调「学生可见」文本（[S#] 已实时改成 [n]，一个被拆在两片里的 [S12] 会先缓冲到闭合）；
-    on_source(entry)：某块第一次被引用、分配序号时回调（entry 同 source_entry）。返回值与非流式相同。"""
+    on_source(entry)：某块第一次被引用、分配序号时回调（entry 同 source_entry）。返回值与非流式相同。
+    profile：这个学生的画像（rag.profile.summary），非空时追加到 system 末尾；为空时提示词逐字不变。"""
     model = model or config.COURSE_ANSWER_MODEL
     refs = {f"S{i + 1}": k.chunk_id for i, k in enumerate(kept)}
     by_id = {k.chunk_id: k for k in kept}
@@ -232,7 +233,7 @@ def answer_question(question: str, kept: list[Recalled], relations: list[dict], 
         {"role": "system", "content": prompts.ANSWER_SYSTEM + hint},
         {"role": "user", "content": prompts.ANSWER_USER.format(question=question, passages=passages)
          + (prompts.ANSWER_ONTOLOGY.format(ontology=render_relations(relations)) if relations else "")},
-    ], history)
+    ], history, profile=profile)
     rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(n, by_id[cid], titles))) if on_source else None)
 
     def push(raw: str) -> None:

@@ -33,10 +33,16 @@ def isolated_dirs(tmp_path, monkeypatch):
     # 不隔离的话每跑一次测试就往真实库里塞几十条假问答。
     monkeypatch.setenv("CONVERSATION_DB", str(tmp_path / "conversations.sqlite3"))
     monkeypatch.setenv("RAG_QA_DB", str(tmp_path / "qa_log.sqlite3"))
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
     monkeypatch.setenv("RAG_LOG_DIR", str(tmp_path / "usage"))
     try:
         import rag.conversation as conv_store
         conv_store.reset_connections()
+    except ImportError:
+        pass
+    try:
+        import rag.profile as learner
+        learner.reset()
     except ImportError:
         pass
 

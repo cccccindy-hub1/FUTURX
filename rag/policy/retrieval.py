@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 from ..course.llm import parse_json_object
+from ..persona import PERSONA_BLOCK
 from ..prompt_rules import ANSWER_STRUCTURE, COURSE_SAMPLES, with_history
 from . import config
 from .aliases import ALIASES
@@ -33,7 +34,8 @@ PICK_SYSTEM = """你是政策条文筛选器，只做选择，不写任何解释
 如果候选里没有一个直接相关，不要硬选：改为给出一个改写后的检索词 rewrite（换成更贴近政策用语的关键词），picks 留空。
 只输出一个 JSON 对象：{{"picks": [编号, ...], "rewrite": ""}}。picks 非空时 rewrite 填空串。"""
 
-ANSWER_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教，现在回答数据政策法规方面的问题。只依据下面给出的政策条文材料回答，不使用材料之外的知识，直接作答。
+ANSWER_SYSTEM = PERSONA_BLOCK + """
+现在是数据政策法规查询：只依据下面给出的政策条文材料回答，不使用材料之外的知识，直接作答。
 - 材料用 [P1]、[P2]… 编号，每个编号是一个条文块，开头写明了「篇｜文件名｜条号」。
 """ + ANSWER_STRUCTURE + """
 - 分点时每个要点先点明依据的文件名和条号（如“《数据安全法》第二十一条规定……”），再用自己的话说明内容；
@@ -290,15 +292,16 @@ def finish_answer(body: str, hits: list[PolicyHit], cited: dict[str, int]) -> tu
 
 
 def answer_policy(question: str, hits: list[PolicyHit], llm, *, model: str, on_delta=None, on_source=None,
-                  history: list[dict] | None = None) -> PolicyAnswer:
-    """一次作答调用。on_delta：流式时回调学生可见文本（[n] 已实时编号）；引号校验与附注只作用于最终 answer。"""
+                  history: list[dict] | None = None, profile: str = "") -> PolicyAnswer:
+    """一次作答调用。on_delta：流式时回调学生可见文本（[n] 已实时编号）；引号校验与附注只作用于最终 answer。
+    profile：这个学生的画像，非空时追加到 system 末尾；为空时提示词逐字不变。"""
     from ..course.answer import CitationRewriter
     refs = {f"S{h.n}": h.chunk["chunk_id"] for h in hits}
     by_id = {h.chunk["chunk_id"]: h for h in hits}
     msgs = with_history([{"role": "system", "content": ANSWER_SYSTEM},
                          {"role": "user",
                           "content": ANSWER_USER.format(question=question, materials=render_materials(hits))}],
-                        history)
+                        history, profile=profile)
     rw = CitationRewriter(refs, on_assign=(lambda n, cid: on_source(source_entry(by_id[cid], n))) if on_source else None)
     n_hits = max((h.n for h in hits), default=0)
 

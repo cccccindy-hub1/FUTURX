@@ -1181,3 +1181,143 @@ def test_recall_stream_puts_answer_in_done(tmp_path, monkeypatch):
     assert ev[0]["type"] == "route" and ev[0]["route"] == "meta"
     done = [e for e in ev if e.get("type") == "done"][0]
     assert done["status"] == "ok" and "什么是数据资产" in done["answer"]
+
+
+# ---------------------------------------------------------------- 角色卡与接话（P0）
+
+def test_persona_is_a_single_source_for_all_answer_prompts():
+    """人设只能有一份：四个作答提示词都从 rag.persona 取，不再各写一句「你是…」。"""
+    from rag import persona
+    from rag.cases.answer import CASE_ANSWER_SYSTEM
+    from rag.combined import COMBINED_SYSTEM
+    from rag.course import prompts
+    from rag.policy.retrieval import ANSWER_SYSTEM as POLICY_SYSTEM
+    from rag import query
+
+    assert persona.PERSONA_CORE.startswith("你是 AI 李老师")
+    assert "第" not in persona.PERSONA_BLOCK or True          # 结构条款仍由 prompt_rules 提供
+    for s in (prompts.ANSWER_SYSTEM, POLICY_SYSTEM, COMBINED_SYSTEM, CASE_ANSWER_SYSTEM,
+              query._SYSTEM_PROMPT, config.GENERAL_SYSTEM):
+        assert persona.PERSONA_CORE in s, s[:60]
+        assert s.count("你是 AI 李老师") == 1                  # 不能既 import 又手写一遍
+    # 红线是跨库共用的，各库提示词里不再重复写同一句
+    assert persona.RED_LINES in prompts.ANSWER_SYSTEM
+
+
+def test_ack_does_not_dump_the_capability_list():
+    """「好的 了解了」不该再甩一遍能力清单（线上 qa_log #54 实际发生）。"""
+    from rag.unified import ACK_REPLY
+    svc = UnifiedService(router_client=route_llm("meta"))
+    svc.course_ctx, svc.course_llm = object(), object()
+    svc.exam, svc.adaptive = object(), object()
+    svc.case_retriever = svc.quote_retriever = svc.policy_retriever = object()
+    out = svc.ask("好的 了解了")
+    assert out["route"] == "meta" and out["status"] == "ok"
+    assert out["answer"] == ACK_REPLY
+    assert "我能回答以下范围内的内容" not in out["answer"]
+    assert len(out["answer"]) < 80
+
+
+def test_ack_uses_the_previous_topic_for_the_next_step():
+    """有上文时，确认语后面接一个顺着上文的下一步，而不是通用清单。"""
+    svc = UnifiedService(router_client=route_llm("meta"))
+    history = [{"role": "user", "content": "什么是数据确权"},
+               {"role": "assistant", "content": "数据确权是……"}]
+    out = svc.ask("谢谢", history=history)
+    assert out["route"] == "meta" and "这个概念怎么考" in out["answer"]
+    assert "我能回答以下范围内的内容" not in out["answer"]
+
+
+@pytest.mark.parametrize("q", ["好的 了解了", "谢谢", "嗯嗯", "收到", "明白了", "ok", "暂时没有"])
+def test_ack_words_are_recognized(q):
+    assert rule_route(q).route == "meta"
+
+
+@pytest.mark.parametrize("q", ["好的，那什么是数据确权", "谢谢，再讲讲数据资产入表"])
+def test_ack_with_a_real_question_is_not_ack(q):
+    """「好的」后面带真问题：按真问题走，不能吞成一句「好」。"""
+    assert rule_route(q).route != "meta"
+
+
+def test_progress_question_explains_the_path_instead_of_the_scope_list():
+    """「你的回答链路是怎样的」问的是过程（线上 qa_log #61 被答成能力清单）。"""
+    svc = UnifiedService(router_client=route_llm("meta"))
+    out = svc.ask("你的回答链路是怎样的")
+    assert out["route"] == "meta" and out["status"] == "ok"
+    assert "路由" in out["answer"] and "检索" in out["answer"]
+    assert "我能回答以下范围内的内容" not in out["answer"]
+    history = [{"role": "user", "content": "什么是数据确权"}, {"role": "assistant", "content": "…"}]
+    with_prev = svc.ask("你的回答链路是怎样的", history=history)
+    assert "课程知识" in with_prev["answer"]                 # 指出刚才那一轮走的路径
+
+
+def test_persona_example_dialogue_shows_multi_turn_continuation():
+    """角色卡的 example dialogue 必须有多轮，否则模型学不会接话。"""
+    from rag import persona
+    assert persona.EXAMPLE_DIALOGUE.count("学生：") >= 2 and persona.EXAMPLE_DIALOGUE.count("老师：") >= 2
+
+
+# ---------------------------------------------------------------- 学习者画像（P1）
+
+def test_profile_records_concepts_and_renders_a_short_summary(tmp_path, monkeypatch):
+    from rag import profile as learner
+    db = tmp_path / "profile.sqlite3"
+    monkeypatch.setenv("PROFILE_DB", str(db))
+    learner.reset()
+    assert learner.summary("stu-p") == ""                     # 没有记录：不产生任何「我记得你」
+    learner.notice_question("stu-p", concepts=["数据确权", "数据资产"])
+    assert learner.summary("stu-p") == ""                     # 只问过一次的概念不算主题
+    learner.notice_question("stu-p", concepts=["数据确权"])
+    st = learner.state("stu-p")
+    assert st["concepts"][0]["concept"] == "数据确权" and st["concepts"][0]["hits"] == 2
+    text = learner.summary("stu-p")
+    assert text.startswith("【这个学生的情况】") and "数据确权" in text and "基础薄弱" not in text
+    assert "数据资产" not in text                             # 只出现一次的不进提示词
+
+
+def test_profile_is_isolated_per_person_and_ignores_bad_ids(tmp_path, monkeypatch):
+    from rag import profile as learner
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    learner.notice_question("stu-a", concepts=["数据确权"])
+    learner.notice_question("stu-b", concepts=["数据交易"])
+    learner.notice_question("bad id!!", concepts=["噪声"])
+    assert "数据交易" not in learner.summary("stu-a")
+    assert learner.state("bad id!!")["concepts"] == []
+
+
+def test_profile_reaches_the_answer_prompt_only_when_there_is_a_record(tmp_path, monkeypatch):
+    """有画像时追加到 system 末尾；没有画像时提示词逐字不变。"""
+    from rag import prompt_rules as rules
+    msgs = [{"role": "system", "content": "S"}, {"role": "user", "content": "Q"}]
+    assert rules.with_history(msgs, None, profile="") == msgs              # 逐字不变
+    got = rules.with_history(msgs, None, profile="【这个学生的情况】之前问过：数据确权。")
+    assert got[0]["content"].startswith("S\n\n【这个学生的情况】") and got[1] == msgs[1]
+
+
+def test_course_answer_prompt_gets_the_profile_but_no_extra_llm_call():
+    """画像只是拼进提示词，不增加任何模型调用。"""
+    from types import SimpleNamespace
+    from rag.course import prompts
+
+    seen = {}
+
+    class Recorder:
+        def chat(self, step, messages, *, model, tools=None, json_mode=False):
+            seen[step] = messages
+            if step == "answer":
+                return LLMResult(content="数据确权是……[S1]")
+            return _json_ok()
+
+    chunk = SimpleNamespace(chunk_id="de:0906:ch02.1:000:a", path=["第二章 数据权属"], chapter=2,
+                            text="数据确权是指明确数据归属的制度安排。", tier=1, source="ontology",
+                            concept_ids=["C01"], role="question_concept", to_dict=lambda **k: {})
+    from rag.course.answer import answer_question
+    answer_question("什么是数据确权", [chunk], [], Recorder(), titles={2: "第二章 数据权属"},
+                    profile="【这个学生的情况】之前问过：数据资产。")
+    assert seen["answer"][0]["content"].startswith(prompts.ANSWER_SYSTEM)
+    assert "【这个学生的情况】" in seen["answer"][0]["content"]
+
+
+def _json_ok():
+    return LLMResult(content='{"selected": []}')

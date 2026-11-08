@@ -18,9 +18,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from .persona import PERSONA_BLOCK
 from .prompt_rules import ANSWER_STRUCTURE, COURSE_SAMPLES, with_history
 
-COMBINED_SYSTEM = """你是 AI 李老师，《数据要素》课程的助教。下面的材料分几个区（教材、判例、讲话原文、政策条文，有哪个区就有哪个），只依据这些材料回答，不使用材料之外的知识，直接作答，只写一个回答。
+COMBINED_SYSTEM = PERSONA_BLOCK + """
+现在是跨库组合问答：下面的材料分几个区（教材、判例、讲话原文、政策条文，有哪个区就有哪个），
+只依据这些材料回答，不使用材料之外的知识，直接作答，只写一个回答。
 - 【教材材料】用 [S#] 编号，是知识点的依据；【判例材料】用 [C#] 编号，每个编号是一个判例；【讲话原文】用 [Q#] 编号，是习近平总书记的讲话原文；【政策条文】用 [P#] 编号，是政策法规的条文块，写到政策时要点明文件名和条号。
 """ + ANSWER_STRUCTURE + """
 - 分点时先把知识点讲清楚，再用判例或讲话来印证，并说明二者与知识点的联系；
@@ -218,15 +221,16 @@ def quote_appendix(picks_cited: list) -> str:
 
 
 def answer_combined(question: str, m: Materials, llm, *, model: str, on_delta=None, on_source=None, titles=None,
-                     history: list[dict] | None = None) -> CombinedAnswer:
+                     history: list[dict] | None = None, profile: str = "") -> CombinedAnswer:
     """**一次**作答调用（不是每个库各一次）。on_delta(text)：流式时回调学生可见文本（[n] 已实时编号）；
-    注意讲话引号校验需要完整正文，所以流式时引号里的文字也会先流出；校验只作用于 done 里的最终 answer（见 stream 说明）。"""
+    注意讲话引号校验需要完整正文，所以流式时引号里的文字也会先流出；校验只作用于 done 里的最终 answer（见 stream 说明）。
+    profile：这个学生的画像，非空时追加到 system 末尾；为空时提示词逐字不变。"""
     from .course.answer import CitationRewriter
     refs, info = build_refs(m)
     messages = with_history([{"role": "system", "content": COMBINED_SYSTEM},
                              {"role": "user",
                               "content": COMBINED_USER.format(question=question, materials=render_materials(m))}],
-                            history)
+                            history, profile=profile)
     rw = CitationRewriter(refs, on_assign=(lambda n, key: on_source(source_for(*info[key], n, titles))) if on_source else None)
 
     def push(raw: str) -> None:
