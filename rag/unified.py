@@ -86,7 +86,7 @@ def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
     """
     if not history:
         return question
-    from .config import CONTEXTUALIZE_QUERY_ENABLED, CONTEXTUALIZE_TIMEOUT, REWRITE_MODEL
+    from .config import CONTEXTUALIZE_QUERY_ENABLED, CONTEXTUALIZE_TIMEOUT
     from .enhance import contextualize_query, needs_contextualize
 
     if not CONTEXTUALIZE_QUERY_ENABLED or not needs_contextualize(question):
@@ -95,7 +95,12 @@ def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
              if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")]
     if not pairs:
         return question
-    return contextualize_query(question, pairs, llm, REWRITE_MODEL,
+    # 统一入口的改写走胜算云客户端（lib_llm）：REWRITE_MODEL 没单独配置时默认沿用论文库的模型名，
+    # 在胜算云上可能不存在而静默失败（退回原问题）；这里改用与追问胶囊同一个、确定可用的小模型。
+    import os
+    from .course.config import LIB_PICK_MODEL
+    model = os.environ.get("REWRITE_MODEL") or LIB_PICK_MODEL
+    return contextualize_query(question, pairs, llm, model,
                                reasoning_effort="none", timeout=CONTEXTUALIZE_TIMEOUT)
 
 
@@ -289,9 +294,9 @@ class UnifiedService:
         routed_q = _standalone_question(question, history, self.lib_llm)
         if rec is not None and routed_q != question:
             rec.qa_meta["standalone"] = routed_q
-        solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
+        solved, by_ref = self._prematch_with_history(question, routed_q, history)   # 解题先查题库：命中就不路由、不调用任何模型
         if solved is not None:
-            if self._wants_explain(question, routed_q):
+            if self._explain_wanted(question, routed_q, by_ref):
                 return self._explain(question, solved, t0, history)   # 要讲解：参考答案 + 课程讲解
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             solved["followups"] = self._followups(question, solved)      # 命中题库：零调用模板
@@ -416,8 +421,8 @@ class UnifiedService:
         routed_q = _standalone_question(question, history, self.lib_llm)
         if routed_q != question:
             rec.qa_meta["standalone"] = routed_q
-        solved = self._prematch(routed_q)                          # 解题先查题库：命中就不路由、不调用任何模型
-        explain = solved if solved is not None and self._wants_explain(question, routed_q) else None
+        solved, by_ref = self._prematch_with_history(question, routed_q, history)   # 解题先查题库：命中就不路由、不调用任何模型
+        explain = solved if solved is not None and self._explain_wanted(question, routed_q, by_ref) else None
         if solved is not None and explain is None:
             solved["trace"]["total_s"] = round(time.perf_counter() - t0, 4)
             yield {"type": "route", "route": "exam", "routes": ["exam"], "complexity": "simple", "count": 1, "chapter": None,
@@ -497,8 +502,9 @@ class UnifiedService:
         def run() -> None:
             try:
                 with usage_log.activate(rec):                    # 后台线程里重新激活，pipeline 的 LLM 调用才记得到
-                    q.put(("result", ask(question, ctx=self.course_ctx, llm=self.course_llm,
-                                         on_event=on_event, solve=solve, history=history)))
+                    # 检索与作答用补全后的独立问题（与非流式一致）；讲解时 question 已是程序拼好的“题干 + 参考答案”
+                    q.put(("result", ask(question if explain is not None else routed_q, ctx=self.course_ctx,
+                                         llm=self.course_llm, on_event=on_event, solve=solve, history=history)))
             except _Cancelled:
                 pass
             except Exception as e:  # noqa: BLE001 - 只带异常类型名
@@ -736,6 +742,24 @@ class UnifiedService:
 
 
     # ---------------------------------------------------------------- 解题：先查题库
+    def _prematch_with_history(self, question: str, routed_q: str, history) -> tuple[dict[str, Any] | None, bool]:
+        """先看是否指代上一轮列出的某道题（“讲解一下第四道题”，纯程序取题干），再按改写后的问题预匹配。
+        返回 (命中结果或 None, 是否由指代命中)。"""
+        from .exam.solve import referenced_stem
+        stem = referenced_stem(question, history) if history else None
+        if stem:
+            hit = self._prematch(stem, force=True)
+            if hit is not None:
+                return hit, True
+        return self._prematch(routed_q), False
+
+    def _explain_wanted(self, question: str, routed_q: str, by_ref: bool) -> bool:
+        """指代某道题时默认讲解（除非只问答案）；直接贴题干时要出现“怎么理解 / 讲解”等说法才讲解。"""
+        if by_ref:
+            from .exam.solve import wants_answer_only
+            return not wants_answer_only(question) and self._wants_explain(question, routed_q, "讲解")
+        return self._wants_explain(question, routed_q)
+
     def _wants_explain(self, *questions: str) -> bool:
         """命中题库后学生要的是讲解（怎么理解 / 讲解 / 为什么……）而不只是答案；课程库不可用时退回只给答案。"""
         if self.course_ctx is None or self.course_llm is None:
@@ -781,13 +805,13 @@ class UnifiedService:
             d.routes, d.route, d.reason = ["course"], "course", (d.reason + "；带具体题干的解题，改送课程库")[:80]
         return d
 
-    def _prematch(self, question: str) -> dict[str, Any] | None:
+    def _prematch(self, question: str, force: bool = False) -> dict[str, Any] | None:
         """解题预匹配（在路由之前）：问题去掉外壳后题干 ≥12 字，与题库题干完全包含或相似度 ≥0.9 → 直接给题目 + 答案 + 解析。
         耗时 ms 级，写进 trace.prematch；命中时 0 次模型调用（连路由也不调）。没命中返回 None，走原来的路由。"""
         if self.exam is None:
             return None
         from .exam.solve import StemMatcher, is_prematch_candidate
-        if not is_prematch_candidate(question):
+        if not force and not is_prematch_candidate(question):      # force：题干由程序从上一轮取出，不必再判外壳
             return None
         if self._stems is None:
             self._stems = StemMatcher(self.exam.items)

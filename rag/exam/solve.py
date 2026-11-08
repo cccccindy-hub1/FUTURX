@@ -77,6 +77,47 @@ def wants_explanation(question: str) -> bool:
     return any(w in (question or "") for w in EXPLAIN_WORDS)
 
 
+# 指代上一轮列出的某道题：“讲解一下第四道题”“第2题选什么”“这道题怎么理解”（上一轮只有一道题时）
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_ORDINAL_RE = re.compile(r"第\s*([0-9]{1,2}|十?[一二两三四五六七八九]|十)\s*(?:道|题|个|小题)")
+_THIS_ITEM_RE = re.compile(r"(?:这|那|该|此|上面那?|刚才那?|前面那?)\s*(?:一)?\s*[道个]?\s*题")
+_LIST_ITEM_RE = re.compile(r"^\s*(\d{1,2})\.\s*【[^】]{0,40}】\s*(.+?)\s*$", re.M)     # format_items 的题目行：1.【判断题·第4章 …】题干
+_ANSWER_ONLY = ("答案", "选什么", "选哪个", "选哪项", "对不对", "正确吗", "对吗", "是否正确")
+
+
+def _ordinal(text: str) -> int | None:
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if text.startswith("十"):
+        return 10 + _CN_NUM.get(text[1:], 0)
+    return _CN_NUM.get(text)
+
+
+def referenced_stem(question: str, history) -> str | None:
+    """问题指代上一轮回答里列出的某道题时，返回那道题的题干（纯程序，不调用模型）；取不到返回 None。
+    history：[{"role", "content"}]，取最近一条带题目列表的助手回答。"""
+    m = _ORDINAL_RE.search(question or "")
+    n = _ordinal(m.group(1)) if m else None
+    if n is None and not _THIS_ITEM_RE.search(question or ""):
+        return None
+    last = next((h.get("content") or "" for h in reversed(history or [])
+                 if isinstance(h, dict) and h.get("role") == "assistant" and _LIST_ITEM_RE.search(h.get("content") or "")), "")
+    items = {int(k): v for k, v in _LIST_ITEM_RE.findall(last)}
+    if not items:
+        return None
+    if n is None:                                      # “这道题”：上一轮恰好只有一道题才能确定
+        if len(items) != 1:
+            return None
+        n = next(iter(items))
+    return items.get(n)
+
+
+def wants_answer_only(question: str) -> bool:
+    return any(w in (question or "") for w in _ANSWER_ONLY) and not wants_explanation(question)
+
+
 def is_prematch_candidate(question: str) -> bool:
     """值得去题库预匹配的问题：解题问题，或要讲解且带着一段题干（≥12 字）；出题 / 找题的说法除外。"""
     rest, had = strip_shell(question)

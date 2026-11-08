@@ -111,3 +111,57 @@ def test_view_answer_button_is_a_small_grey_pill_and_the_answer_is_an_indented_t
     assert "font-size: 12px" in summary and "font-weight: 400" in summary and "color: var(--ink-soft)" in summary and "border-radius: 999px" in summary
     row = seg[seg.index(".exam-answer-row {"):seg.index("}", seg.index(".exam-answer-row {"))]
     assert "font-size: 13px" in row and "background: var(--accent-soft)" in row and "margin-left" in row
+
+
+# ---------------------------------------------------------------- 指代上一轮列出的第 N 道题（纯程序取题干，不靠模型改写）
+
+def _list_history(bank, idx):
+    from rag.exam.store import format_items
+    items = [bank.items[i] for i in idx]
+    return [{"role": "user", "content": "出几道题"}, {"role": "assistant", "content": "为你找到几道题：\n" + format_items(items)}]
+
+
+def test_referenced_stem_reads_the_nth_item_and_this_item_only_when_unambiguous():
+    from rag.exam.solve import referenced_stem
+    bank = make_bank()
+    hist = _list_history(bank, [3, 0, 1])                            # 1=选择题 2=JUDGE 3=JUDGE2
+    assert referenced_stem("讲解一下第二道题", hist) == JUDGE and referenced_stem("第2题选什么", hist) == JUDGE
+    assert referenced_stem("讲解一下第四道题", hist) is None             # 没有第 4 道
+    assert referenced_stem("这道题怎么理解", hist) is None              # 多道题时“这道题”指代不明
+    assert referenced_stem("这道题怎么理解", _list_history(bank, [0])) == JUDGE
+    assert referenced_stem("什么是数据要素", hist) is None
+
+
+def test_explain_the_nth_listed_question_without_any_rewrite_call(course):
+    bank = make_bank()
+    rw, router, llm = RewriteLLM("讲解一下第二道题"), Counting("exam"), ScriptedLLM(_course_script())   # 改写没补出题干也能命中
+    s = UnifiedService(router_client=router, exam_bank=bank, course_ctx=course, course_llm=llm, lib_llm=rw)
+    out = s.ask("讲解一下第二道题", history=_list_history(bank, [3, 0, 1]))
+    assert router.calls == [] and out["explain"] is True and out["exam"]["questions"][0]["stem"] == JUDGE
+    assert "参考答案：正确" in _answer_call(llm)["messages"][-1]["content"]
+
+
+def test_nth_question_answer_only_returns_the_bank_answer_and_stream_explains():
+    bank = make_bank()
+    s = UnifiedService(router_client=Counting("exam"), exam_bank=bank, lib_llm=RewriteLLM("第2题答案是什么"))
+    out = s.ask("第2题答案是什么", history=_list_history(bank, [3, 0, 1]))
+    assert out["routes"] == ["exam"] and out["exam"]["questions"][0]["stem"] == JUDGE and "explain" not in out
+
+
+def test_nth_question_stream_explains(course):
+    bank = make_bank()
+    s = UnifiedService(router_client=Counting("exam"), exam_bank=bank, course_ctx=course,
+                       course_llm=ScriptedLLM(_course_script()), lib_llm=RewriteLLM("讲解一下第二道题"))
+    ev = list(s.ask_stream("讲解一下第二道题", history=_list_history(bank, [3, 0, 1])))
+    done = next(e for e in ev if e["type"] == "done")
+    assert ev[0]["routes"] == ["exam", "course"] and done["explain"] is True and done["exam"]["questions"][0]["stem"] == JUDGE
+
+
+def test_streaming_course_answers_the_rewritten_question_like_the_non_streaming_path(course):
+    llm = ScriptedLLM(_course_script())
+    s = UnifiedService(router_client=Counting("course"), exam_bank=make_bank(), course_ctx=course, course_llm=llm,
+                       lib_llm=RewriteLLM("数据确权在考试中常考哪种题型"))
+    list(s.ask_stream("考试中常考哪种题型", history=[{"role": "user", "content": "什么是数据确权"},
+                                                    {"role": "assistant", "content": "数据确权是……"}]))
+    user_msg = _answer_call(llm)["messages"][-1]["content"]
+    assert "数据确权在考试中常考哪种题型" in user_msg
