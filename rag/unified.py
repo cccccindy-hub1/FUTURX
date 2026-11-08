@@ -41,6 +41,10 @@ class AutoAskRequest(BaseModel):
     # 会话：传了就把本轮追加到该会话，并从库里取之前几轮作为上下文（检索仍只用本轮问题）。
     conversation_id: str | None = Field(default=None, max_length=80)
     store: bool = True                       # false = 不落库（临时提问）
+    # 永久问答记录用：uuid = 调用方人员标识（优先于 X-User-Id）；user_name = 提问者姓名（中文可用，限长 32 字）。
+    # 两者只用于问答记录，超长 / 含非法字符的在落库前清洗，不影响本次回答。
+    uuid: str | None = None
+    user_name: str | None = None
 
 
 def _conversation_context(conversation_id: str | None, request: Request, store: bool) -> str | None:
@@ -104,9 +108,10 @@ def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
                                reasoning_effort="none", timeout=CONTEXTUALIZE_TIMEOUT)
 
 
-def _qa_ids(fn, request: Request, conversation_id: str | None) -> dict:
-    """永久问答记录（rag.qa_store）的调用方标识：X-User-Id（网页随机 ID）；会话号取 X-Session-Id，没有就用 conversation_id。
-    只在服务实现接受这两个参数时才传（测试替身 / 其它实现的 ask 签名里没有它们）。"""
+def _qa_ids(fn, request: Request, conversation_id: str | None, req=None) -> dict:
+    """永久问答记录（rag.qa_store）的调用方标识：uuid（body 优先，其次 X-User-Uuid / X-User-Id 当 uuid 用）；
+    姓名取 user_name 或 X-User-Name；会话号取 X-Session-Id，没有就用 conversation_id。
+    只在服务实现接受这些参数时才传（测试替身 / 其它实现的 ask 签名里没有它们）。"""
     import inspect
 
     try:
@@ -115,8 +120,13 @@ def _qa_ids(fn, request: Request, conversation_id: str | None) -> dict:
         return {}
     if "user_id" not in params or "session_id" not in params:
         return {}
-    meta = qa_store.request_meta(request.headers)
-    return {"user_id": meta["user_id"], "session_id": meta["session_id"] or qa_store.clean_id(conversation_id)}
+    meta = qa_store.request_meta(request.headers,
+                                 body_uuid=getattr(req, "uuid", None),
+                                 body_name=getattr(req, "user_name", None))
+    out = {"user_id": meta["user_id"], "session_id": meta["session_id"] or qa_store.clean_id(conversation_id)}
+    if "user_name" in params:
+        out["user_name"] = meta["user_name"]
+    return out
 
 
 def _save_turn(conversation_id: str | None, out: dict, request: Request) -> None:
@@ -149,7 +159,7 @@ def auto_ask(req: AutoAskRequest, request: Request):
     context = _history_messages(conversation_id)
     try:
         out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                      history=context, **_qa_ids(svc.ask, request, conversation_id))
+                      history=context, **_qa_ids(svc.ask, request, conversation_id, req))
     except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
@@ -187,7 +197,7 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
     def gen():
         final: dict | None = None
         events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                                history=context, **_qa_ids(svc.ask_stream, request, conversation_id))
+                                history=context, **_qa_ids(svc.ask_stream, request, conversation_id, req))
         try:
             for ev in events:
                 if ev.get("type") == "done":
@@ -275,12 +285,13 @@ class UnifiedService:
 
     def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
             key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
-            session_id: str | None = None) -> dict[str, Any]:
+            session_id: str | None = None, user_name: str | None = None) -> dict[str, Any]:
         """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。
         history：之前几轮的 [{"role","content"}]，只作为作答上下文，不参与检索与路由判断。
-        user_id/session_id：永久问答记录（rag.qa_store）用；都可省略。"""
+        user_id/session_id/user_name：永久问答记录（rag.qa_store）用；都可省略。"""
         with usage_log.record(question, origin, key_id) as rec:
-            rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
+            rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
+                           "history": qa_store.normalize_history(history)}
             out = self._ask(question, top_k, history=history, rec=rec)
             rec.finish(out)
             return out
@@ -372,7 +383,7 @@ class UnifiedService:
 
     def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
                    key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
-                   session_id: str | None = None) -> Iterator[dict[str, Any]]:
+                   session_id: str | None = None, user_name: str | None = None) -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
@@ -386,7 +397,8 @@ class UnifiedService:
         生成器内设置的 contextvar 会被丢弃（流式日志只剩第一条 route 调用）。所以整条链都显式传 rec，
         不依赖 contextvar。"""
         rec = usage_log.start(question, origin, key_id)
-        rec.qa_meta = {"user_id": user_id, "session_id": session_id, "history": qa_store.normalize_history(history)}
+        rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
+                       "history": qa_store.normalize_history(history)}
         inner = self._ask_stream(question, top_k, rec, history)
         try:
             while True:

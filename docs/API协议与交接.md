@@ -99,7 +99,9 @@ Authorization: Bearer <API_KEY>
   "top_k": 4,
   "include_trace": false,
   "conversation_id": "conv_xxx",
-  "store": true
+  "store": true,
+  "uuid": "stu-0001",
+  "user_name": "张三"
 }
 ```
 
@@ -110,6 +112,8 @@ Authorization: Bearer <API_KEY>
 | `include_trace` | bool | 否 | `true` | 是否返回调试信息。**生产建议 `false`**，可省流量 |
 | `conversation_id` | string | 否 | — | 会话 id，见第 4 节 |
 | `store` | bool | 否 | `true` | `false` = 本轮不落库 |
+| `uuid` | string | 否 | — | 调用方人员唯一标识，记进问答记录的 `user_id` 列。优先于 `X-User-Uuid` / `X-User-Id` |
+| `user_name` | string | 否 | — | 提问者姓名，中文可用（限 32 字），记进 `user_name` 列。优先于 `X-User-Name` 头 |
 
 ### 2.2 响应 `200`
 
@@ -238,7 +242,9 @@ route  →  (stage)*  →  (materials | delta)*  →  done  →  (followups)?
   "stream": false,
   "top_k": 4,
   "conversation_id": "conv_xxx",
-  "store": true
+  "store": true,
+  "uuid": "stu-0001",
+  "user_name": "张三"
 }
 ```
 
@@ -250,6 +256,7 @@ route  →  (stage)*  →  (materials | delta)*  →  done  →  (followups)?
 | `temperature` | 接受但当前不影响作答 |
 | `top_k` | 扩展：检索片段数 |
 | `conversation_id` / `store` | 扩展：见第 5 节 |
+| `uuid` / `user_name` | 扩展：调用方人员标识与提问者姓名，只用于永久问答记录，见 5.4 |
 
 **`messages` 的处理规则**（重要）：
 
@@ -335,6 +342,52 @@ route  →  (stage)*  →  (materials | delta)*  →  done  →  (followups)?
 的消息，不会覆盖后来新写入的记录。
 
 重试同一请求按 `request_id` 去重，不会插两条。
+
+### 5.4 `uuid` / `user_name`：把每轮问答记到具体的人
+
+两个入口（`/auto/ask`、`/auto/ask/stream`、`/v1/chat/completions`、`/ask`）都接受这两个字段，
+它们**只用于永久问答记录（`data/qa_log.sqlite`），不参与鉴权、路由与检索**，传错也不会改变回答。
+
+| 入参 | 落库位置 | 说明 |
+|---|---|---|
+| `uuid` | `qa_log.user_id` | 调用方自己的人员标识（学号、工号、业务库主键都行）。只允许 `[A-Za-z0-9_-]`，最长 64；不合法或没传时退回 `user` / `X-User-Id`，再没有就记 `anon-<key指纹>` |
+| `user_name` | `qa_log.user_name` | 提问者姓名，中文可用，去空白后最长 32 字；不传记空串 |
+
+优先级（从高到低）：
+
+```
+uuid（请求体） → X-User-Uuid（请求头） → user（OpenAI 标准字段） → X-User-Id（请求头） → anon-<key_id>
+user_name（请求体） → X-User-Name（请求头） → ''
+```
+
+**请求头里的中文要百分号编码**。HTTP 头只能放 latin-1 字节，直接发 UTF-8 的中文到服务端会变成乱码；
+服务端对 `X-User-Name` 做了还原（能按 UTF-8 解就按 UTF-8 解，也接受 `%E5%BC%A0%E4%B8%89` 这种编码）。
+**最省事的做法是把姓名放在请求体里**，请求体是 JSON，直接写中文即可。
+
+```python
+# 推荐：两个字段都放请求体
+requests.post("http://<服务器>:8000/auto/ask",
+              json={"question": "数据确权为什么难？", "uuid": "stu-0001", "user_name": "张三"},
+              headers={"Authorization": "Bearer <key>"})
+
+# 只能改请求头时（例如第三方 OpenAI 兼容平台的自定义 header）：
+#   X-User-Uuid: stu-0001
+#   X-User-Name: %E5%BC%A0%E4%B8%89
+```
+
+同一个人的多次提问只要 `uuid` 一致，在库里就能按 `user_id` 聚合；姓名只是给人看的标签，
+以调用方传入的为准，服务端不做实名校验（同一个人两次传不同姓名会各记各的）。
+
+**兼容性**：两个字段都可以不传。老调用方继续用 `user` / `X-User-Id`，记录行为与改动前完全一致；
+老库（已存在的 `data/qa_log.sqlite`）在服务启动后首次写入时自动补 `user_name` 列，旧行取空串，**不重建表、不丢数据**。
+
+查与导出：
+
+```bash
+sqlite3 data/qa_log.sqlite "select user_name, user_id, count(*) from qa_log group by user_id order by 3 desc limit 20"
+python scripts/export_qa.py --out qa.csv --user-id stu-0001        # 按 uuid 筛
+python scripts/export_qa.py --out qa.csv --user-name 张三          # 按姓名筛（精确匹配）
+```
 
 ---
 
@@ -638,6 +691,18 @@ c.monthly_stats(key_id="c72f2e45")   # 某一把 key 的逐月用量
 返回每行 `{key_id, month, messages, turns, avg_latency_ms}`。
 `turns` 是提问轮数（`messages` 的一半，含失败轮）。
 
+按人看提问量用问答记录表（`qa_log`，按调用方传的 `uuid` / `user_name` 聚合，见 5.4）：
+
+```sql
+-- 每人每天问了多少
+SELECT date(created_at) d, user_name, user_id, count(*) n
+FROM qa_log GROUP BY d, user_id ORDER BY d DESC, n DESC;
+
+-- 某个人问了什么
+SELECT created_at, route, substr(input_prompt,1,50) q
+FROM qa_log WHERE user_id = 'stu-0001' ORDER BY id DESC LIMIT 20;
+```
+
 ---
 
 ## 13. 变更记录
@@ -647,3 +712,5 @@ c.monthly_stats(key_id="c72f2e45")   # 某一把 key 的逐月用量
 - `6c1c15a`：接口协议文档、冒烟脚本；`archived` 支持 `all`。
 - 前端：历史会话侧栏 + 历史回填；每轮带 `conversation_id`（此前每轮都新建会话，多轮在页面上不生效）。
 - 鉴权：`API_KEYS` 改 `frozenset`，新增 `API_KEYS_FILE` 支持千级 key。
+- 问答记录按人归属：四个问答接口新增可选入参 `uuid` / `user_name`（也可用 `X-User-Uuid` / `X-User-Name` 头），
+  `uuid` 记进 `user_id` 列，姓名单独一列 `user_name`；老库自动补列，旧调用方与旧数据都不受影响。

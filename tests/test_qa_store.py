@@ -97,6 +97,40 @@ def test_request_meta_prefers_body_user_then_header_and_validates_session():
     assert (m["user_id"], m["session_id"]) == ("hdr-user", "")
 
 
+def test_uuid_wins_over_user_and_header_fallbacks_are_kept():
+    assert qa_store.request_meta({}, body_user="old", body_uuid="u-new", history=None)["user_id"] == "u-new"
+    assert qa_store.request_meta({"x-user-uuid": "u-hdr"}, body_user="old", history=None)["user_id"] == "u-hdr"
+    assert qa_store.request_meta({"x-user-uuid": "u-hdr"}, body_user="body-user", body_uuid="u-body", history=None)["user_id"] == "u-body"
+    assert qa_store.request_meta({"x-user-id": "legacy"}, history=None)["user_id"] == "legacy"       # 老调用方不变
+    assert qa_store.request_meta({}, body_uuid="bad id!", body_user="old", history=None)["user_id"] == "old"
+
+
+@pytest.mark.parametrize("raw, want", [("张三", "张三"), ("  李 四 ", "李 四"), ("x" * 99, "x" * 32), (None, ""), ("", ""),
+                                       ("王\n五", "王五"), ("%E5%BC%A0%E4%B8%89", "张三"), ("A" * 8 + "%zz", "A" * 8 + "%zz")])
+def test_name_is_cleaned_percent_decoded_and_capped(raw, want):
+    assert qa_store.clean_name(raw) == want
+
+
+def test_user_name_is_stored_separately_from_user_id(db):
+    qa_store.write(_record(), user_id="u-uuid", user_name="张三")
+    qa_store.write(_record(request_id="r2"), user_id="u-uuid")
+    a, b = rows(db)
+    assert (a["user_id"], a["user_name"]) == ("u-uuid", "张三") and b["user_name"] == ""
+
+
+def test_old_database_without_user_name_gets_the_column_added(db):
+    """模拟改版前建的库：除 user_name 外列都齐（真实老库就是这样），迁移后照常写入。"""
+    old = "\n".join(line for line in qa_store.SCHEMA.splitlines() if "user_name" not in line)
+    con = sqlite3.connect(db)
+    con.executescript(old)
+    con.commit()
+    con.close()
+    qa_store._inited.discard(str(db))
+    assert qa_store.write(_record(), user_id="u", user_name="张三")
+    cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(qa_log)")}
+    assert "user_name" in cols
+
+
 # ---------------------------------------------------------------- 写入、去重、失败隔离
 
 def _record(**kw):
@@ -244,6 +278,81 @@ def test_http_user_and_session_headers_reach_the_database(db):
     a, b = rows(db)
     assert (a["user_id"], a["session_id"]) == ("u-web", "sess-1")
     assert b["user_id"] == "hdr-user" and b["key_id"] == usage_log.key_id("sk-secret-123") and "sk-secret" not in json.dumps(dict(b))
+
+
+def test_http_uuid_and_name_from_body_and_headers_reach_the_database(db):
+    """新增入参：uuid 记进 user_id 列，user_name 单独一列。请求体直接写中文；请求头须百分号编码（HTTP 头不支持中文）。"""
+    from urllib.parse import quote
+
+    app = FastAPI()
+    app.state.unified = UnifiedService(router_client=_Reporting(RouterLLM(("off_topic",))))
+    app.include_router(unified_router)
+    c = TestClient(app)
+    c.post("/auto/ask", json={"question": "问题一", "store": False, "uuid": "stu-001", "user_name": "张三"})
+    c.post("/auto/ask", json={"question": "问题二", "store": False},
+           headers={"X-User-Uuid": "stu-002", "X-User-Name": quote("李四")})
+    c.post("/auto/ask", json={"question": "问题三", "store": False, "uuid": "stu-003", "user_name": "王五"},
+           headers={"X-User-Name": quote("应被请求体覆盖")})
+    a, b, d = rows(db)
+    assert (a["user_id"], a["user_name"]) == ("stu-001", "张三")
+    assert (b["user_id"], b["user_name"]) == ("stu-002", "李四")
+    assert (d["user_id"], d["user_name"]) == ("stu-003", "王五")
+
+
+def test_openai_compatible_endpoint_takes_uuid_and_name_too(db):
+    from rag.api import router as api_router
+
+    app = FastAPI()
+    app.state.service = type("S", (), {"answer": lambda self, q, k, **kw: ("论文答案", [], [])})()
+    app.include_router(api_router)
+    TestClient(app).post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}], "store": False,
+                                                       "uuid": "stu-9", "user_name": "赵六"})
+    (r,) = rows(db)
+    assert (r["user_id"], r["user_name"], r["output"]) == ("stu-9", "赵六", "论文答案")
+
+
+def test_dirty_uuid_and_over_long_name_never_fail_the_request(db):
+    """身份只用于记录：非法 uuid 退化为匿名，姓名截断；都不该把 200 变成 4xx/5xx。"""
+    app = FastAPI()
+    app.state.unified = UnifiedService(router_client=_Reporting(RouterLLM(("off_topic",))))
+    app.include_router(unified_router)
+    resp = TestClient(app).post("/auto/ask", json={"question": "问题", "store": False, "uuid": "bad id!", "user_name": "李" * 99})
+    assert resp.status_code == 200
+    (r,) = rows(db)
+    assert r["user_id"] == "anon-none" and r["user_name"] == "李" * 32
+
+
+def test_export_csv_includes_user_name_and_filters_by_it(db, tmp_path):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("export_qa", Path(__file__).resolve().parents[1] / "scripts" / "export_qa.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    qa_store.write(_record(request_id="r1"), user_id="u1", user_name="张三")
+    qa_store.write(_record(request_id="r2"), user_id="u2", user_name="李四")
+    out = tmp_path / "qa.csv"
+    assert mod.export(db, out, user_name="张三") == 1
+    text = out.read_text(encoding="utf-8-sig")
+    assert text.splitlines()[0].split(",")[3] == "user_name" and "张三" in text and "李四" not in text
+
+
+def test_export_works_on_a_database_that_still_lacks_user_name(db, tmp_path):
+    """导出脚本对老库也要能跑（只读、不迁移）。"""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("export_qa", Path(__file__).resolve().parents[1] / "scripts" / "export_qa.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    con = sqlite3.connect(db)
+    con.executescript("\n".join(line for line in qa_store.SCHEMA.splitlines() if "user_name" not in line))
+    con.execute("INSERT INTO qa_log(request_id,user_id,created_at,input_prompt) VALUES ('r0','u0','2026-11-01T00:00:00','老问题')")
+    con.commit()
+    con.close()
+    out = tmp_path / "old.csv"
+    assert mod.export(db, out) == 1
+    assert "老问题" in out.read_text(encoding="utf-8-sig")
 
 
 def test_openai_compatible_endpoint_logs_user_and_history_but_not_the_key(db):

@@ -22,13 +22,18 @@ class AskRequest(BaseModel):
     # 可选：对话历史（同 messages 格式，服务端只取最近 6 条、每条 500 字）。/ask 只走论文 RAG，历史只进永久问答记录，不改变检索。
     history: list[dict] | None = None
     user: str | None = None
+    # 永久问答记录用：uuid = 调用方人员标识（优先于 user / X-User-Id）；user_name = 提问者姓名（中文可用，限长 32 字）。
+    # 两者只用于问答记录，超长 / 含非法字符的在落库前清洗。
+    uuid: str | None = None
+    user_name: str | None = None
 
 
 def _qa_meta(request, req) -> dict:
-    """永久问答记录用的调用方身份与历史（X-User-Id / body.user、X-Session-Id）；解析失败不影响请求。"""
+    """永久问答记录用的调用方身份与历史（uuid / user / X-User-Id、user_name / X-User-Name、X-Session-Id）；解析失败不影响请求。"""
     try:
         from .qa_store import request_meta
-        return request_meta(request.headers, body_user=getattr(req, "user", None), history=getattr(req, "history", None))
+        return request_meta(request.headers, body_user=getattr(req, "user", None), body_uuid=getattr(req, "uuid", None),
+                            body_name=getattr(req, "user_name", None), history=getattr(req, "history", None))
     except Exception:  # noqa: BLE001
         return {}
 

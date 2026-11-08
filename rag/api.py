@@ -87,6 +87,10 @@ class ChatCompletionRequest(BaseModel):
     # 非标准扩展：true = 不落库（临时试探性提问）
     store: bool = True
     user: str | None = None          # OpenAI 标准字段：终端用户标识（记入永久问答记录，限长 64、只含 [A-Za-z0-9_-]）
+    # 非标准扩展：调用方的人员标识与姓名。uuid 优先于 user / X-User-Id 记进 user_id 列；
+    # user_name 单独存一列，中文可用（限长 32 字）。两者只用于问答记录，超长 / 含非法字符的在落库前清洗，不影响本次回答。
+    uuid: str | None = None
+    user_name: str | None = None
 
 
 def _text_of(content: Any) -> str:
@@ -197,11 +201,12 @@ def _chunk(cid: str, created: int, model: str, delta: dict, finish: str | None =
 
 def _qa_meta(req: "ChatCompletionRequest", request: Request, history: list[tuple[str, str]],
              conversation_id: str | None) -> dict:
-    """永久问答记录用：user（标准字段）/ X-User-Id；会话号取 X-Session-Id，没有就用 conversation_id；本轮实际用到的历史。"""
+    """永久问答记录用：uuid（本次新增）/ user 标准字段 / X-User-Id；姓名取 user_name 或 X-User-Name；
+    会话号取 X-Session-Id，没有就用 conversation_id；本轮实际用到的历史。"""
     try:
         from .qa_store import clean_id, request_meta
 
-        meta = request_meta(request.headers, body_user=req.user,
+        meta = request_meta(request.headers, body_user=req.user, body_uuid=req.uuid, body_name=req.user_name,
                             history=[{"role": r, "content": c} for r, c in history or []])
         if not meta.get("session_id") and conversation_id:
             meta["session_id"] = clean_id(conversation_id)
