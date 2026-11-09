@@ -26,7 +26,9 @@ _FIELDS = ("新闻传播", "管理学", "法学", "经济学", "文学", "历史
            "政治学", "公共管理", "图书情报", "计算机", "统计学", "艺术学", "医学", "理学", "工学", "农学")
 # 「专业」前面这些词不是专业名
 _BAD_MAJOR = ("这个", "那个", "什么", "哪些", "哪个", "我们", "你们", "他们", "本", "该", "跨", "转")
-_MAJOR_RE = re.compile(r"([\u4e00-\u9fa5A-Za-z]{2,12}?)(?:专业|系)")
+_MAJOR_RE = re.compile(r"([\u4e00-\u9fa5A-Za-z]{2,12}?)(?:专业|专硕|学硕|系)")
+# 「公共管理研究生专硕」这类先给方向再给学历的说法：方向就是专业
+_MAJOR_RUN_RE = re.compile(r"^([\u4e00-\u9fa5]{2,10}?)(?:研究生|硕士|博士|本科|专硕|学硕)")
 _PAREN_RE = re.compile(r"[（(]([^（）()]{2,16}?)[)）]")
 _STAGE_ALT = "|".join(_STAGES)
 # 论文阶段：必须带「论文 / 开题 / 初稿」这类上下文，或明确的「在…阶段」，避免「选题」一词被当成阶段。
@@ -36,6 +38,12 @@ _STAGE_RE = re.compile(
     rf"|(?:正在|还在|刚刚|卡在|处于|到了)({_STAGE_ALT})"
     rf"|({_STAGE_ALT})(?:阶段|环节)")
 _QUESTION_MARK = re.compile(r"[？?]")
+# 带上这些词，说明句子里除了身份还有要处理的东西（题目、要求、研究内容）。
+# 「研究」不在此列：「我是公共管理专业的硕士研究生」里研究生就含「研究」二字。
+_SUBSTANCE = ("分析", "写", "帮我", "看看", "现状", "对策", "为例", "题目", "方向",
+              "设计", "修改", "润色", "提纲", "框架", "数据", "调查", "案例", "满意", "评价", "影响")
+# 论文题目的典型外形：「…研究——以…为例」「…的分析」「…调查」
+_TITLE_RE = re.compile(r"(?:研究|分析|探讨|调查|对策)\s*(?:[—\-－]{1,2}\s*以|基于|的)")
 
 
 def parse(text: str) -> dict:
@@ -48,6 +56,11 @@ def parse(text: str) -> dict:
         if word in s:
             out["level"] = mapped
             break
+    if "的学生" in s and out["level"] in ("本科", "硕士", "博士"):
+        # 「我是复旦大学的学生」这种只有学校没有学历的说法：只记「学生」，不替学生决定读本科还是读研
+        pass
+    elif "的学生" in s:
+        out["level"] = "学生"
     m = _MAJOR_RE.search(s)
     if m:
         name = m.group(1)
@@ -55,8 +68,26 @@ def parse(text: str) -> dict:
         for p in _SELF:
             if name.startswith(p):
                 name = name[len(p):]
+        # 「公共管理研究生专硕」里的「研究生」是学历，不是专业名的一部分
+        for tail in ("研究生", "硕士", "博士", "本科"):
+            if name.endswith(tail):
+                name = name[: -len(tail)]
         if name and name not in _BAD_MAJOR:
             out["major"] = name.strip("的 ，。")
+    if not out["major"]:
+        run = _MAJOR_RUN_RE.search(s)
+        if run:
+            # 去掉开头的「我是 / 本人是」再判断；「研究生」之前那一段就是专业方向
+            name = run.group(1)
+            for p in _SELF:
+                if name.startswith(p):
+                    name = name[len(p):]
+            if len(name) >= 2 and name not in _BAD_MAJOR and not name.endswith(("的", "是")):
+                for tail in ("研究生", "硕士", "博士", "本科"):
+                    if name.endswith(tail):
+                        name = name[: -len(tail)]
+                if len(name) >= 2:
+                    out["major"] = name
     p = _PAREN_RE.search(s)
     if p:
         inner = p.group(1).strip("的大类门类学科 ")
@@ -78,17 +109,27 @@ def parse(text: str) -> dict:
 
 
 def only_intro(text: str) -> bool:
-    """这句话是不是「只在自我介绍」：没有追问、长度短、且认出了学历 / 专业 / 阶段。
+    """这句话是不是「只在自我介绍」：没有追问、也没有带上要处理的内容。
 
     「我是本科生，编辑出版专业，想问选题怎么定」不算——后半句有真问题，按真问题走。
+    带论文题目 / 研究对象的句子也不算：线上实测「公共管理研究生专硕，妇幼保健院门诊患者满意度
+    现状及提升对策研究——以内蒙古某妇幼保健院为例」被当成纯自述，整句被吞成一句「记住了：硕士生」，
+    学生辛苦打的题目一个字都没进入回答。
     """
     s = (text or "").strip()
     if not s or len(s) > 60 or _QUESTION_MARK.search(s):
         return False
     if any(k in s for k in ("吗", "呢", "怎么", "如何", "什么", "哪些", "为什么", "能不能", "可不可以", "想问", "请问")):
         return False
+    # 带着要处理的内容（题目、研究对象、写作要求）就不是纯自述
+    if any(k in s for k in _SUBSTANCE):
+        return False
+    if _TITLE_RE.search(s):                       # 「…研究——以…为例」这类论文题目
+        return False
     got = parse(s)
-    return bool(got["level"] or got["major"] or got["stage"])
+    if not (got["level"] or got["major"] or got["stage"]):
+        return False
+    return True
 
 
 def confirm_text(ident: dict) -> str:

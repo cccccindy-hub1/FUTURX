@@ -34,7 +34,8 @@ from . import qa_store, student, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
 from .persona import EXAMPLE_DIALOGUE, GREETING_SHORT
-from .router import RouteDecision, classify, looks_ack, looks_greeting, looks_progress, looks_recall
+from .router import (RouteDecision, classify, looks_ack, looks_greeting, looks_progress, looks_recall,
+                     looks_whoami)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -937,10 +938,11 @@ class UnifiedService:
 
         不检索、不调用任何模型：这类问题问的是系统本身，检索出来的教材片段只会答偏。
         某个库没加载（数据缺失 / key 未配置）时如实不列，避免承诺做不到的能力。
-        按问法分五种回答（都不甩长清单，除非真的问能力）：
+        按问法分六种回答（都不甩长清单，除非真的问能力）：
         - 纯打招呼（「你好」）→ 一句欢迎语；
         - 确认 / 收尾（「好的 了解了」「谢谢」）→ 一句短的，并按上文给一个下一步（没有上文就不给）；
         - 问刚才怎么答的（「你的回答链路是怎样的」）→ 讲本轮实际路径，不背能力清单；
+        - 问我是谁（「我是谁」「你记得我是谁」）→ 回学生档案，见 _whoami；
         - 问之前问过什么 → 按问答记录列，见 _recall；
         - 问能力 / 知识库 → 完整清单。
         owner 是本次请求的调用方身份（user_id / session_id / key_id），按参数传，不放实例上——
@@ -950,6 +952,9 @@ class UnifiedService:
         names = {"thesis": "论文", "course": "课程", "exam": "试卷", "policy": "政策", "case": "判例", "quote": "名言"}
         ready = [r for r, *_ in META_SCOPES if self._route_ready(r)]
         q = (question or "").strip()
+        if looks_whoami(q):
+            self._whoami(out, trace, owner)
+            return
         if looks_recall(q):
             self._recall(out, trace, owner)
             return
@@ -1013,6 +1018,43 @@ class UnifiedService:
         out.update(answer="\n".join(lines), sources=[], followups=[])
         trace["meta"] = {"recall": {"user_id": user_id, "session_id": session_id,
                                     "count": len(got["items"]), "total": total, "llm_calls": 0}}
+
+    def _whoami(self, out: dict, trace: dict, owner: dict | None = None) -> None:
+        """「我是谁」：回系统记住的这个人，不是助手自我介绍。
+
+        只念已经记下的事实：自述身份、问过的主题、做过的题（判分记录）。一条都没有就如实说
+        「还没记下你的信息」，并说明怎么让我记住——不编一个身份，也不改答成「我是 AI 李老师」。
+        零检索、零模型调用。
+        """
+        from . import qa_store
+
+        meta = owner or {}
+        user_id = qa_store.resolve_user_id(meta.get("user_id"), meta.get("key_id"))
+        who = learner.identity(user_id)
+        line = learner._identity_line(who)
+        st = learner.state(user_id)
+        names = [c["concept"] for c in st["concepts"]][:3]     # 只念最近几个主题，不是你问过的全部
+        scores = st["scores"]
+        weak = learner.weaknesses(user_id)
+
+        lines: list[str] = []
+        if line:
+            lines.append(f"我记得的你是：{line}。")
+        else:
+            lines.append("我这边还没有记下你的身份信息。")
+        if names:
+            lines.append("你之前问过：" + "、".join(names) + "。")
+        if scores:
+            lines.append(f"你交过 {len(scores)} 道题，其中"
+                         + (("还没答对的有：" + "、".join(weak) + "。") if weak else "都答对了。"))
+        if not line:
+            lines.append("如果想让我按你的专业和阶段来答，可以直接说一句，比如「我是编辑出版专业的本科生，"
+                         "论文在选题阶段」，我记下来之后每一轮都会用上。")
+        if len(lines) == 1:
+            lines.append("你也可以问我之前问过什么，我按记录给你列。")
+        out.update(answer="\n".join(lines), sources=[], followups=[])
+        trace["meta"] = {"whoami": {"user_id": user_id, "identity": who, "concepts": names,
+                                    "scores": len(scores), "llm_calls": 0}}
 
     def _progress_reply(self, history: list[dict] | None = None) -> str:
         """「你的回答链路是怎样的」：讲这一轮实际是怎么走的，不背能力清单。

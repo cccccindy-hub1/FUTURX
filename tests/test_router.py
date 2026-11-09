@@ -1422,3 +1422,64 @@ def test_thesis_prompt_is_question_driven_not_template_driven():
     assert "先读懂问题" in s and "结构服务于内容" in s
     assert "不代表这位学生自己的学科" in s
     assert prompt_rules.THESIS_SAMPLES in s
+
+
+# ---------------------------------------------------------------- 「我是谁」与带内容的自述
+
+@pytest.mark.parametrize("q", ["我是谁", "我是谁？", "你知道我是谁吗", "你记得我是谁", "我是谁呀", "你那边记的我是谁"])
+def test_whoami_questions_are_recognized(q):
+    from rag.router import looks_whoami, rule_route
+    assert looks_whoami(q) is True and rule_route(q).route == "meta"
+
+
+@pytest.mark.parametrize("q", ["你是谁", "我是本科生", "我是谁的学生", "我的资料还没填"])
+def test_whoami_does_not_swallow_other_questions(q):
+    from rag.router import looks_whoami
+    assert looks_whoami(q) is False
+
+
+def test_whoami_answers_with_the_students_record_not_the_assistant_intro(tmp_path, monkeypatch):
+    """线上实测「我是谁」答成「我是 AI 李老师…我能回答以下范围内」，学生要的是自己的档案。"""
+    from rag import profile as learner
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    svc = UnifiedService(router_client=route_llm("meta"))
+    empty = svc.ask("我是谁", user_id="stu-w")
+    assert empty["route"] == "meta" and "还没有记下你的身份" in empty["answer"]
+    assert "我能回答以下范围内的内容" not in empty["answer"]
+    assert empty["trace"]["meta"]["whoami"]["llm_calls"] == 0
+
+    learner.notice_identity("stu-w", level="硕士", major="公共管理", stage="选题")
+    learner.notice_question("stu-w", concepts=["患者满意度"])
+    learner.notice_question("stu-w", concepts=["患者满意度"])
+    got = svc.ask("我是谁", user_id="stu-w")
+    assert "硕士生" in got["answer"] and "公共管理专业" in got["answer"]
+    assert "患者满意度" in got["answer"] and "选题" in got["answer"]
+
+
+def test_whoami_does_not_show_other_students_records(tmp_path, monkeypatch):
+    from rag import profile as learner
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    learner.notice_identity("stu-a", level="本科", major="编辑出版")
+    svc = UnifiedService(router_client=route_llm("meta"))
+    assert "编辑出版" in svc.ask("我是谁", user_id="stu-a")["answer"]
+    other = svc.ask("我是谁", user_id="stu-b")["answer"]
+    assert "还没有记下你的身份" in other and "我问过" not in other
+
+
+def test_a_sentence_carrying_a_thesis_title_is_not_treated_as_a_pure_intro(tmp_path, monkeypatch):
+    """带题目的长句不能被吞成一句「记住了」：线上实测整句题目都被丢掉。"""
+    from rag import profile as learner
+    from rag import student
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    q = ("公共管理研究生专硕，妇幼保健院门诊患者满意度现状及提升对策研究"
+         "——以内蒙古某妇幼保健院为例")
+    assert student.only_intro(q) is False
+    svc = UnifiedService(router_client=route_llm("thesis"))
+    svc.adaptive = None
+    out = svc.ask(q, user_id="stu-t")
+    assert out["route"] != "meta"                             # 不再只回一句「记住了」
+    got = learner.identity("stu-t")
+    assert got["level"] == "硕士" and got["major"] == "公共管理"   # 身份照样记下来
