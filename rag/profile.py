@@ -67,9 +67,14 @@ CREATE TABLE IF NOT EXISTS learner_profile (
     major       TEXT NOT NULL DEFAULT '',     -- 编辑出版、公共管理……
     field       TEXT NOT NULL DEFAULT '',     -- 学科门类：新闻传播、管理学……
     stage       TEXT NOT NULL DEFAULT '',     -- 选题 / 开题 / 写作 / 答辩
+    school      TEXT NOT NULL DEFAULT '',     -- 内蒙古大学……
+    title       TEXT NOT NULL DEFAULT '',     -- 学生自己说的论文题目原文
     updated_at  REAL NOT NULL
 );
 """
+
+# 老库补列：CREATE TABLE IF NOT EXISTS 不会给已存在的表加字段
+_MIGRATIONS = (("school", "TEXT NOT NULL DEFAULT ''"), ("title", "TEXT NOT NULL DEFAULT ''"))
 
 _lock = threading.Lock()
 _inited: set[str] = set()
@@ -87,8 +92,21 @@ def _connect(path: Path) -> sqlite3.Connection:
     if str(path) not in _inited:
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
+        _migrate(con)
         _inited.add(str(path))
     return con
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """给已有的库补新列（老库没有 school / title）。失败只记 warning，不影响读写。"""
+    try:
+        have = {r[1] for r in con.execute("PRAGMA table_info(learner_profile)")}
+        for name, decl in _MIGRATIONS:
+            if name not in have:
+                con.execute(f"ALTER TABLE learner_profile ADD COLUMN {name} {decl}")
+        con.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("profile 补列失败（%s）", type(e).__name__)
 
 
 def reset(path: str | Path | None = None) -> None:
@@ -266,16 +284,18 @@ def state(user_id: Any) -> dict:
     return {"concepts": concepts, "chapters": chapters, "scores": scores}
 
 
-def notice_identity(user_id: Any, *, level: str = "", major: str = "", field: str = "", stage: str = "") -> None:
-    """记学生自述的身份与阶段：学历、专业、学科门类、论文阶段。
+def notice_identity(user_id: Any, *, level: str = "", major: str = "", field: str = "", stage: str = "",
+                    school: str = "", title: str = "") -> None:
+    """记学生自述的身份与阶段：学校、学历、专业、学科门类、论文阶段、论文题目。
 
-    只写学生自己说过的（「我是编辑出版专业的本科生」「论文在选题阶段」），不做推断：
-    没说过就留空，不会被「猜」成某个专业。同一个人多次自述时，非空字段覆盖、空字段保留旧值。
+    只写学生自己说过的（「我是编辑出版专业的本科生」「论文在选题阶段」「题目是…」），不做推断：
+    没说过就留空，不会被「猜」成某个专业或某个题目。同一个人多次自述时，非空字段覆盖、空字段保留旧值。
     """
     uid = _clean(user_id)
     if not uid:
         return
-    vals = {"level": _clip(level, 12), "major": _clip(major, 24), "field": _clip(field, 24), "stage": _clip(stage, 12)}
+    vals = {"level": _clip(level, 12), "major": _clip(major, 24), "field": _clip(field, 24),
+            "stage": _clip(stage, 12), "school": _clip(school, 24), "title": _clip(title, 80)}
     if not any(vals.values()):
         return
     try:
@@ -286,10 +306,13 @@ def notice_identity(user_id: Any, *, level: str = "", major: str = "", field: st
                     old = _read_identity(con, uid)
                     merged = {k: (vals[k] or old.get(k, "")) for k in vals}
                     con.execute(
-                        "INSERT INTO learner_profile(user_id, level, major, field, stage, updated_at) VALUES (?,?,?,?,?,?) "
+                        "INSERT INTO learner_profile(user_id, level, major, field, stage, school, title, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(user_id) DO UPDATE SET level = excluded.level, major = excluded.major, "
-                        "field = excluded.field, stage = excluded.stage, updated_at = excluded.updated_at",
-                        (uid, merged["level"], merged["major"], merged["field"], merged["stage"], time.time()))
+                        "field = excluded.field, stage = excluded.stage, school = excluded.school, "
+                        "title = excluded.title, updated_at = excluded.updated_at",
+                        (uid, merged["level"], merged["major"], merged["field"], merged["stage"],
+                         merged["school"], merged["title"], time.time()))
             finally:
                 con.close()
     except Exception as e:  # noqa: BLE001 - 档案写失败不影响回答
@@ -300,18 +323,21 @@ def _clip(text: Any, limit: int) -> str:
     return " ".join(str(text or "").split())[:limit]
 
 
+_FIELDS = ("level", "major", "field", "stage", "school", "title")
+
+
 def _read_identity(con: sqlite3.Connection, uid: str) -> dict:
     try:
-        row = con.execute("SELECT level, major, field, stage FROM learner_profile WHERE user_id = ?",
-                          (uid,)).fetchone()
+        row = con.execute("SELECT level, major, field, stage, school, title FROM learner_profile "
+                          "WHERE user_id = ?", (uid,)).fetchone()
     except Exception:  # noqa: BLE001 - 老库没有这张表
         return {}
-    return dict(zip(("level", "major", "field", "stage"), row)) if row else {}
+    return dict(zip(_FIELDS, row)) if row else {}
 
 
 def identity(user_id: Any) -> dict:
-    """学生自述的身份：{"level", "major", "field", "stage"}；没说过就是空字符串。"""
-    empty = {"level": "", "major": "", "field": "", "stage": ""}
+    """学生自述的身份：{"level", "major", "field", "stage", "school", "title"}；没说过就是空字符串。"""
+    empty = {k: "" for k in _FIELDS}
     uid = _clean(user_id)
     if not uid:
         return empty
@@ -345,6 +371,9 @@ def summary(user_id: Any) -> str:
     line = _identity_line(who)
     if line:
         parts.append(line)
+    title = (who.get("title") or "").strip()
+    if title:
+        parts.append(f"论文题目：{title}")
     if names:
         parts.append("之前问过：" + "、".join(names))
     if weak:
@@ -352,19 +381,20 @@ def summary(user_id: Any) -> str:
     if st["chapters"]:
         parts.append("关注过的章：" + "、".join(f"第{c}章" for c in st["chapters"][:2]))
     return ("【这个学生的情况】" + "；".join(parts)
-            + "。回答时按他的专业与阶段举例选材，不要生硬复述、不要推断他的水平。")
+            + "。回答时按他的专业与阶段举例选材，不要生硬复述、不要推断他的水平；他说过的题目要按原题理解，不要改写。")
 
 
 def _identity_line(who: dict) -> str:
-    """把自述身份拼成一句自然的话：本科生，编辑出版专业（新闻传播），选题阶段。"""
+    """把自述身份拼成一句自然的话：内蒙古大学，硕士生，公共管理专业（管理学），选题阶段。"""
     level, major, field, stage = (who.get(k, "") for k in ("level", "major", "field", "stage"))
+    school = (who.get("school") or "").strip()
     head = f"{level}生" if level in ("本科", "硕士", "博士") else level
     if major and field and field not in major:
         major = f"{major}专业（{field}）"
     elif major and "专业" not in major:
         major = f"{major}专业"
-    bits = [x for x in (head, major) if x]
-    line = "，".join(bits) if len(bits) > 1 else "".join(bits)
+    bits = [x for x in (school, head, major) if x]
+    line = "，".join(bits)
     if stage:
         line = (line + "，") if line else ""
         line += f"{stage}阶段"

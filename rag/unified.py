@@ -552,9 +552,10 @@ class UnifiedService:
             return False
         try:
             got = student.parse(question)
-            if not any(got.values()):
+            title = student.parse_title(question)          # 「论文题目是…」：只认显式说法
+            if not any(got.values()) and not title:
                 return False
-            learner.notice_identity(who, **got)
+            learner.notice_identity(who, **got, title=title)
             return student.only_intro(question)
         except Exception as e:  # noqa: BLE001 - 认身份失败按普通问题处理
             logger.warning("身份识别失败（%s）", type(e).__name__)
@@ -1040,6 +1041,9 @@ class UnifiedService:
         lines: list[str] = []
         if line:
             lines.append(f"我记得的你是：{line}。")
+            title = (who.get("title") or "").strip()
+            if title:
+                lines.append(f"你在做的论文题目是：{title}。")
         else:
             lines.append("我这边还没有记下你的身份信息。")
         if names:

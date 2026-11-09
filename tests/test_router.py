@@ -1483,3 +1483,93 @@ def test_a_sentence_carrying_a_thesis_title_is_not_treated_as_a_pure_intro(tmp_p
     assert out["route"] != "meta"                             # 不再只回一句「记住了」
     got = learner.identity("stu-t")
     assert got["level"] == "硕士" and got["major"] == "公共管理"   # 身份照样记下来
+
+
+# ---------------------------------------------------------------- 档案：学校与论文题目
+
+@pytest.mark.parametrize("text,expect", [
+    ("我是内蒙古大学公共管理专硕", {"school": "内蒙古大学", "major": "公共管理"}),
+    ("我是南京大学编辑出版专业的本科生", {"school": "南京大学", "major": "编辑出版", "level": "本科"}),
+    ("我是复旦大学的学生", {"school": "复旦大学", "level": "学生"}),
+])
+def test_school_is_recorded_separately_from_the_major(text, expect):
+    """校名不能被并进专业名：以前「内蒙古大学公共管理专硕」会把专业记成「内蒙古大学公共管理」。"""
+    from rag import student
+    got = student.parse(text)
+    for k, v in expect.items():
+        assert got[k] == v, got
+
+
+@pytest.mark.parametrize("text,title", [
+    ("我是公共管理专硕，论文题目是妇幼保健院门诊患者满意度研究", "妇幼保健院门诊患者满意度研究"),
+    ("我的论文题目是：某市政务数据共享的部门协同机制研究", "某市政务数据共享的部门协同机制研究"),
+    ("我在做妇幼保健院门诊患者满意度研究", "妇幼保健院门诊患者满意度研究"),
+])
+def test_declared_thesis_title_is_captured(text, title):
+    from rag import student
+    assert student.parse_title(text) == title
+
+
+@pytest.mark.parametrize("text", ["这个题目怎么样", "论文题目还没定", "什么样的选题算是好的选题"])
+def test_thesis_title_is_not_invented(text):
+    """没明说题目就不记——猜一个题目，之后每轮都会引用一个他没写过的东西。"""
+    from rag import student
+    assert student.parse_title(text) == ""
+
+
+def test_title_reaches_the_prompt_and_the_whoami_reply(tmp_path, monkeypatch):
+    from rag import profile as learner
+    from rag import prompt_rules
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    svc = UnifiedService(router_client=route_llm("thesis"))
+    svc.adaptive = None
+    q = "我是内蒙古大学公共管理专硕，论文题目是妇幼保健院门诊患者满意度研究"
+    out = svc.ask(q, user_id="stu-title")
+    assert out["route"] != "meta"                              # 题目不能被当成纯自述吞掉
+    got = learner.identity("stu-title")
+    assert got["school"] == "内蒙古大学" and got["title"] == "妇幼保健院门诊患者满意度研究"
+
+    prof = learner.summary("stu-title")
+    assert "论文题目：妇幼保健院门诊患者满意度研究" in prof
+    msgs = prompt_rules.with_history([{"role": "system", "content": "S"}, {"role": "user", "content": "Q"}],
+                                     None, profile=prof)
+    assert "论文题目：" in msgs[0]["content"]
+
+    who = UnifiedService(router_client=route_llm("meta")).ask("我是谁", user_id="stu-title")["answer"]
+    assert "内蒙古大学" in who and "妇幼保健院门诊患者满意度研究" in who
+
+
+def test_old_profile_database_gets_the_new_columns(tmp_path, monkeypatch):
+    """老库已存在时 CREATE TABLE IF NOT EXISTS 不会加列，必须显式补列，否则读写都会失败。"""
+    import sqlite3
+    from rag import profile as learner
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE learner_profile (user_id TEXT PRIMARY KEY, level TEXT NOT NULL DEFAULT '', "
+                "major TEXT NOT NULL DEFAULT '', field TEXT NOT NULL DEFAULT '', "
+                "stage TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("PROFILE_DB", str(path))
+    learner.reset(str(path))
+    learner.notice_identity("old", level="本科", school="南京大学", title="某题")
+    assert learner.identity("old")["school"] == "南京大学"
+
+
+@pytest.mark.parametrize("text,title", [
+    ("公共管理研究生专硕，妇幼保健院门诊患者满意度现状及提升对策研究——以内蒙古某妇幼保健院为例",
+     "妇幼保健院门诊患者满意度现状及提升对策研究"),
+    ("我是公共管理专硕，妇幼保健院门诊患者满意度现状及提升对策研究——以内蒙古某妇幼保健院为例",
+     "妇幼保健院门诊患者满意度现状及提升对策研究"),
+])
+def test_a_bare_title_sentence_is_captured(text, title):
+    """学生未必说「论文题目是」：整句就是题目时也要认出来（线上原话就是这样）。"""
+    from rag import student
+    assert student.parse_title(text) == title
+
+
+@pytest.mark.parametrize("text", ["数据确权为什么难", "开题报告怎么写", "文献综述怎么写", "你好"])
+def test_ordinary_questions_are_not_mistaken_for_titles(text):
+    from rag import student
+    assert student.parse_title(text) == ""
