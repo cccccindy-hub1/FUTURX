@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 from . import config
 from . import profile as learner
-from . import qa_store, usage_log
+from . import qa_store, student, usage_log
 from .adaptive import AdaptiveRAG
 from .api import require_api_key
 from .persona import EXAMPLE_DIALOGUE, GREETING_SHORT
@@ -504,6 +504,16 @@ class UnifiedService:
         # 只给历史不看指代时，模型会说「你问的它指代不明」（实测）。历史仍作为上下文一并传入。
         q = routed_q
         who = user_id or key_id or (rec.key_id if rec is not None else None)     # 画像按人记，口径同问答记录
+        if who and self._note_identity(who, question):
+            # 纯自述（「我是编辑出版专业的本科生」）：记下来，回一句确认，不检索、不调模型。
+            # 以前这句会被判成 off_topic，模型把它当问题答，讲了一段考研方向；
+            # 紧接着问选题，回答里全是公共管理的例子（实测）。
+            out.update(route="meta", status="ok", sources=[],
+                       answer=student.confirm_text(learner.identity(who)))
+            out["trace"] = {"router": d.to_dict(), "identity": learner.identity(who), "llm_calls": 0,
+                            "total_s": round(time.perf_counter() - t0, 4)}
+            out["followups"] = []
+            return out
         prof = learner.summary(who)                                              # 没有记录时是空串，提示词逐字不变
         if d.combined:
             self._combined(q, d, out, trace, history, profile=prof)
@@ -531,6 +541,24 @@ class UnifiedService:
         return out
 
     # ---------------------------------------------------------------- 学习者画像（P1）
+    def _note_identity(self, who: str | None, question: str) -> bool:
+        """认出「我是本科生 编辑出版专业」这类自述并记进画像；返回是否只是自我介绍。
+
+        只认明确的说法（见 rag.student），认不出就什么都不做。返回 True 时调用方应当直接回一句确认，
+        因为这句话不是问题，用模型去答只会得到一段「这个专业怎么样」的泛泛介绍。
+        """
+        if not who:
+            return False
+        try:
+            got = student.parse(question)
+            if not any(got.values()):
+                return False
+            learner.notice_identity(who, **got)
+            return student.only_intro(question)
+        except Exception as e:  # noqa: BLE001 - 认身份失败按普通问题处理
+            logger.warning("身份识别失败（%s）", type(e).__name__)
+            return False
+
     def _note_learning(self, who: str | None, out: dict[str, Any], d: RouteDecision) -> None:
         """把这一轮涉及的概念 / 章记进画像（rag.profile）。
 

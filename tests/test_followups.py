@@ -153,3 +153,20 @@ def test_stream_injects_followups_with_ok_status(monkeypatch):
     assert svc._followups("什么是数据确权？", {"route": "course", "status": "ok", "answer": "答案"})
     # 不带 status（改前的 bug 形态）必须被门控拦下——这条断言语义上锁住修复
     assert svc._followups("什么是数据确权？", {"route": "course", "answer": "答案"}) == []
+
+
+# ---------------------------------------------------------------- 追问按路由分学科
+
+def test_thesis_followups_use_the_academic_prompt_not_the_exam_one():
+    """论文类问题不该出现「考试怎么考」：线上实测在「好选题的标准」之后追问考试（语境错配）。"""
+    from rag.followups import FOLLOWUP_SYSTEM, FOLLOWUP_SYSTEM_THESIS, system_for
+    assert "考试怎么考" in FOLLOWUP_SYSTEM and "不要问“考试怎么考”" in FOLLOWUP_SYSTEM_THESIS
+    assert "学位论文写作" in FOLLOWUP_SYSTEM_THESIS and "《数据要素》课程" not in FOLLOWUP_SYSTEM_THESIS
+    assert system_for("thesis") == FOLLOWUP_SYSTEM_THESIS
+    for r in ("course", "policy", "case", "exam", "meta"):
+        assert system_for(r) == FOLLOWUP_SYSTEM
+
+    llm = FakeLLM(json.dumps({"followups": ["怎么判断选题是不是太大？", "选题依据该写多少字？"]}))
+    make_followups("什么样的选题算是好的选题", "好选题要同时满足问题真实、边界清晰、你能做。", "thesis", llm)
+    sent = llm.calls[0]["messages"][0]["content"]
+    assert "学位论文写作" in sent and "考试怎么考，不要四条" not in sent

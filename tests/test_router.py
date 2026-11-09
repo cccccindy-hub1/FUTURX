@@ -1356,3 +1356,69 @@ def test_course_answer_prompt_gets_the_profile_but_no_extra_llm_call():
 
 def _json_ok():
     return LLMResult(content='{"selected": []}')
+
+
+# ---------------------------------------------------------------- 学生自述身份（理解用户，而不是套格式）
+
+@pytest.mark.parametrize("text,expect", [
+    ("我是本科生 编辑出版专业（新闻传播大类）", {"level": "本科", "major": "编辑出版", "field": "新闻传播"}),
+    ("本科 编辑出版专业（新闻传播大类）", {"level": "本科", "major": "编辑出版", "field": "新闻传播"}),
+    ("我是公共管理专业的硕士研究生", {"level": "硕士", "major": "公共管理"}),
+    ("我是复旦的博士生", {"level": "博士"}),
+])
+def test_identity_is_parsed_from_a_self_introduction(text, expect):
+    from rag import student
+    got = student.parse(text)
+    for k, v in expect.items():
+        assert got[k] == v, got
+    assert student.only_intro(text) is True
+
+
+@pytest.mark.parametrize("text", ["什么样的选题算是好的选题", "我的选题还没定", "我是本科生，编辑出版专业，想问选题怎么定"])
+def test_non_introductions_are_not_treated_as_identity_only(text):
+    from rag import student
+    assert student.only_intro(text) is False
+
+
+def test_self_introduction_is_remembered_and_answered_without_a_model_call(tmp_path, monkeypatch):
+    """自述不是问题：回一句确认，不检索、不调模型；身份进画像，下一问按这个专业答。"""
+    from rag import profile as learner
+    from rag import prompt_rules
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    svc = UnifiedService(router_client=route_llm("off_topic"))
+    out = svc.ask("我是本科生 编辑出版专业（新闻传播大类）", user_id="stu-bg")
+    assert out["route"] == "meta" and out["status"] == "ok"
+    assert "记住了" in out["answer"] and "编辑出版" in out["answer"]
+    assert "考研" not in out["answer"]                       # 以前会讲一段考研方向
+    assert out["trace"]["llm_calls"] == 0 and out["followups"] == []
+    assert learner.identity("stu-bg")["major"] == "编辑出版"
+
+    prof = learner.summary("stu-bg")
+    assert "本科生" in prof and "编辑出版专业" in prof and "新闻传播" in prof
+    msgs = prompt_rules.with_history([{"role": "system", "content": "S"}, {"role": "user", "content": "Q"}],
+                                    None, profile=prof)
+    assert "按他的专业与阶段举例" in msgs[0]["content"]
+
+
+def test_identity_with_a_real_question_is_answered_as_a_question(tmp_path, monkeypatch):
+    """「我是本科生，编辑出版专业，想问选题怎么定」有真问题：只记录身份，不吞成一句「记住了」。"""
+    from rag import profile as learner
+    monkeypatch.setenv("PROFILE_DB", str(tmp_path / "profile.sqlite3"))
+    learner.reset()
+    svc = UnifiedService(router_client=route_llm("thesis"))
+    svc.adaptive = None                                      # 只验证它没有被 meta 截走
+    out = svc.ask("我是本科生 编辑出版专业，想问选题怎么定", user_id="stu-q")
+    assert out["route"] != "meta"
+    assert learner.identity("stu-q")["major"] == "编辑出版"
+
+
+def test_thesis_prompt_is_question_driven_not_template_driven():
+    """论文指导不该套课程的总分总：一句话能说清就一句说完；资料学科不等于学生学科。"""
+    from rag import prompt_rules
+    from rag import query
+    s = query._SYSTEM_PROMPT
+    assert prompt_rules.ANSWER_STRUCTURE not in s             # 不再套课程的 400 字 / 分点硬约束
+    assert "先读懂问题" in s and "结构服务于内容" in s
+    assert "不代表这位学生自己的学科" in s
+    assert prompt_rules.THESIS_SAMPLES in s

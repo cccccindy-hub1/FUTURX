@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS learner_mastery (
     last_at     REAL NOT NULL,
     PRIMARY KEY (user_id, question_id)
 );
+CREATE TABLE IF NOT EXISTS learner_profile (
+    user_id     TEXT PRIMARY KEY,
+    level       TEXT NOT NULL DEFAULT '',     -- 本科 / 硕士 / 博士 / 教师
+    major       TEXT NOT NULL DEFAULT '',     -- 编辑出版、公共管理……
+    field       TEXT NOT NULL DEFAULT '',     -- 学科门类：新闻传播、管理学……
+    stage       TEXT NOT NULL DEFAULT '',     -- 选题 / 开题 / 写作 / 答辩
+    updated_at  REAL NOT NULL
+);
 """
 
 _lock = threading.Lock()
@@ -258,11 +266,71 @@ def state(user_id: Any) -> dict:
     return {"concepts": concepts, "chapters": chapters, "scores": scores}
 
 
-def summary(user_id: Any) -> str:
-    """拼进提示词的关系层：一句话说明这个人问过什么、关注哪章、哪几处还没掌握。没有记录返回空串。
+def notice_identity(user_id: Any, *, level: str = "", major: str = "", field: str = "", stage: str = "") -> None:
+    """记学生自述的身份与阶段：学历、专业、学科门类、论文阶段。
 
-    只陈述已经发生的事（问过什么、哪道题没答对），不做任何推断（不说「你基础薄弱」）——推断没有依据，
-    写进提示词会让模型顺着编。只取问过两次以上的概念（「反复问的才是主题」），
+    只写学生自己说过的（「我是编辑出版专业的本科生」「论文在选题阶段」），不做推断：
+    没说过就留空，不会被「猜」成某个专业。同一个人多次自述时，非空字段覆盖、空字段保留旧值。
+    """
+    uid = _clean(user_id)
+    if not uid:
+        return
+    vals = {"level": _clip(level, 12), "major": _clip(major, 24), "field": _clip(field, 24), "stage": _clip(stage, 12)}
+    if not any(vals.values()):
+        return
+    try:
+        with _lock:
+            con = _connect(db_path())
+            try:
+                with con:
+                    old = _read_identity(con, uid)
+                    merged = {k: (vals[k] or old.get(k, "")) for k in vals}
+                    con.execute(
+                        "INSERT INTO learner_profile(user_id, level, major, field, stage, updated_at) VALUES (?,?,?,?,?,?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET level = excluded.level, major = excluded.major, "
+                        "field = excluded.field, stage = excluded.stage, updated_at = excluded.updated_at",
+                        (uid, merged["level"], merged["major"], merged["field"], merged["stage"], time.time()))
+            finally:
+                con.close()
+    except Exception as e:  # noqa: BLE001 - 档案写失败不影响回答
+        log.warning("profile 身份写入失败（%s），本条丢弃", type(e).__name__)
+
+
+def _clip(text: Any, limit: int) -> str:
+    return " ".join(str(text or "").split())[:limit]
+
+
+def _read_identity(con: sqlite3.Connection, uid: str) -> dict:
+    try:
+        row = con.execute("SELECT level, major, field, stage FROM learner_profile WHERE user_id = ?",
+                          (uid,)).fetchone()
+    except Exception:  # noqa: BLE001 - 老库没有这张表
+        return {}
+    return dict(zip(("level", "major", "field", "stage"), row)) if row else {}
+
+
+def identity(user_id: Any) -> dict:
+    """学生自述的身份：{"level", "major", "field", "stage"}；没说过就是空字符串。"""
+    empty = {"level": "", "major": "", "field": "", "stage": ""}
+    uid = _clean(user_id)
+    if not uid:
+        return empty
+    try:
+        con = _connect(db_path())
+    except Exception as e:  # noqa: BLE001
+        log.warning("profile 读取失败（%s）", type(e).__name__)
+        return empty
+    try:
+        return {**empty, **_read_identity(con, uid)}
+    finally:
+        con.close()
+
+
+def summary(user_id: Any) -> str:
+    """拼进提示词的关系层：说明这个人是谁（自述）、问过什么、关注哪章、哪几处还没掌握。
+
+    只陈述已经发生的事（自述的专业、问过什么、哪道题没答对），不做任何推断（不说「你基础薄弱」）——
+    推断没有依据，写进提示词会让模型顺着编。只取问过两次以上的概念（「反复问的才是主题」），
     问过一次的不算——课程管线一次会选出好几个概念，全列出来等于把词表塞进提示词。
     「还没掌握」只来自真实的判分记录；没有交过作业的学生这一段完全不出现。
     """
@@ -270,9 +338,13 @@ def summary(user_id: Any) -> str:
     repeated = [c["concept"] for c in st["concepts"] if c["hits"] >= 2]
     names = repeated[:SUMMARY_MAX_ITEMS]
     weak = [w for w in weaknesses(user_id) if w not in names][:WEAK_MAX_ITEMS]
-    if not names and not st["chapters"] and not weak:
+    who = identity(user_id)
+    if not names and not st["chapters"] and not weak and not any(who.values()):
         return ""
     parts = []
+    line = _identity_line(who)
+    if line:
+        parts.append(line)
     if names:
         parts.append("之前问过：" + "、".join(names))
     if weak:
@@ -280,8 +352,24 @@ def summary(user_id: Any) -> str:
     if st["chapters"]:
         parts.append("关注过的章：" + "、".join(f"第{c}章" for c in st["chapters"][:2]))
     return ("【这个学生的情况】" + "；".join(parts)
-            + "。回答时可以顺带把它和上面这些内容联系起来，但不要生硬复述、不要推断他的水平。")
+            + "。回答时按他的专业与阶段举例选材，不要生硬复述、不要推断他的水平。")
 
 
-__all__ = ["notice_question", "notice_score", "state", "summary", "weaknesses", "db_path", "reset",
-           "SCHEMA", "CONCEPT_MAX", "CHAPTER_MAX", "SCORE_MAX"]
+def _identity_line(who: dict) -> str:
+    """把自述身份拼成一句自然的话：本科生，编辑出版专业（新闻传播），选题阶段。"""
+    level, major, field, stage = (who.get(k, "") for k in ("level", "major", "field", "stage"))
+    head = f"{level}生" if level in ("本科", "硕士", "博士") else level
+    if major and field and field not in major:
+        major = f"{major}专业（{field}）"
+    elif major and "专业" not in major:
+        major = f"{major}专业"
+    bits = [x for x in (head, major) if x]
+    line = "，".join(bits) if len(bits) > 1 else "".join(bits)
+    if stage:
+        line = (line + "，") if line else ""
+        line += f"{stage}阶段"
+    return line
+
+
+__all__ = ["notice_question", "notice_score", "notice_identity", "identity", "state", "summary",
+           "weaknesses", "db_path", "reset", "SCHEMA", "CONCEPT_MAX", "CHAPTER_MAX", "SCORE_MAX"]

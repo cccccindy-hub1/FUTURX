@@ -28,6 +28,30 @@ FOLLOWUP_SYSTEM = """你是《数据要素》课程的助教，现在要为学�
 回答：数据确权是明确数据归谁持有、谁能使用、如何流转的制度安排……（略）
 输出：{"followups": ["数据确权与数据所有权有什么区别？", "确权登记具体怎么办？", "企业怎么证明自己有权使用数据？"]}"""
 
+# 论文 / 写作类问题的追问：角度换成学术写作，不要出现「考试怎么考」——线上实测在「好选题的标准」
+# 之后追问「考试会怎么考选题设计」，与学生的实际问题完全不在一个语境。
+FOLLOWUP_SYSTEM_THESIS = """你是学位论文写作的助教，现在要为学生推荐下一步可以追问的问题。
+
+要求：
+- 给出 2 到 4 条追问，每条不超过 25 个字；
+- 每条都必须是疑问句，以问号结尾；
+- 角度要多样：具体怎么操作、有什么判断标准、常见坑、和相邻环节的关系；不要问“考试怎么考”；
+- 不要重复回答里已经讲过的内容，也不要问回答里已给出答案的问题；
+- 只输出 JSON 对象，不要解释、不要 Markdown 代码围栏。
+
+示例：
+学生问题：什么样的选题算是好的选题？
+回答：好选题要同时满足问题真实、边界清晰、你能做……（略）
+输出：{"followups": ["怎么判断选题是不是太大？", "选题依据部分该写多少字？", "换方向还来得及吗？"]}"""
+
+# 按路由选择追问提示词：论文单独一套，其余仍用课程那一套
+# （off_topic / quote 在 unified 侧就被跳过了，不会走到这里）
+THESIS_ROUTES = ("thesis",)
+
+
+def system_for(route: str) -> str:
+    return FOLLOWUP_SYSTEM_THESIS if route in THESIS_ROUTES else FOLLOWUP_SYSTEM
+
 FOLLOWUP_USER = """学生问题：{question}
 
 已有回答：
@@ -71,7 +95,7 @@ def make_followups(question: str, answer: str, route: str, llm) -> list[str]:
 
     if llm is None or not (answer or "").strip():
         return []
-    msgs = [{"role": "system", "content": FOLLOWUP_SYSTEM},
+    msgs = [{"role": "system", "content": system_for(route)},
             {"role": "user", "content": FOLLOWUP_USER.format(question=question, answer=(answer or "")[:1200])}]
     try:
         res = llm.chat("followup", msgs, model=LIB_PICK_MODEL, json_mode=True)
@@ -116,4 +140,5 @@ def exam_followups(item) -> list[str]:
     return seen[: rules.FOLLOWUP_MAX]
 
 
-__all__ = ["make_followups", "exam_followups", "FOLLOWUP_SYSTEM", "FOLLOWUP_USER"]
+__all__ = ["make_followups", "exam_followups", "system_for", "FOLLOWUP_SYSTEM", "FOLLOWUP_SYSTEM_THESIS",
+           "FOLLOWUP_USER"]
