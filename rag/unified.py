@@ -94,6 +94,37 @@ def _history_messages(conversation_id: str | None) -> list[dict]:
     return [{"role": role, "content": text} for role, text in pairs]
 
 
+def _recap_model() -> str:
+    """前情摘要用的小模型：与追问胶囊、判分同一档（便宜、快），可单独用 RECAP_MODEL 覆盖。"""
+    import os
+
+    from .course.config import LIB_PICK_MODEL
+
+    return os.environ.get("RECAP_MODEL") or LIB_PICK_MODEL
+
+
+def _recap_text(conversation_id: str | None, llm=None, model: str = "") -> str:
+    """这个会话的「前情」：超出送模型窗口的旧轮次压成的两三句。
+
+    没有会话、还没超出窗口、没配模型时都返回空串——调用方据此什么都不加，
+    提示词对短会话逐字不变。摘要在本轮问答**开始前**更新，本轮才能用上。
+    """
+    if not conversation_id:
+        return ""
+    from .config import CHAT_HISTORY_MAX_TURNS
+    from . import recap as recap_mod
+
+    if CHAT_HISTORY_MAX_TURNS <= 0:                # 关闭历史窗口时不做摘要（没有「之外」的轮次）
+        return ""
+    try:
+        text = recap_mod.maybe_update(conversation_id, keep_turns=CHAT_HISTORY_MAX_TURNS,
+                                      llm=llm, model=model)
+    except Exception as e:  # noqa: BLE001 - 摘要失败不影响回答
+        logger.warning("前情摘要失败（%s），按无摘要处理", type(e).__name__)
+        return ""
+    return recap_mod.injection(text)
+
+
 def _standalone_question(question: str, history: list[dict] | None, llm) -> str:
     """把追问改写成独立问题，供**路由**判断（检索与作答仍用原话）。
 
@@ -142,6 +173,19 @@ def _qa_ids(fn, request: Request, conversation_id: str | None, req=None) -> dict
     return out
 
 
+def _accepts_recap(fn) -> bool:
+    """这个实现接不接受 recap 参数（测试替身 / 其它实现的 ask 签名里没有）。
+
+    与 _qa_ids 同一套做法：不因为调用方多传一个可选关键字而让它们报 TypeError。
+    """
+    import inspect
+
+    try:
+        return "recap" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _save_turn(conversation_id: str | None, out: dict, request: Request,
                uuid_value: str | None = None) -> None:
     """把统一入口的一轮结果落库；失败只记日志。"""
@@ -173,9 +217,12 @@ def auto_ask(req: AutoAskRequest, request: Request):
 
     conversation_id = _conversation_context(req.conversation_id, request, req.store, req.uuid)
     context = _history_messages(conversation_id)
+    recap = _recap_text(conversation_id, getattr(svc, "lib_llm", None), _recap_model())
     try:
+        extra = {"recap": recap} if _accepts_recap(svc.ask) else {}
         out = svc.ask(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                      history=context, **_qa_ids(svc.ask, request, conversation_id, req))
+                      history=context, **extra,
+                      **_qa_ids(svc.ask, request, conversation_id, req))
     except Exception as e:  # noqa: BLE001 - 下游错误统一转 502；只回类型名，避免泄露细节
         raise HTTPException(status_code=502, detail={"error": {"message": f"下游调用失败：{type(e).__name__}",
                                                                "type": "upstream_error"}}) from None
@@ -209,11 +256,14 @@ def auto_ask_stream(req: AutoAskRequest, request: Request):
 
     conversation_id = _conversation_context(req.conversation_id, request, req.store, req.uuid)
     context = _history_messages(conversation_id)
+    recap = _recap_text(conversation_id, getattr(svc, "lib_llm", None), _recap_model())
 
     def gen():
         final: dict | None = None
+        extra = {"recap": recap} if _accepts_recap(svc.ask_stream) else {}
         events = svc.ask_stream(req.question, req.top_k, origin="http", key_id=key_fingerprint(request),
-                                history=context, **_qa_ids(svc.ask_stream, request, conversation_id, req))
+                                history=context, **extra,
+                                **_qa_ids(svc.ask_stream, request, conversation_id, req))
         try:
             for ev in events:
                 if ev.get("type") == "done":
@@ -464,21 +514,23 @@ class UnifiedService:
 
     def ask(self, question: str, top_k: int | None = None, *, origin: str = "eval",
             key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
-            session_id: str | None = None, user_name: str | None = None) -> dict[str, Any]:
+            session_id: str | None = None, user_name: str | None = None,
+            recap: str = "") -> dict[str, Any]:
         """origin/key_id：调用来源（http / eval）与 API key 指纹，只用于调用日志（需求5）。
         history：之前几轮的 [{"role","content"}]，只作为作答上下文，不参与检索与路由判断。
+        recap：超出历史窗口的旧轮次压成的「前情」，非空时与画像一起拼进 system 末尾。
         user_id/session_id/user_name：永久问答记录（rag.qa_store）用；都可省略。"""
         with usage_log.record(question, origin, key_id) as rec:
             rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
                            "history": qa_store.normalize_history(history)}
             out = self._ask(question, top_k, history=history, rec=rec, user_id=user_id,
-                            session_id=session_id, key_id=key_id)
+                            session_id=session_id, key_id=key_id, recap=recap)
             rec.finish(out)
             return out
 
     def _ask(self, question: str, top_k: int | None = None, *, history: list[dict] | None = None,
              rec=None, user_id: str | None = None, session_id: str | None = None,
-             key_id: str | None = None) -> dict[str, Any]:
+             key_id: str | None = None, recap: str = "") -> dict[str, Any]:
         question = question.strip()
         t0 = time.perf_counter()
         # 路由 / 题库匹配用「独立问题」：把「那它适用什么情形」补全成完整问句，
@@ -516,6 +568,7 @@ class UnifiedService:
             out["followups"] = []
             return out
         prof = learner.summary(who)                                              # 没有记录时是空串，提示词逐字不变
+        prof = f"{prof}\n\n{recap}".strip() if (prof and recap) else (prof or recap)   # 前情与画像一起注入
         if d.combined:
             self._combined(q, d, out, trace, history, profile=prof)
         elif d.route == "off_topic":
@@ -633,7 +686,8 @@ class UnifiedService:
 
     def ask_stream(self, question: str, top_k: int | None = None, *, origin: str = "eval",
                    key_id: str | None = None, history: list[dict] | None = None, user_id: str | None = None,
-                   session_id: str | None = None, user_name: str | None = None) -> Iterator[dict[str, Any]]:
+                   session_id: str | None = None, user_name: str | None = None,
+                   recap: str = "") -> Iterator[dict[str, Any]]:
         """流式版 ask：生成事件字典。顺序 route →（课程路由才有）stage / materials / delta → done。
 
         课程路由的 pipeline 是回调式的，这里用后台线程 + 队列转成生成器；非课程路由不流式，完整结果直接放进 done。
@@ -649,7 +703,8 @@ class UnifiedService:
         rec = usage_log.start(question, origin, key_id)
         rec.qa_meta = {"user_id": user_id, "session_id": session_id, "user_name": user_name,
                        "history": qa_store.normalize_history(history)}
-        inner = self._ask_stream(question, top_k, rec, history, user_id=user_id, session_id=session_id, key_id=key_id)
+        inner = self._ask_stream(question, top_k, rec, history, user_id=user_id, session_id=session_id,
+                                key_id=key_id, recap=recap)
         try:
             while True:
                 # 关键：每段恢复都在线程池的新上下文里，必须在本段内重新激活 rec，
@@ -677,7 +732,7 @@ class UnifiedService:
 
     def _ask_stream(self, question: str, top_k: int | None, rec, history: list[dict] | None = None,
                     *, user_id: str | None = None, session_id: str | None = None,
-                    key_id: str | None = None) -> Iterator[dict[str, Any]]:
+                    key_id: str | None = None, recap: str = "") -> Iterator[dict[str, Any]]:
         question = question.strip()
         orig = question
         t0 = time.perf_counter()
@@ -714,6 +769,8 @@ class UnifiedService:
                    "chapter": d.chapter, "reason": d.reason, "router_s": round(d.latency_s, 3)}
         who = user_id or key_id or getattr(rec, "key_id", None) or None   # 画像按人记，口径同问答记录
         prof = learner.summary(who) if explain is None else ""            # 没有记录时是空串，提示词逐字不变
+        if explain is None and recap:                                     # 前情与画像一起注入
+            prof = f"{prof}\n\n{recap}".strip() if prof else recap
         if explain is None and d.combined and not self._available(d.routes):
             yield from self._stream_combined(question, d, t0, rec, history, profile=prof)
             return

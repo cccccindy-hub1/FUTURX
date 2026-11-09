@@ -82,6 +82,9 @@ _MIGRATIONS = (
     ("messages", "month", "TEXT"),
     # 调用方传的 uuid：共享一把 key 时按人隔离会话，见模块头「归属」
     ("conversations", "user_id", "TEXT"),
+    # 「前情」摘要：超过送模型窗口的旧轮次压成几句，见 recap_of / update_recap
+    ("conversations", "recap", "TEXT"),
+    ("conversations", "recap_upto", "INTEGER"),
 )
 
 
@@ -383,6 +386,82 @@ def history(conversation_id: str, *, max_turns: int, max_chars: int | None = Non
     return [msg for turn in reversed(picked) for msg in turn]
 
 
+def old_turns(conversation_id: str, *, keep_turns: int, max_turns: int = 40,
+              max_chars: int = 6000, after: int = 0) -> list[tuple[str, str]]:
+    """取「送模型窗口之外」的旧轮次（第 keep_turns 轮以前），供压成前情摘要。
+
+    与 history() 相反：history 取最近的、给模型看原文；这里取较旧的、只用来摘要。
+    按**整轮**返回（user + assistant 成对，落单的 user 也保留），顺序从旧到新。
+    after：已经摘到第几轮（recap_upto）；只返回它之后的轮次，避免同一段被重复摘要。
+    max_turns / max_chars 是本次摘要的预算：越旧越先丢，避免一次扩写就吃掉几秒。
+    返回的条数是**本次实际覆盖的轮次数**的来源——调用方用它推进 recap_upto，
+    不要用「总轮数 - 窗口轮数」推算：预算截断时两者不一致。
+    """
+    rows = _connect().execute(
+        "SELECT role, content, seq FROM messages WHERE conversation_id = ? ORDER BY seq ASC",
+        (conversation_id,),
+    ).fetchall()
+    turns: list[list[tuple[str, str]]] = []
+    pending: list[tuple[str, str]] = []
+    for row in rows:
+        item = (row["role"], row["content"] or "")
+        if row["role"] == "user":
+            if pending:                              # 上一轮没有回答就来了新问题：单独成轮
+                turns.append(pending)
+            pending = [item]
+        elif row["role"] == "assistant":
+            pending.append(item)
+            turns.append(pending)
+            pending = []
+    if pending:
+        turns.append(pending)
+    older = turns[: max(0, len(turns) - max(1, int(keep_turns)))]
+    older = older[max(0, int(after)):]               # 已经摘过的跳过
+    if not older:
+        return []
+    picked: list[list[tuple[str, str]]] = []
+    used = 0
+    for turn in reversed(older):                     # 从倒数第二旧的往更旧走，预算用完就停
+        size = sum(len(text) for _, text in turn)
+        if picked and (len(picked) >= max_turns or used + size > max_chars):
+            break
+        picked.append(turn)
+        used += size
+    return [msg for turn in reversed(picked) for msg in turn]
+
+
+def count_turns(pairs: list[tuple[str, str]]) -> int:
+    """一段 [(role, content)] 里有多少轮（user 开头算一轮）。给摘要推进 recap_upto 用。"""
+    return sum(1 for role, _ in pairs if role == "user")
+
+
+def recap_of(conversation_id: str) -> str:
+    """这个会话已有的前情摘要；没有返回空串。"""
+    try:
+        row = _connect().execute("SELECT recap FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    except sqlite3.Error:
+        return ""
+    return (row["recap"] or "") if row else ""
+
+
+def recap_upto(conversation_id: str) -> int:
+    """摘要已经覆盖到第几轮（0 = 还没摘过）。"""
+    try:
+        row = _connect().execute("SELECT recap_upto FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row["recap_upto"] or 0) if row else 0
+
+
+def update_recap(conversation_id: str, recap: str, upto: int) -> None:
+    """写入前情摘要与覆盖轮次。失败只记日志——摘要写不进去不该影响本轮回答。"""
+    try:
+        _connect().execute("UPDATE conversations SET recap = ?, recap_upto = ? WHERE id = ?",
+                           ((recap or "")[:2000], int(upto), conversation_id))
+    except sqlite3.Error as e:
+        logger.warning("前情摘要写入失败（%s），保留旧摘要", type(e).__name__)
+
+
 def append_turn(*, conversation_id: str, question: str, answer: str, key_id: str | None = None,
                 route: str | None = None, status: str = "ok", error: str | None = None,
                 search_query: str | None = None, sources: Iterable[dict] | None = None,
@@ -524,10 +603,12 @@ def purge_expired(*, days: int | None = None) -> int:
 # ---------------------------------------------------------------- 行转换
 
 def _conv(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
     return {"id": row["id"], "title": row["title"], "created_at": row["created_at"],
             "updated_at": row["updated_at"], "turn_count": row["turn_count"],
             "archived": bool(row["archived"]), "key_id": row["key_id"],
-            "user_id": row["user_id"]}
+            "user_id": row["user_id"],
+            "recap": (row["recap"] or "") if "recap" in keys else ""}
 
 
 def _msg(row: sqlite3.Row) -> dict[str, Any]:
@@ -551,4 +632,5 @@ def _title_of(question: str) -> str:
 
 __all__ = ["db_path", "retention_days", "create", "get", "ensure", "list_conversations", "messages",
            "history", "append_turn", "rename", "set_archived", "delete", "clear_messages",
-           "purge_expired", "reset_connections", "monthly_stats", "reassign_key"]
+           "purge_expired", "reset_connections", "monthly_stats", "reassign_key",
+           "old_turns", "count_turns", "recap_of", "recap_upto", "update_recap"]
