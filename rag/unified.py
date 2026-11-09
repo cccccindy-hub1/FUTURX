@@ -267,6 +267,7 @@ META_GREETING = GREETING_SHORT
 # meta 各路径的短回复：确认 / 收尾一句话，并按上文给一个下一步；没有上文就不给，不硬凑。
 ACK_REPLY = "好，需要接着问什么直接说。"
 ACK_REPLY_WITH_NEXT = "好。接着可以问「{next}」，或者直接把下一个问题发给我。"
+ACK_REPLY_WITH_TOPIC = "好。接着可以问「{next}」，或者直接说下一个问题。"
 # 上一个问题问的是什么，决定「下一步」推荐什么方向（只影响文案，不检索）
 _ACK_NEXT = {
     "course": "这个概念怎么考", "thesis": "这个方法在论文里怎么写",
@@ -276,18 +277,87 @@ _ACK_NEXT = {
 _ROUTE_CN = {"course": "课程知识", "thesis": "论文写作", "policy": "政策法规", "exam": "课程试题",
              "case": "判例", "quote": "讲话名言", "meta": "助手自身", "off_topic": "库外通用问答"}
 
+# 上一轮问的是什么概念：去掉疑问外壳后剩下的部分（「什么是数据确权」→「数据确权」）。
+# 只做字符串处理，不查词表、不调模型：确认语必须零调用返回，答错一句闲话不值得多花一次请求。
+_TOPIC_PREFIX = ("请问一下", "请问", "想问一下", "我想问一下", "想问", "问一下", "老师", "请教一下", "请教",
+                 "给我讲讲", "给我说说", "讲讲", "说说", "介绍一下", "那它和", "它和", "那么", "那")
+_TOPIC_HEAD = ("具体是指什么", "指的是什么", "是指什么", "是什么意思", "是什么", "什么叫", "什么是", "啥是")
+# 疑问词出现的位置就是概念的结尾：截到它前面，「数据确权为什么难」就只剩「数据确权」
+_TOPIC_MARK = ("为什么", "为何", "怎么", "如何", "是什么", "什么", "有哪些", "哪些", "包括", "吗", "呢")
+_TOPIC_TAIL = "？?。！!，,、；;：: 　"
+_TOPIC_VERB_TAIL = ("规定了什么", "规定了", "包括什么", "包括", "涉及", "指什么", "指的是", "是指", "指")
+# 尾部这些虚词不成词，剥掉再判断
+_TOPIC_FILLER = ("呢", "吗", "啊", "呀", "吧", "嘛", "的", "了", "得", "地", "着", "过", "和", "与", "及", "或")
+_TOPIC_EMPTY = ("它", "这个", "那个", "这些", "上述内容", "以上", "这个知识点")
+# 像不像一个「可以接着问的概念」：太长、带动作词或数字量词的，多半是整句请求，不是概念
+_TOPIC_BAD = ("出", "几道", "给我", "帮我", "写", "改", "翻译", "举", "列", "生成", "总结", "判断", "题")
+
+
+def _clean_topic(text: str) -> str:
+    """一句话里抽出「问的是什么」；不像个概念（太短、只是代词）就返回空串。"""
+    s = (text or "").strip()
+    if not s:
+        return ""
+    changed = True
+    while changed:                                  # 「请问一下」+「什么是」可能连着两层
+        changed = False
+        for p in _TOPIC_PREFIX:
+            if s.startswith(p):
+                s, changed = s[len(p):].lstrip(_TOPIC_TAIL), True
+                break
+        for a in _TOPIC_HEAD:
+            if s.startswith(a):
+                s, changed = s[len(a):].lstrip(_TOPIC_TAIL), True
+                break
+    # 截到最早的疑问词：它后面是「怎么问」，前面才是「问的是什么」
+    cut = min((s.find(m) for m in _TOPIC_MARK if s.find(m) > 0), default=-1)
+    if cut > 0:
+        s = s[:cut]
+    s = s.strip(_TOPIC_TAIL)
+    # 先剥疑问句尾部的动词 / 助词，再剥语气词——「规定了」剥掉「了」之后就没法整词匹配了
+    for _ in range(2):
+        for _, v in sorted(((len(v), v) for v in _TOPIC_VERB_TAIL), reverse=True):
+            if s.endswith(v):
+                s = s[: -len(v)]
+        for _, f in sorted(((len(f), f) for f in _TOPIC_FILLER), reverse=True):
+            if s.endswith(f) and len(s) > len(f) + 1:
+                s = s[: -len(f)]
+        s = s.strip(_TOPIC_TAIL)
+    if not (2 <= len(s) <= 16) or s in _TOPIC_EMPTY:
+        return ""
+    if any(b in s for b in _TOPIC_BAD):            # 「出三道数据资产的判断题」是整句请求，不是概念
+        return ""
+    return s
+
+
+def _last_question(history: list[dict] | None, depth: int = 6) -> str:
+    """上一轮真正的提问：跳过「好的 / 谢谢 / 你好」这类确认与招呼，往回找最近一个有内容的问题。
+
+    不跳的话，连着两次确认会让第二次只能拿「你能做什么」当下一步（线上实测）。
+    """
+    for m in reversed((history or [])[-depth * 2:]):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        text = str(m.get("content") or "").strip()
+        if not text:
+            continue
+        try:
+            from .router import looks_ack, looks_greeting
+            if looks_ack(text) or looks_greeting(text):
+                continue
+        except Exception:  # noqa: BLE001 - 判不出来就当作正常提问
+            pass
+        return text
+    return ""
+
 
 def _last_route(history: list[dict] | None, depth: int = 6) -> str:
-    """上一轮问的是哪一类：取 history 里最后一条 user 问题，用关键词规则判一次（零调用、不联网）。
+    """上一轮问的是哪一类：取 history 里最后一条真正的提问，用关键词规则判一次（零调用、不联网）。
 
     不看助手回答的措辞（各库句式不统一，认不准），只看学生上一句问的是什么；
     规则判不出来（返回 off_topic 又没命中关键词）时也照样返回，调用方据此给通用建议。
     """
-    last = ""
-    for m in reversed((history or [])[-depth * 2:]):
-        if isinstance(m, dict) and m.get("role") == "user" and (m.get("content") or "").strip():
-            last = str(m["content"]).strip()
-            break
+    last = _last_question(history, depth)
     if not last:
         return ""
     try:
@@ -297,12 +367,38 @@ def _last_route(history: list[dict] | None, depth: int = 6) -> str:
         return ""
 
 
+# 带具体概念的下一步（{topic} 由上一轮的问题抽出；抽不出概念时退回下面 _ACK_NEXT 的通用文案）
+_ACK_NEXT_TOPIC = {
+    "course": "{topic}在考试里怎么考",
+    "thesis": "{topic}在论文里怎么写",
+    "policy": "{topic}的适用范围",
+    "case": "{topic}这类案件的裁判要点",
+    "quote": "关于{topic}的讲话还有哪些",
+    "exam": "{topic}这类题怎么答",
+    "off_topic": "{topic}和课程内容有什么关系",
+}
+
+
 def _ack_reply(history: list[dict] | None) -> str:
-    """确认 / 收尾语的回法：没有上文就一句短的；有上文就带上一个顺着上文的下一步。"""
-    prev = _last_route(history)
-    if not prev:
+    """确认 / 收尾语的回法：没有上文就一句短的；有上文就顺着上文的具体概念给一个下一步。
+
+    只给类型不给概念的版本（「接着可以问「这个概念怎么考」」）等于没说，学生还得自己想问什么；
+    所以优先用上一轮问题里抽出的概念拼一句，抽不出来才退回类型文案。
+    """
+    last = _last_question(history)
+    if not last:
         return ACK_REPLY
-    return ACK_REPLY_WITH_NEXT.format(next=_ACK_NEXT.get(prev, "下一个问题"))
+    try:
+        from .router import rule_route
+
+        route = rule_route(last).route
+    except Exception:  # noqa: BLE001
+        return ACK_REPLY
+    topic = _clean_topic(last)
+    tpl = _ACK_NEXT_TOPIC.get(route)
+    if topic and tpl:
+        return ACK_REPLY_WITH_TOPIC.format(next=tpl.format(topic=topic))
+    return ACK_REPLY_WITH_NEXT.format(next=_ACK_NEXT.get(route, "下一个问题"))
 # 问「我之前问过哪些」时最多列多少条：只是给个回顾，不把几十条翻出来。
 RECALL_MAX = 20
 

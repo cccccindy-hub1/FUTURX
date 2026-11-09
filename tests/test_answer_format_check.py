@@ -91,3 +91,34 @@ def test_sample_reuse_detected_by_long_overlap():
     assert caf.sample_overlap(copied) >= 20
     assert any("疑似复用样例" in w for w in caf.analyze(GOOD + "\n" + copied)["warnings"])
     assert caf.sample_overlap(GOOD) < caf.SAMPLE_OVERLAP   # 正常回答不误报
+
+
+# ---------------------------------------------------------------- 按问法分流：定义类不分点不算错
+
+DEFINITION = ("数据确权是指明确数据归谁持有、谁能使用、如何流转的一整套制度安排，是数据进入市场流通的前提。"
+              "它不是笼统地定「数据归谁」，而是把持有、加工使用、产品经营拆开分别界定，靠分级分类和登记制度落地。"
+              "之所以难，是因为数据可复制、可共享，同一份数据上往往叠着多方投入，权属边界天然模糊，"
+              "传统物权那种独占支配的逻辑很难直接套到数据上。\n"
+              "说到底，确权解决的是「数据能不能动、谁说了算」的问题，它定了，交易和入表才有依据。")
+
+
+def test_definition_question_may_answer_in_one_paragraph():
+    """「什么是X」连成一段说完是要求本身，不该被判「分点不足」。"""
+    m = caf.analyze(DEFINITION, ["确权之后怎么登记？", "它和分类分级什么关系？"],
+                    route="course", question="什么是数据确权？")
+    assert m["wants_points"] is False and m["points"] == 0
+    assert m["ok"] and not any("分点" in p for p in m["problems"])
+    assert not any("短答未分点" in w for w in m["warnings"])
+
+
+def test_enumeration_question_still_requires_points():
+    """列举类仍然必须分点：同一段文字用来答「有哪些环节」就应判不合格。"""
+    m = caf.analyze(DEFINITION, route="course", question="数据确权包括哪些环节？")
+    assert m["wants_points"] is True and not m["ok"]
+    assert any("分点不足" in p for p in m["problems"])
+
+
+def test_question_missing_defaults_to_requiring_points():
+    """拿不到问题时按保守口径（要求分点），避免评测悄悄放水。"""
+    assert caf.needs_points("") is True and caf.analyze(DEFINITION)["wants_points"] is True
+

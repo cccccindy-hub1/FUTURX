@@ -272,6 +272,13 @@ def build_app(**service_kwargs):
         from .exam.api import router as exam_router
 
         app.state.exam = exam_bank
+        # 判分（/exam/grade）用一个判分类小模型；与课程库共用胜算云客户端，没配置时判分降级为词法分
+        from .course.llm import OpenAICompatClient
+
+        try:
+            app.state.lib_llm = course_llm or OpenAICompatClient()
+        except Exception:  # noqa: BLE001 - 判分降级即可，不影响其它路由
+            app.state.lib_llm = course_llm
         app.include_router(exam_router)
 
     if web_dir.is_dir():

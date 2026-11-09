@@ -18,6 +18,23 @@ def test_answer_prompt_requires_points_for_list_and_relation_questions():
     assert "按需分点补充" not in s                     # 旧的「按需」写法会让模型只写一两句结论
 
 
+def test_definition_questions_may_answer_without_points():
+    """定义类不分点：《死板》的根因之一是「一律总—分—总」把所有题压成同一外形。"""
+    s = prompts.ANSWER_SYSTEM
+    assert "一律用“总—分—总”" not in s                 # 不再对所有问题一刀切
+    assert "先判断这一问要不要分点" in s
+    assert "简单定义、是非判断、单个概念的说明" in s and "不分点" in s
+    assert "150–250 字" in s                          # 定义类的目标篇幅
+    assert "问列举、构成、环节、类型、方法、关系、区别、原因、作用时，才用“总—分—总”结构" in s
+
+
+def test_definition_sample_is_written_as_one_paragraph():
+    """样例一示范「连着说」；样例二示范「分点」，两类各一个，模型才学得到分流。"""
+    from rag import prompt_rules as rules
+    first = rules.COURSE_SAMPLES.split("【样例二", 1)[0]
+    assert "（不分点）" in first and "- **" not in first
+
+
 def test_answer_prompt_total_split_total_and_closing_question():
     from rag import prompt_rules as rules
     s = prompts.ANSWER_SYSTEM

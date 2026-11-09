@@ -1219,13 +1219,48 @@ def test_ack_does_not_dump_the_capability_list():
 
 
 def test_ack_uses_the_previous_topic_for_the_next_step():
-    """有上文时，确认语后面接一个顺着上文的下一步，而不是通用清单。"""
+    """有上文时，确认语后面接一个顺着上文的具体概念，而不是「这个概念怎么考」这种空话。"""
     svc = UnifiedService(router_client=route_llm("meta"))
     history = [{"role": "user", "content": "什么是数据确权"},
                {"role": "assistant", "content": "数据确权是……"}]
     out = svc.ask("谢谢", history=history)
-    assert out["route"] == "meta" and "这个概念怎么考" in out["answer"]
+    assert out["route"] == "meta" and "数据确权" in out["answer"]
+    assert "这个概念怎么考" not in out["answer"]
     assert "我能回答以下范围内的内容" not in out["answer"]
+
+
+def test_ack_skips_earlier_acknowledgements_and_still_finds_the_topic():
+    """连着两次确认（问答记录里已有「好的 了解了」）时，仍要回到真正的问题上。"""
+    from rag.unified import _ack_reply
+    history = [{"role": "user", "content": "什么是数据资产"},
+               {"role": "assistant", "content": "数据资产是……"},
+               {"role": "user", "content": "好的 了解了"},
+               {"role": "assistant", "content": "好，需要接着问什么直接说。"}]
+    out = _ack_reply(history)
+    assert "数据资产" in out and "你能做什么" not in out
+
+
+def test_ack_answers_with_a_plain_sentence_when_no_topic_can_be_read():
+    """上文是「出三道判断题」这类整句请求：抽不出概念，就退回不硬凑的通用文案。"""
+    from rag.unified import ACK_REPLY_WITH_NEXT, _ack_reply
+    history = [{"role": "user", "content": "出三道数据资产的判断题"},
+               {"role": "assistant", "content": "为你找到 3 道题：……"}]
+    out = _ack_reply(history)
+    assert "这道题的参考答案" in out and "在考试里怎么考" not in out
+
+
+@pytest.mark.parametrize("q,topic", [
+    ("什么是数据确权？", "数据确权"),
+    ("数据确权为什么难？", "数据确权"),
+    ("数据安全法第二十一条规定了什么", "数据安全法第二十一条"),
+    ("文献综述怎么写", "文献综述"),
+    ("给我讲讲数据分类分级", "数据分类分级"),
+    ("出三道数据资产的判断题", ""),                       # 整句请求不是概念
+    ("那它和分类分级是什么关系？", "分类分级"),
+])
+def test_topic_extraction_strips_the_question_shell(q, topic):
+    from rag.unified import _clean_topic
+    assert _clean_topic(q) == topic
 
 
 @pytest.mark.parametrize("q", ["好的 了解了", "谢谢", "嗯嗯", "收到", "明白了", "ok", "暂时没有"])

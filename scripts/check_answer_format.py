@@ -5,7 +5,9 @@
     python scripts/check_answer_format.py <file> [<file> ...] [--min-points 2]
 
 输出逐题表、通过率、字数分布（min/median/max）、追问合格率、样例复用标记、引用越界清单。
-判定口径与 rag/prompt_rules.ANSWER_STRUCTURE 一致：
+判定口径与 rag/prompt_rules.ANSWER_STRUCTURE 一致（按问法分流）：
+- 要不要分点：问列举 / 构成 / 环节 / 类型 / 方法 / 关系 / 区别 / 原因 / 作用 / 如何时要求分点；
+  定义类（「什么是X」）不分点即合规，强行分点不算错，但不再记「短答未分点」警告；
 - 总起：首个非空行是完整句子（≥12 字）且不以分点符号开头；
 - 分点：2–4 条以 - / * / 1. / （1） / 一、 开头的行；>4 条判 FAIL（与 prompt 硬上限一致）；
 - 收束：最后一个非分点段落，且不是分点行本身；
@@ -15,7 +17,8 @@
 - 样例复用：与 prompt_rules 四条样例连续 ≥12 字相同即标记（样例只示范结构，不得抄原句）；
 - 引用越界：正文出现的最大编号 > 该题 sources 数 → FAIL（编号指向不存在的材料）。
 
-压缩格式例外：≤150 字的答案不要求分点（降级为警告），但总起与收束仍需存在。
+压缩格式例外：≤150 字的答案不要求分点（降级为警告），但总起与收束仍需存在；
+定义类问题（「什么是X」）本来就不要求分点，不记警告。
 """
 from __future__ import annotations
 
@@ -88,8 +91,24 @@ def citation_overflow(answer: str, sources: list | None) -> list[int]:
     return sorted({n for n in nums if n > len(sources)})
 
 
+def needs_points(question: str) -> bool:
+    """这一问要不要分点：列举 / 关系 / 区别 / 原因 / 作用类才要求，定义类不分点也算合格。
+
+    与 prompt_rules.ANSWER_STRUCTURE 的分流口径一致：问「什么是X」时连成一段说完，
+    强行分点反而把定义拆成一堆小标题。问题缺失时按「要分点」处理（保守）。
+    """
+    q = (question or "").strip()
+    if not q:
+        return True
+    return any(k in q for k in _POINT_KINDS)
+
+
+_POINT_KINDS = ("列举", "哪些", "几种", "构成", "组成", "环节", "步骤", "类型", "方法",
+                "关系", "区别", "异同", "原因", "为什么", "作用", "意义", "影响", "如何", "怎么")
+
+
 def analyze(answer: str, followups: list[str] | None = None, route: str = "",
-            sources: list | None = None) -> dict:
+            sources: list | None = None, question: str = "") -> dict:
     raw = (answer or "").strip()
     text = strip_citations(raw).strip()
     lines = _lines(text)
@@ -100,6 +119,7 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "",
     head = prose[0] if prose else ""
     opening = bool(head) and len(head) >= 12 and not _BULLET.match(head) and bool(_SENT_END.search(head))
     points = len(bullets)
+    wants_points = needs_points(question)
     # 收束：最后一段非分点文字，且与总起不是同一段
     tail = prose[-1] if prose else ""
     closing = bool(tail) and tail != head and len(tail) >= 8 and bool(_SENT_END.search(tail))
@@ -111,7 +131,9 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "",
     elif chars > WARN_CHARS:
         problems.append(f"超字数({chars}>{WARN_CHARS})")
     if points < 2:
-        if chars <= SHORT_ANSWER:
+        if not wants_points:
+            pass                                    # 定义类：不分点是要求本身，不记警告
+        elif chars <= SHORT_ANSWER:
             warnings.append("短答未分点(允许)")
         else:
             problems.append(f"分点不足({points})")
@@ -140,6 +162,7 @@ def analyze(answer: str, followups: list[str] | None = None, route: str = "",
         problems.append("追问不合格")
 
     return {"chars": chars, "points": points, "opening": opening, "closing": closing,
+            "wants_points": wants_points,
             "followups": len(fu), "followup_ok": fu_ok, "reused": reused,
             "citation_overflow": over, "citation_count": len(sources or []),
             "problems": problems, "warnings": warnings, "ok": not problems}
@@ -182,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             fu = r.get("followups") or []
             route = r.get("route") or ""
             sources = r.get("sources")
-            m = analyze(answer, fu, route, sources)
+            m = analyze(answer, fu, route, sources, question=r.get("question") or "")
             total += 1
             passed += 1 if m["ok"] else 0
             all_chars.append(m["chars"])

@@ -468,31 +468,46 @@ python scripts/export_qa.py --out qa.csv --user-name 张三          # 按姓名
 红线只写跨库共用的四条（不编出处、不把常识说成原文、只依据材料时资料不足就明说、不写套话免责）；
 各库专属红线（判例不编案号、政策标注征求意见稿、讲话原文不得改写）仍在各库自己的提示词里。
 
+**作答格式按问法分流**（`rag/prompt_rules.ANSWER_STRUCTURE`）：定义 / 是非 / 单概念说明不分点，
+150–250 字连着说；列举、关系、区别、原因、作用类才用「总—分—总」。此前一律要求总—分—总 + 400 字 + 最多 4 点，
+每道题长得一模一样，学生读到的是模板而不是回答。作答思考模式保持 `low`（`COURSE_ANSWER_REASONING`），
+设成 `disabled` 后回答会明显变浅——`tests/test_stream_and_models.py` 会因此失败。
+
 **`meta` 的五种问法**（都不检索、不调模型）：
 
 | 问法 | 回答 |
 |---|---|
 | 纯打招呼（「你好」） | 一句欢迎语 + 两三个例子 |
-| 确认 / 收尾（「好的 了解了」「谢谢」「嗯嗯」） | 一句短的；有上文时顺带一个下一步 |
+| 确认 / 收尾（「好的 了解了」「谢谢」「嗯嗯」） | 一句短的；有上文时带上上一轮的具体概念（「数据资产在考试里怎么考」） |
 | 问刚才怎么答的（「你的回答链路是怎样的」） | 讲本轮实际路径，不背能力清单 |
 | 问之前问过什么 | 按 `qa_log` 列本人提问（见 `trace.meta.recall`） |
 | 问能力 / 知识库 | 按实际加载的库列完整清单 |
 
-「好的，那什么是数据确权」这类带真问题的不算确认语，按真问题走。
+「好的，那什么是数据确权」这类带真问题的不算确认语，按真问题走。确认语的下一步只给类型不给概念的旧写法
+（「接着可以问「这个概念怎么考」」）已废：概念从上一轮提问里抽，抽不出（如「出三道判断题」这类整句请求）
+才退回类型文案。
 
 **学习者画像**（`data/profile.sqlite`，可用 `PROFILE_DB` 覆盖）：
 
-- 记什么：课程管线选中的概念（名称、次数、最近时间）、判例 / 试题命中的章；**不记答题对错**
-  （产品链路目前没有学生作答后判分的入口，凭空记账就是编数据）。
-- 怎么用：有记录时把一句「【这个学生的情况】之前问过：…」追加到作答 system 末尾；
+- 记什么：课程管线选中的概念（名称、次数、最近时间）、判例 / 试题命中的章、**做题的判分结果**
+  （`learner_mastery`：题号、章、概念、1–5 分、是否答对）。判分只在学生真的交了答案时发生，不记推断。
+- 怎么用：有记录时把一句「【这个学生的情况】之前问过：…；做过题但还没答对：…」追加到作答 system 末尾；
   **没有记录时提示词逐字不变**，不会出现「我记得你」这类编造的亲近感。
 - 只取问过 **两次以上** 的概念：课程管线一次会选出好几个概念，全列出来等于把词表塞进提示词。
-- 每人上限 8 个概念、5 章，超出按最近时间淘汰；写失败只记 warning，不影响回答。
+  「还没答对」只来自 `correct=0` 的判分记录，同一道题重做答对即消失，不做时间衰减。
+- 每人上限 8 个概念、5 章、50 条判分记录，超出按最近时间淘汰；写失败只记 warning，不影响回答。
 - 按 `uuid` 记（与问答记录同一口径）；没有 `uuid` 的调用方记在 key 指纹下。
 
 ```bash
 sqlite3 data/profile.sqlite "select user_id, concept, hits from learner_concept order by last_at desc limit 20"
+sqlite3 data/profile.sqlite "select user_id, question_id, score, correct from learner_mastery order by last_at desc limit 20"
 ```
+
+**学生作答判分**（`rag/grade.py` + `POST /exam/grade`）：把学生答案与题库参考答案交给 `rag/judge.py`
+（1–5 分 + `correct`，LLM 评审；模型未配置时降级为词法比对），判完回写 `learner_mastery`。
+判分失败（题不存在 / 空答案 / 这道题没有参考答案）返回对应错误码，**不伪装成 0 分**——
+把「没判成」显示成「答错了」会让学生以为自己会的东西不会。网页的每道题下方有「先自己答一句」的输入框，
+判分结果就地显示，参考答案仍在「查看答案」里折叠对照。
 
 ---
 
@@ -598,6 +613,7 @@ sqlite3 data/profile.sqlite "select user_id, concept, hits from learner_concept 
 | `POST /ask/stream` | 论文库单轮 SSE：`sources` → `delta*` → `done` |
 | `POST /course/ask` | 课程库直连，支持 `dry_run` / `active_concepts` / `strategy` |
 | `POST /exam/search`、`/exam/by_concepts`、`GET /exam/question/{id}` | 试卷库 |
+| `POST /exam/grade` | 学生作答判分：`{question_id, answer}` → 1–5 分 + `correct` + 参考答案；判完回写画像 |
 
 `/ask`、`/ask/stream` **不支持会话**，新接入建议直接用 `/auto/ask`。
 
@@ -692,6 +708,10 @@ GET /v1/conversations/{id}/messages?after_seq=<本地最后一条 seq>
 | `rag/serve.py` | 应用装配：注册各 router、并发中间件、`/ask`、`/health` |
 | `rag/api.py` | OpenAI 兼容层：`/v1/chat/completions`、`/v1/models`、鉴权、历史上限与合并 |
 | `rag/unified.py` | 统一入口：路由分发、各库作答、`/auto/ask`、`/auto/ask/stream`、会话接入 |
+| `rag/persona.py` | 角色卡：人设 / 能答范围 / 跨库红线 / 开场白 / 多轮示例对话的唯一来源 |
+| `rag/prompt_rules.py` | 作答格式（按问法分流）与 few-shot 样例，各库共用 |
+| `rag/profile.py` | 学习者画像（`data/profile.sqlite`）：问过的概念 / 章 / 判分结果 |
+| `rag/grade.py` | 学生作答判分：接题库参考答案，用 `rag/judge.py` 打分并回写画像 |
 | `rag/conversation.py` | 会话存储（SQLite，WAL，线程本地连接） |
 | `rag/conversation_api.py` | 会话管理 REST |
 | `rag/enhance.py` | 追问改写（兼容 OpenAI SDK 与 `OpenAICompatClient`） |
@@ -834,3 +854,16 @@ FROM qa_log WHERE user_id = 'stu-0001' ORDER BY id DESC LIMIT 20;
   补多轮示例对话；`meta` 增加「确认 / 收尾」与「你刚才怎么答的」两类问法，不再一律甩能力清单。
 - 新增学习者画像 `rag/profile.py`（`data/profile.sqlite`）：记问过的概念与章，有记录时拼一句
   关系层进作答提示词；不记对错、不做推断，没有记录时提示词逐字不变。
+
+### 2026-11-09 第二次（回答「死板」的修正 + 判分闭环）
+
+- 作答思考模式从 `disabled` 改回 `low`（`COURSE_ANSWER_REASONING`）：关闭思考后回答明显变浅、
+  句间跳跃，是「死板」的首要原因；`.env.example` 原本就写明不要设成 disabled。
+- 作答格式改为**按问法分流**（`rag/prompt_rules.ANSWER_STRUCTURE`）：定义 / 是非 / 单概念说明不分点、
+  150–250 字；列举 / 关系 / 区别 / 原因 / 作用类才用总—分—总。样例同步换成「一、不分点」「二、分点」两条，
+  `scripts/check_answer_format.py` 按问题判断是否要求分点（拿不到问题按保守口径）。
+- 确认语的下一步带上上一轮的具体概念（「数据资产在考试里怎么考」），并跳过更早的确认语往回找真正的问题；
+  抽不出概念（「出三道判断题」这类整句请求）时退回类型文案。
+- 新增 `rag/grade.py` 与 `POST /exam/grade`：学生作答按题库参考答案判分（`rag/judge.py`，1–5 分 + correct），
+  判完回写 `learner_mastery`；画像增加「做过题但还没答对」一句，重做答对即消失。判分失败给错误码，不伪装成 0 分。
+- 网页每道题下方加「先自己答一句」的判分入口，结果就地显示。

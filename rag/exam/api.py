@@ -1,9 +1,11 @@
-"""试卷库 HTTP 接口（挂在 rag.serve 上，试卷库加载成功时才注册）。不调用 LLM。
+"""试卷库 HTTP 接口（挂在 rag.serve 上，试卷库加载成功时才注册）。
 
 - POST /exam/search        自然语言找题：{"query": "出3道数据资产的基础题"}；章 / 题型 / 是否只要基础题可显式给出
 - POST /exam/by_concepts   按知识点找题（课程问答后的「来几道基础题」）：{"concepts": ["数据资产"], "k": 3}
 - GET  /exam/question/{id} 取单题；include_answer=true 时附参考答案与评分要点
+- POST /exam/grade         学生作答判分：{"question_id": "...", "answer": "..."}；判完回写学习者画像
 
+前三个不调用 LLM；只有判分要调一次小模型（按参考答案核对要点），模型未配置时降级为词法分。
 默认不返回答案（先练后看）。鉴权沿用 rag.api.require_api_key。
 """
 from __future__ import annotations
@@ -19,6 +21,10 @@ from .store import ExamBank
 router = APIRouter()
 
 QType = Literal["choice", "judge", "term", "short", "essay", "case"]
+
+# 判分失败的错误码 → HTTP 状态：都不是「答错了」，不能被当成 0 分
+GRADE_ERROR_STATUS = {"not_found": 404, "empty_answer": 422, "no_reference": 409,
+                      "no_bank": 503, "unavailable": 503}
 
 
 class ExamSearchRequest(BaseModel):
@@ -40,6 +46,11 @@ class ByConceptsRequest(BaseModel):
     exclude_ids: list[str] = Field(default_factory=list, max_length=200)
     include_answer: bool = False
     include_knowledge: bool = False
+
+
+class GradeRequest(BaseModel):
+    question_id: str = Field(min_length=1, max_length=120)
+    answer: str = Field(min_length=1, max_length=2000)
 
 
 def _bank(request: Request) -> ExamBank:
@@ -76,3 +87,26 @@ def exam_question(question_id: str, request: Request, include_answer: bool = Fal
     if it is None:
         raise HTTPException(status_code=404, detail={"error": {"message": "题目不存在", "type": "not_found"}})
     return it.view(include_answer=include_answer, kp_lookup=bank.kp_view)
+
+
+@router.post("/exam/grade", dependencies=[Depends(require_api_key)])
+def exam_grade(req: GradeRequest, request: Request):
+    """学生交一道题的答案 → 判分 → 回写画像。
+
+    判分失败（题不存在 / 没写答案 / 这道题没有参考答案）一律给对应的错误码，不返回 0 分：
+    把「没判成」显示成「答错了」会让学生以为自己会的东西不会。
+    """
+    from .. import grade as grader
+    from ..qa_store import request_meta, resolve_user_id
+    from ..api import key_fingerprint
+
+    bank = _bank(request)
+    meta = request_meta(request.headers)
+    user_id = resolve_user_id(meta.get("user_id"), key_fingerprint(request))
+    llm = getattr(request.app.state, "lib_llm", None)
+    got = grader.grade(bank, req.question_id, req.answer, user_id=user_id, llm=llm)
+    if not got.get("ok"):
+        code = GRADE_ERROR_STATUS.get(str(got.get("error")), 400)
+        raise HTTPException(status_code=code,
+                            detail={"error": {"message": f"判分未完成：{got.get('error')}", "type": str(got.get("error"))}})
+    return got

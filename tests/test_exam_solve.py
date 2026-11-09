@@ -324,3 +324,13 @@ def test_web_option_block_is_built_from_options_and_each_option_is_its_own_row()
     seg = APP_JS[APP_JS.index("function questionBlock"):APP_JS.index("function examList")]
     assert "const opts = it.options && typeof it.options === 'object' ? Object.entries(it.options) : [];" in seg
     assert "if (opts.length)" in seg and "className = 'exam-option'" in seg and "opts.forEach(" in seg
+
+
+# ---------------------------------------------------------------- 作答判分（P2）
+
+def test_web_offers_a_grade_form_and_posts_to_the_grade_endpoint():
+    """学生在练习卡上直接作答：前端调 /exam/grade，判分结果就地显示，不用换页面。"""
+    assert "function gradeForm" in APP_JS and "/exam/grade" in APP_JS
+    assert "'X-User-Uuid': userId()" in APP_JS          # 判分记录按人归属，与问答同一个标识
+    assert "先自己答一句" in APP_JS
+    assert ".grade-input" in STYLE and ".grade-btn" in STYLE and ".grade-result" in STYLE

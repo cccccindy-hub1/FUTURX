@@ -175,7 +175,7 @@ function sourceCard(i, s, ctx) {
 }
 
 /* 带序号的来源（课程 / 判例 / 名言）：[n] 路径；有 kind 且不止一种时按库分区 */
-// 一道题：题干 + 选项（选择题）+ 默认收起的“查看答案”（答案与评分要点 / 解析由后端原样给出，不经过模型）
+// 一道题：题干 + 选项（选择题）+ 作答判分 + 默认收起的“查看答案”（答案与评分要点 / 解析由后端原样给出，不经过模型）
 function questionBlock(it, i, withMeta) {
   const box = document.createElement('div');
   box.className = 'exam-q';
@@ -202,6 +202,7 @@ function questionBlock(it, i, withMeta) {
     });
     box.appendChild(ul);
   }
+  if (it.question_id) box.appendChild(gradeForm(it));
   if (it.answer || it.analysis) {
     const d = document.createElement('details');
     d.className = 'exam-answer';
@@ -220,6 +221,55 @@ function questionBlock(it, i, withMeta) {
     box.appendChild(d);
   }
   return box;
+}
+
+// 作答并判分：答案交给后端按题库参考答案核对（POST /exam/grade），判分结果同时记进学习画像。
+// 只做一个输入框 + 一个按钮：学生先用一句话答，再看判分与参考答案对照。
+function gradeForm(it) {
+  const wrap = document.createElement('div');
+  wrap.className = 'grade-form';
+  const input = document.createElement('input');
+  input.className = 'grade-input';
+  input.type = 'text';
+  input.maxLength = 2000;
+  input.placeholder = '先自己答一句，再交上来看看';
+  input.setAttribute('aria-label', '我的答案');
+  const btn = document.createElement('button');
+  btn.className = 'grade-btn';
+  btn.type = 'button';
+  btn.textContent = '交答案';
+  const out = document.createElement('div');
+  out.className = 'grade-result';
+  btn.addEventListener('click', async () => {
+    const answer = input.value.trim();
+    if (!answer) { out.textContent = '先写一句答案。'; return; }
+    btn.disabled = true;
+    out.textContent = '判分中…';
+    try {
+      const r = await fetch('/exam/grade', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json', 'X-User-Uuid': userId() }),
+        body: JSON.stringify({ question_id: it.question_id, answer }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        out.textContent = r.status === 404 ? '这道题不在题库里，没法判分。'
+          : r.status === 422 ? '答案不能为空。' : '判分失败，请稍后再试。';
+        return;
+      }
+      const score = Number(data.score) || 0;
+      out.textContent = `${data.correct ? '答对了' : '还没答对'} · ${data.verdict || ''}（${score}/5）`
+        + (data.reason ? ` ${data.reason}` : '');
+      out.classList.toggle('is-wrong', !data.correct);
+    } catch {
+      out.textContent = '网络错误，判分没成功。';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') btn.click(); });
+  wrap.append(input, btn, out);
+  return wrap;
 }
 
 function examList(items, title, withMeta) {
