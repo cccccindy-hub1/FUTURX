@@ -1573,3 +1573,16 @@ def test_a_bare_title_sentence_is_captured(text, title):
 def test_ordinary_questions_are_not_mistaken_for_titles(text):
     from rag import student
     assert student.parse_title(text) == ""
+
+
+@pytest.mark.parametrize("text,major", [
+    ("我在做公共管理专硕论文，题目是妇幼保健院门诊患者满意度研究", "公共管理"),
+    ("我在做公共管理专硕论文", "公共管理"),
+    ("我是内蒙古大学公共管理专硕", "公共管理"),
+])
+def test_the_verb_phrase_is_not_part_of_the_major(text, major):
+    """「我在做公共管理专硕」曾把 major 记成「我在做公共管理」，之后每轮提示词都带着这个错名字。"""
+    from rag import student
+    got = student.parse(text)
+    assert got["major"] == major, got
+    assert not got["major"].startswith(("我在", "我做", "我写"))
